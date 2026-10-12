@@ -52,6 +52,19 @@ public:
     void SetMovementConfig(const MovementConfig &cfg);
     const MovementConfig &movementConfig() const { return movement_cfg_; }
 
+    // Hard floor for the player's feet position. The integrator clamps
+    // player_.feet_position.y to >= floor_y_ every frame so a player who
+    // somehow ends up below ground (e.g. the Walking state where M3
+    // PhysX is still a stub and no real ground collision resolves) does
+    // not fall to -∞. Default 0 (sea level). Updated each frame from
+    // the truck's placement Y by walker_per_frame_tick, so the player
+    // stays anchored to the truck's ground reference while walking
+    // around it. When the truck has no placement yet (early init) the
+    // default sea-level floor prevents the integrator from running
+    // away during the first few frames.
+    void SetFloorY(double floor_y) { floor_y_ = floor_y; }
+    double floorY() const { return floor_y_; }
+
     // Set the current frame's aspect ratio (width / height). D3D11Hook
     // calls this each frame from the swap-chain description.
     void SetAspect(float aspect);
@@ -157,6 +170,7 @@ private:
     bool grounded_ = true;          // last groundY probe succeeded
     double head_bob_phase_ = 0.0;   // accumulated bob phase (radians, double for precision)
     double lateral_bob_m_ = 0.0;    // applied to camera eye after AdoptPlayer
+    double floor_y_ = 0.0;          // hard floor for feet.y (sea level default)
 
     // Pre-integration position. PhaseResolveCollision sweeps from this to
     // player_.feet_position to apply sliding without losing the start of

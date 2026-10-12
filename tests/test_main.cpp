@@ -72,6 +72,17 @@ void TestPhaseAnimatePlayerKeepsHeadBobPhaseBounded();
 void TestPhaseIntegrateMovementSkipsSqrtWhenIntentIsOnAxis();
 void TestPhaseIntegrateMovementClampsVerticalVelocity();
 void TestMovementConfigVerticalVelocityCapDefault();
+// Y-clamp floor probes — keep the player anchored to the truck's
+// ground reference until M3 lander ships real PhysX ground
+// collision. Without this, the integrator's gravity drops the player
+// to Y = -∞ during a long Walking session and the SCS developer free
+// camera the GameFreeCameraShim dispatches on F10 ends up at
+// eye.Y ≈ -800 m (under the world) so the user sees no camera change.
+void TestFrameLoopFloorClampDefaultsToZero();
+void TestFrameLoopFloorClampSnapsPlayerUp();
+void TestFrameLoopFloorClampMarksGrounded();
+void TestFrameLoopFloorClampIgnoresPlayerAboveFloor();
+void TestFrameLoopFloorClampHandlesFallingPlayer();
 void TestFrameLoopRunOnceDoesNotClobberConductorInput();
 void TestFrameLoopRunOnceSamplesWhenConductorDidNot();
 void TestFrameLoopPlayerSnapshotStableAcrossConductor();
@@ -622,6 +633,13 @@ int main() {
     RUN_TEST(walkercore::TestPhaseIntegrateMovementSkipsSqrtWhenIntentIsOnAxis);
     RUN_TEST(walkercore::TestPhaseIntegrateMovementClampsVerticalVelocity);
     RUN_TEST(walkercore::TestMovementConfigVerticalVelocityCapDefault);
+
+    // Floor Y-clamp probes — see FrameLoop.h SetFloorY for context.
+    RUN_TEST(walkercore::TestFrameLoopFloorClampDefaultsToZero);
+    RUN_TEST(walkercore::TestFrameLoopFloorClampSnapsPlayerUp);
+    RUN_TEST(walkercore::TestFrameLoopFloorClampMarksGrounded);
+    RUN_TEST(walkercore::TestFrameLoopFloorClampIgnoresPlayerAboveFloor);
+    RUN_TEST(walkercore::TestFrameLoopFloorClampHandlesFallingPlayer);
 
     // Per-frame conductor input-sample contract. Pin: RunOnce must not
     // wipe the rising edge the conductor's SampleInput just produced

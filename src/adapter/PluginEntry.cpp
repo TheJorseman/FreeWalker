@@ -311,6 +311,20 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
       (g_telemetry != nullptr) ? &g_telemetry->state() : &kEmptyTruckState;
   walkercore::PlayerState *player_ptr = &g_frame_loop->player();
 
+  // Refresh the integrator's hard-floor anchor from the truck's
+  // placement Y. Until M3 lander ships real PhysX ground collision,
+  // PhaseIntegrateMovement's gravity otherwise drops the player to
+  // Y = -∞ during a long Walking session. The floor clamps the
+  // player to the truck's ground reference so the SCS developer
+  // free camera the GameFreeCameraShim dispatches on F10 lands at a
+  // usable eye Y. Only refreshes when the truck has a placement —
+  // before the first telemetry update, the FrameLoop's sea-level
+  // default (floor_y_ = 0) holds and prevents the integrator from
+  // running away during the first few frames of a fresh boot.
+  if (truck_ptr->has_placement) {
+    g_frame_loop->SetFloorY(truck_ptr->placement.position.y);
+  }
+
   // M5 Lander hookup: when the SCS configuration event has delivered
   // per-truck cabin + head anchors, rebuild the door config from
   // them and push to the FSM. This runs BEFORE Phase B (FSM

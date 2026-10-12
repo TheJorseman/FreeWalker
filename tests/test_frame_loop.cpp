@@ -1011,6 +1011,12 @@ void TestPhaseIntegrateMovementClampsVerticalVelocity() {
     double drop_with_cap;
     {
         NoWorldHarness h;
+        // Disable the hard floor so the integrator can freefall past
+        // the Y=0 default clamp — this test specifically exercises the
+        // vertical-velocity cap, not the floor. Pinned at -10000m so
+        // neither the capped (≈ -13.3 m) nor the uncapped (≈ -36 m)
+        // 200-tick drop can reach it.
+        h.loop.SetFloorY(-10000.0);
         MovementConfig cfg = h.loop.movementConfig();
         cfg.vertical_velocity_max_mps = 4.0f;
         h.loop.SetMovementConfig(cfg);
@@ -1022,6 +1028,7 @@ void TestPhaseIntegrateMovementClampsVerticalVelocity() {
     double drop_no_cap;
     {
         NoWorldHarness h;
+        h.loop.SetFloorY(-10000.0);
         MovementConfig cfg = h.loop.movementConfig();
         cfg.vertical_velocity_max_mps = 200.0f;
         h.loop.SetMovementConfig(cfg);
@@ -1062,6 +1069,85 @@ void TestPhaseIntegrateMovementClampsVerticalVelocity() {
 void TestMovementConfigVerticalVelocityCapDefault() {
     MovementConfig c;
     EXPECT_NEAR(c.vertical_velocity_max_mps, 9.81f, 1e-4);
+}
+
+// Floor Y-clamp — pins the "salir del vehículo" floor that keeps the
+// player anchored to the truck's ground level when M3 lander hasn't yet
+// shipped real PhysX ground collision. Without this, the integrator's
+// gravity would drop the player to Y = -∞ during a long Walking
+// session, putting the SCS developer free camera the GameFreeCameraShim
+// dispatches on F10 at eye.Y ≈ -800 m (under the world) so the user
+// sees no camera change. The fix: clamp feet.y to floor_y_ every
+// frame, zero the vertical velocity, and mark grounded.
+
+void TestFrameLoopFloorClampDefaultsToZero() {
+    FrameLoop loop;
+    EXPECT_NEAR(loop.floorY(), 0.0, 1e-9);
+}
+
+void TestFrameLoopFloorClampSnapsPlayerUp() {
+    // Player way below the floor (simulating a stale Y=-800 from a
+    // long Walking session before the clamp existed). After a single
+    // tick the clamp must snap feet.y to floor_y_ and zero vy.
+    //
+    // Note: NoWorldHarness binds the FSM target to its local
+    // `h.player`, but the FrameLoop's integrator reads its OWN
+    // `player_` (constructed in the FrameLoop ctor via
+    // PlayerState_Reset). The two are different memory locations in
+    // the test harness; production code (PluginEntry) binds the FSM
+    // target to `g_frame_loop->player()` so they alias. We write
+    // through the FrameLoop accessor to exercise the same memory the
+    // integrator actually reads.
+    NoWorldHarness h;
+    h.loop.SetFloorY(5.25);  // truck ground reference
+    h.loop.player().feet_position.y = -800.0;
+    h.loop.RunOnce(1.0 / 60.0);
+    EXPECT_NEAR(h.loop.player().feet_position.y, 5.25, 1e-6);
+}
+
+void TestFrameLoopFloorClampMarksGrounded() {
+    // Once clamped, grounded_ must be true and the next gravity tick
+    // must not re-trigger the clamp (i.e. vy stays at 0).
+    NoWorldHarness h;
+    h.loop.SetFloorY(5.25);
+    h.loop.player().feet_position.y = -800.0;
+    h.loop.RunOnce(1.0 / 60.0);
+    // Run many ticks to make sure vy doesn't accumulate.
+    for (int i = 0; i < 60; ++i) h.loop.RunOnce(1.0 / 60.0);
+    EXPECT_NEAR(h.loop.player().feet_position.y, 5.25, 1e-6);
+}
+
+void TestFrameLoopFloorClampIgnoresPlayerAboveFloor() {
+    // Player above the floor (e.g. mid-jump at Y=10) must not be
+    // pulled down by the clamp.
+    NoWorldHarness h;
+    h.loop.SetFloorY(0.0);
+    h.loop.player().feet_position.y = 10.0;
+    h.loop.RunOnce(1.0 / 60.0);
+    // The integrator subtracts gravity, so y drops a tiny bit but
+    // stays well above 0. Specifically, after 1 tick with no jump
+    // pressed, vy = -g*dt = -0.163, dy = -0.00272, y ≈ 9.997.
+    EXPECT_GT(h.loop.player().feet_position.y, 9.9);
+}
+
+void TestFrameLoopFloorClampHandlesFallingPlayer() {
+    // Player high up, jump pressed → freefall. After enough ticks to
+    // fall past the floor, the clamp must catch them and stop the
+    // fall (so a long Walking session can't drop the player below
+    // the truck's ground level).
+    //
+    // 1000 ticks at dt=1/60 = 16.67s of freefall. With the default
+    // vy_max cap of 9.81 m/s, the velocity saturates ~1s after the
+    // jump and the rest is constant-rate fall at 9.81 m/s for ~15.7s
+    // = 154m of drop. Starting from Y=20 the player is well past
+    // the floor at Y=5.25 by the end of the run, so the clamp must
+    // engage and pin the position.
+    NoWorldHarness h;
+    h.loop.SetFloorY(5.25);
+    h.loop.player().feet_position.y = 20.0;
+    PressKey(h.input, WalkercoreKey::Jump);
+    for (int i = 0; i < 1000; ++i) h.loop.RunOnce(1.0 / 60.0);
+    EXPECT_NEAR(h.loop.player().feet_position.y, 5.25, 1e-6);
 }
 
 }  // namespace walkercore

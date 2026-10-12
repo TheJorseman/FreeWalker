@@ -377,6 +377,26 @@ void FrameLoop::PhaseIntegrateMovement(double dt) {
     player_.feet_position.z += static_cast<double>(vz) * dt;
     player_.feet_position.y += static_cast<double>(vertical_velocity_) * dt;
 
+    // Hard floor clamp. Until M3 lander ships real PhysX ground collision
+    // (PxScene::sphereCast live), PhaseResolveCollision's vertical sweep
+    // returns no-hit every frame and the integrator would otherwise drop
+    // the player to Y = -∞. With the floor, the player lands on the
+    // floor every frame the integrator tries to go below, vertical
+    // velocity zeroes, and grounded_ flips to true so the bob / jump
+    // gates see the player as standing on something. The floor is
+    // refreshed each frame by walker_per_frame_tick from the truck's
+    // placement Y (so the player walks around at truck ground level),
+    // and defaults to 0 (sea level) before the first telemetry update.
+    // This is the "salir del vehículo" floor: when the user F10s out
+    // of the cabin, the integrator can no longer send the player's
+    // POV below the truck's wheels, so the SCS developer free camera
+    // the GameFreeCameraShim dispatches has a usable eye Y.
+    if (player_.feet_position.y < floor_y_) {
+        player_.feet_position.y = floor_y_;
+        vertical_velocity_ = 0.0;
+        grounded_ = true;
+    }
+
     // Track mode for head bob selection (running uses less bob).
     // See the comment above the intent_mag_sq computation: the
     // "near-zero" decision is on the squared magnitude, avoiding the

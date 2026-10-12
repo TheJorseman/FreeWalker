@@ -248,12 +248,13 @@ void TestPhysXResolveKnownMethodsFindsReleaseAtSlotZero() {
     EXPECT_EQ(out.add_actor_slot, -1);
     EXPECT_EQ(out.simulate_slot, -1);
     EXPECT_EQ(out.shift_origin_slot, -1);
+    EXPECT_EQ(out.sweep_slot, -1);
 }
 
-void TestPhysXResolveKnownMethodsAllFourSlotsInOrder() {
+void TestPhysXResolveKnownMethodsAllFiveSlotsInOrder() {
     constexpr int kRun = 8;
     std::vector<uint8_t> buf(kRun * 8, 0);
-    // Embed four known VAs at slots 0..3 in their catalog order.
+    // Embed five known VAs at slots 0..4 in their catalog order.
     for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
         const uint64_t v = walkercore::kPhysXKnownMethods[m].va;
         std::memcpy(buf.data() + m * 8, &v, 8);
@@ -266,6 +267,7 @@ void TestPhysXResolveKnownMethodsAllFourSlotsInOrder() {
     EXPECT_EQ(out.add_actor_slot, 1);
     EXPECT_EQ(out.simulate_slot, 2);
     EXPECT_EQ(out.shift_origin_slot, 3);
+    EXPECT_EQ(out.sweep_slot, 4);
 }
 
 void TestPhysXResolveKnownMethodsNoMatchReturnsFalse() {
@@ -280,6 +282,7 @@ void TestPhysXResolveKnownMethodsNoMatchReturnsFalse() {
     EXPECT_EQ(out.add_actor_slot, -1);
     EXPECT_EQ(out.simulate_slot, -1);
     EXPECT_EQ(out.shift_origin_slot, -1);
+    EXPECT_EQ(out.sweep_slot, -1);
 }
 
 void TestPhysXResolveKnownMethodsRespectsBounds() {
@@ -295,21 +298,41 @@ void TestPhysXResolveKnownMethodsRespectsBounds() {
 }
 
 void TestPhysXKnownMethodsCatalogIsComplete() {
-    // The catalog must list the four methods we ship. Adding a method
+    // The catalog must list the five methods we ship. Adding a method
     // to the .cpp catalog without bumping kPhysXKnownMethodCount would
     // mis-list the count; this test is a regression guard.
-    EXPECT_EQ(kPhysXKnownMethodCount, 4);
+    EXPECT_EQ(kPhysXKnownMethodCount, 5);
     EXPECT_TRUE(kPhysXKnownMethods[0].name != nullptr);
     EXPECT_TRUE(kPhysXKnownMethods[1].name != nullptr);
     EXPECT_TRUE(kPhysXKnownMethods[2].name != nullptr);
     EXPECT_TRUE(kPhysXKnownMethods[3].name != nullptr);
-    // All four VAs must be non-zero and differ from each other (we
+    EXPECT_TRUE(kPhysXKnownMethods[4].name != nullptr);
+    // All five VAs must be non-zero and differ from each other (we
     // have to make sure the catalog isn't accidentally all the same
     // address).
     EXPECT_TRUE(kPhysXKnownMethods[0].va != 0ULL);
     for (int i = 1; i < kPhysXKnownMethodCount; ++i) {
         EXPECT_TRUE(kPhysXKnownMethods[i].va != kPhysXKnownMethods[0].va);
     }
+}
+
+// ResolveKnownMethods: the catalog now lists five methods. Verify the
+// fifth (PxScene::sweep) is the one with the highest VA — sweeps'
+// function entry in amtrucks.exe lives at the high end of the
+// 0x141AD0000..0x141B20000 PhysX TU range. This is a regression
+// guard against accidentally cataloging a low-VA function as sweep.
+
+void TestPhysXKnownMethodsSweepIsTheHighestVA() {
+    uint64_t max_va = 0;
+    int max_idx = -1;
+    for (int i = 0; i < kPhysXKnownMethodCount; ++i) {
+        if (kPhysXKnownMethods[i].va > max_va) {
+            max_va = kPhysXKnownMethods[i].va;
+            max_idx = i;
+        }
+    }
+    EXPECT_EQ(max_idx, 4);  // sweep should be the highest VA
+    EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[4].name, "sweep") == 0);
 }
 
 }  // namespace walkercore

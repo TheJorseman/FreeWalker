@@ -311,11 +311,22 @@ size_t PhysXAdapter::DumpVtableEntries(const uint8_t *bytes,
 // method (slot 0). addActor lives among the scene-graph mutators; the
 // exact slot is build-dependent and is left at -1 here until a
 // matching run resolves it.
+//
+// sweep: located by walking back from the LEA ref to the assertion
+// string "PxScene::sweep(): first geometry object parameter must be
+// specified" (PhysX 3.4 SDK). The LEA sits 0x83B bytes into a
+// 0x2A0-byte-stack function whose prologue is the typical
+// "mov [rsp+0x10], rdx; push rbp; push rbx; push rsi; push rdi;
+// push r13; push r14; push r15; lea rbp, [rsp-0x1A0]; sub rsp, 0x2A0"
+// (sweep allocates a stack array for batched hits). The function
+// entry's preceding int3 padding (15 bytes of 0xCC) gives a
+// clean MSVC function boundary.
 const PhysXKnownMethod kPhysXKnownMethods[kPhysXKnownMethodCount] = {
     {"release",       0x141AE07B6ULL, -1},
     {"addActor",      0x141AE0B62ULL, -1},
     {"simulate",      0x141AE4D80ULL, -1},
     {"shiftOrigin",   0x141AE6C28ULL, -1},
+    {"sweep",         0x141B06F10ULL, -1},
 };
 
 bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
@@ -330,6 +341,7 @@ bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
     out->add_actor_slot = -1;
     out->simulate_slot = -1;
     out->shift_origin_slot = -1;
+    out->sweep_slot = -1;
     if (accepted_run <= 0) {
         return false;
     }
@@ -354,6 +366,7 @@ bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
                     case 1: out->add_actor_slot = slot; break;
                     case 2: out->simulate_slot = slot; break;
                     case 3: out->shift_origin_slot = slot; break;
+                    case 4: out->sweep_slot = slot; break;
                     default: break;
                 }
                 matched += 1;

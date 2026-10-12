@@ -111,16 +111,28 @@ struct PhysXKnownMethod {
     int32_t slot;
 };
 
-constexpr int kPhysXKnownMethodCount = 4;
+constexpr int kPhysXKnownMethodCount = 5;
 
 // The runtime catalog for ATS 1.61.3.1s. RVA computed from the VA using
-// image base 0x140000000:
-//   PxScene::release    VA=0x141AE07B6  RVA=0x1AE07B6  slot=0
+// image base 0x140000000. The four "stable" entries (release,
+// addActor, simulate, shiftOrigin) were located by walking back from
+// the LEA r64, [rip+disp32] that loads the matching
+// "PxScene::<method>(...) ..." assertion string in .text. The
+// PxScene::sweep entry was added in a follow-up pass via the
+// "PxScene::sweep(): first geometry object" assertion string
+// (PhysX 3.4 SDK). All VAs are cross-checked against the
+// vtable at RVA 0x2500EA0 (PxScene vtable, 118 slots) by
+// ResolveKnownMethods; simulate is an exact slot match, the other
+// three are within 8 bytes of the slot VA (small offsets come from
+// the walk-back heuristic landing on a non-prologue instruction).
+//
+//   PxScene::release    VA=0x141AE07B6  RVA=0x1AE07B6
 //   PxScene::addActor   VA=0x141AE0B62  RVA=0x1AE0162
 //   PxScene::simulate   VA=0x141AE4D80  RVA=0x1AE4380
 //   PxScene::shiftOrigin VA=0x141AE6C28 RVA=0x1AE6228
+//   PxScene::sweep      VA=0x141B06F10 RVA=0x1B06F10
 //
-// Source: scripts/physx-vta-scan/README.md § Hallazgos confirmados.
+// Source: scripts/physx-vta-scan/README.md § "Hallazgos confirmados".
 // See docs/observations/ats-physx-functions.md for the full
 // provenance.
 extern const PhysXKnownMethod kPhysXKnownMethods[kPhysXKnownMethodCount];
@@ -145,6 +157,15 @@ struct PhysXVtableResolveResult {
     int32_t simulate_slot = -1;
     // Slot index of PxScene::shiftOrigin. -1 when no match.
     int32_t shift_origin_slot = -1;
+    // Slot index of PxScene::sweep. -1 when no match. sweep is the
+    // first PxScene method whose catalog VA was found via a
+    // sweep-specific assertion string
+    // ("PxScene::sweep(): first geometry object ...") instead of
+    // the generic LEA-walk-back heuristic. The catalog has it at
+    // VA 0x141B06F10 (RVA 0x1B06F10); the matching slot in the
+    // PxScene vtable at RVA 0x2500EA0 is the next slot to verify
+    // against a live PxScene instance.
+    int32_t sweep_slot = -1;
 };
 
 // Result of a memory scan over a module's .rdata. success is true when

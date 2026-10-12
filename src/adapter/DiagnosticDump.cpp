@@ -30,6 +30,7 @@
 #include "walkercore/Knockout.h"
 #include "walkercore/Log.h"
 #include "walkercore/PlayerState.h"
+#include "walkercore/PhysXAdapter.h"
 #include "walkercore/PolishProviders.h"
 #include "walkercore/ScsTelemetryProvider.h"
 #include "walkercore/Settings.h"
@@ -77,6 +78,7 @@ const FlashlightProvider *g_flashlight = nullptr;
 const DoorAnimProvider *g_door_anim = nullptr;
 const HeadTrackerProvider *g_head_tracker = nullptr;
 const ShadowProvider *g_shadow = nullptr;
+const PhysXAdapter *g_physx = nullptr;
 
 }  // namespace
 
@@ -174,6 +176,7 @@ void SetFlashlight(const FlashlightProvider *f) { g_flashlight = f; }
 void SetDoorAnim(const DoorAnimProvider *d) { g_door_anim = d; }
 void SetHeadTracker(const HeadTrackerProvider *h) { g_head_tracker = h; }
 void SetShadow(const ShadowProvider *s) { g_shadow = s; }
+void SetPhysX(const PhysXAdapter *p) { g_physx = p; }
 
 }  // namespace diagnostic_internal
 }  // namespace walkercore
@@ -420,6 +423,53 @@ extern "C" __declspec(dllexport) void walker_dump_state(void) {
         }
     } else {
         WALKERCORE_LOG_INFO("shadow              : (not initialized)");
+    }
+
+    if (g_physx != nullptr) {
+        // Mirror the install-time catalog (the same 7-VA list the
+        // adapter logs on Install). We split the line in half so the
+        // dump stays legible without forcing a single very-long row:
+        //   physx adapter       : installed=true catalog=7
+        //   physx catalog       : release=0x141AE07B6 addActor=0x141AE0B62
+        //                          simulate=0x141AE4D80 shiftOrigin=0x141AE6C28
+        //                          sweep=0x141B06F10 raycast=0x141AE1610
+        //                          overlap=0x141AE0F70
+        // Slot dispatch stays at -1 until a live PxScene instance is
+        // resolved; the focused walker_dump_physx() dump adds the
+        // expected slot per build so analysts can confirm what the
+        // matcher would pick up.
+        WALKERCORE_LOG_INFO(
+            "physx adapter       : installed=%s catalog=%d",
+            bool_str(g_physx->isInstalled()),
+            kPhysXKnownMethodCount);
+        char catalog_buf[768];
+        size_t off = 0;
+        for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
+            const int n = std::snprintf(
+                catalog_buf + off,
+                (off < sizeof(catalog_buf)) ? sizeof(catalog_buf) - off : 0,
+                "%s%s=0x%llX",
+                (m == 0 ? "" : " "),
+                kPhysXKnownMethods[m].name,
+                static_cast<unsigned long long>(kPhysXKnownMethods[m].va));
+            if (n <= 0 ||
+                static_cast<size_t>(n) >= sizeof(catalog_buf) - off) {
+                break;
+            }
+            off += static_cast<size_t>(n);
+        }
+        // 28 chars/line at 12-pt; 768 / 28 ≈ 27 names per row. Split
+        // every ~7 entries (≈ 200 chars) so the dump reads as a
+        // multi-row block instead of a single very long line.
+        WALKERCORE_LOG_INFO("physx catalog[1..4]  : %.*s",
+                            220, catalog_buf);
+        if (off > 220) {
+            WALKERCORE_LOG_INFO("physx catalog[5..7]  : %.*s",
+                                static_cast<int>(off - 220),
+                                catalog_buf + 220);
+        }
+    } else {
+        WALKERCORE_LOG_INFO("physx adapter       : (not initialized)");
     }
 
     if (g_settings_menu != nullptr) {
@@ -818,4 +868,66 @@ extern "C" __declspec(dllexport) void walker_dump_input(void) {
         }
     }
     WALKERCORE_LOG_INFO("--- end input ---");
+}
+
+extern "C" __declspec(dllexport) void walker_dump_physx(void) {
+    using namespace walkercore;
+
+    auto bool_str = [](bool b) -> const char * { return b ? "true" : "false"; };
+
+    WALKERCORE_LOG_INFO("--- WalkerCore physx ---");
+    if (g_physx == nullptr) {
+        WALKERCORE_LOG_INFO("physx adapter       : (not initialized)");
+        WALKERCORE_LOG_INFO("--- end physx ---");
+        return;
+    }
+
+    // Mirror the install-time configuration so analysts can confirm
+    // "did the INI reach the adapter?" (defaults: 0.35 m capsule radius,
+    // 1.85 m capsule height, 1.0 m max sweep, 0.87 rad slope limit).
+    const PhysXAdapterConfig &cfg = g_physx->config_for_dump();
+    WALKERCORE_LOG_INFO("physx installed       : %s",
+                        bool_str(g_physx->isInstalled()));
+    WALKERCORE_LOG_INFO("capsule radius        : %.3f m",
+                        static_cast<double>(cfg.capsule_radius));
+    WALKERCORE_LOG_INFO("capsule height        : %.3f m",
+                        static_cast<double>(cfg.capsule_height));
+    WALKERCORE_LOG_INFO("max sweep distance    : %.3f m",
+                        static_cast<double>(cfg.max_sweep_distance));
+    WALKERCORE_LOG_INFO("max slope angle       : %.3f rad",
+                        static_cast<double>(cfg.max_slope_angle));
+    WALKERCORE_LOG_INFO("disable collisions    : %s",
+                        bool_str(cfg.disable_collisions));
+
+    // Catalog + expected slot dispatch. The slot column is what
+    // ResolveKnownMethods *would* report for ATS 1.61.3.1s (PxScene
+    // vtable @ RVA 0x25020A0, 118 slots). Until a live PxScene
+    // instance is wired the runtime column stays at -1 — we surface
+    // the expected value here so analysts can confirm the catalog is
+    // current for their build without scrolling through
+    // docs/observations/ats_1_61_3_1s.physx.functions.md.
+    static constexpr int kExpectedSlot[kPhysXKnownMethodCount] = {
+        2,    // release      → slot 2  on ATS 1.61.3.1s
+        11,   // addActor     → slot 11
+        57,   // simulate     → slot 57
+        117,  // shiftOrigin  → slot 117
+        -1,   // sweep: lives in 5-slot run @ RVA 0x2507C08, slot 4
+        15,   // raycast      → slot 15
+        13,   // overlap      → slot 13
+    };
+    WALKERCORE_LOG_INFO("catalog size          : %d", kPhysXKnownMethodCount);
+    for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
+        WALKERCORE_LOG_INFO(
+            "physx[%d] %-12s : va=0x%llX expected_slot=%d resolved_slot=-1",
+            m, kPhysXKnownMethods[m].name,
+            static_cast<unsigned long long>(kPhysXKnownMethods[m].va),
+            kExpectedSlot[m]);
+    }
+    WALKERCORE_LOG_INFO(
+        "physx resolve         : tolerance=%llu B min_run=%d "
+        "(matches the 0x25020A0 vtable for ATS 1.61.3.1s)",
+        static_cast<unsigned long long>(kPhysXResolveSlotTolerance),
+        kMinPhysXVtableRun);
+
+    WALKERCORE_LOG_INFO("--- end physx ---");
 }

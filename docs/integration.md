@@ -39,13 +39,13 @@ The M-landers are:
 | Lander | What it implements | Status |
 | --- | --- | --- |
 | M2 Lander | D3D11 Present hook + MinHook setup | **Implemented** (`D3D11Hook.cpp`, hooks `D3D11CreateDeviceAndSwapChain` and Present vtable slot 8, calls `walker_per_frame_tick(dt)` each frame). Uses the real 11-parameter signature for `D3D11CreateDeviceAndSwapChain` and a generation counter to defend against swap-chain recreation. |
-| M3 Lander | Real `IWorldGeometry` (PhysX SDK or memory scan) | Not yet started |
-| M5 Lander | Per-truck door geometry from real truck models | Not yet started (WalkerFsm FSM complete with `BindPlayerTarget` snap-to-anchor semantics) |
-| M7 Lander | Head tracker (FreeTrack + opentrack), shadow, light injection, door skeletal animation | Not yet started |
-| M8 Lander | Real fuel-station prefab list + SCS fuel channels | Not yet started |
-| M9 Lander | Real trailer-attach API + per-trailer king-pin offsets | Not yet started |
-| M10 Lander | Vehicle-impact normal from PhysX collision results | Not yet started |
-| M11 Lander | Dear ImGui integration under D3D11 | Not yet started |
+| M3 Lander | Real `IWorldGeometry` (PhysX SDK or memory scan) | **Catalog + slot dispatch done, runtime queries pending**. `kPhysXKnownMethods` carries 7 entries (release, addActor, simulate, shiftOrigin, sweep, raycast, overlap) with absolute VAs from `scripts/physx-vta-scan/`. `ResolveKnownMethods` walks the vtable at RVA 0x25020A0 (ATS 1.61.3.1s, 118 slots) with a slot tolerance of 8 bytes and matches every catalog VA. `MemoryScanFromBufferWithTextRange` + `TestPhysXRealBinaryMatchesCatalog` proves the catalog matches the on-disk `amtrucks.exe` (gated by `WALKERCORE_REAL_BINARY_TEST_PATH`). `Install()` logs the catalog, and `walker_dump_physx()` (F12 / programmatic) emits it. Runtime `Raycast` / `SphereSweep` / `groundY` still fall back to no-hit because no live `PxScene` instance is wired. |
+| M5 Lander | Per-truck door geometry from real truck models | **Implemented (14 built-in rows)**. `PerTruckDoorTable::BuiltIn()` ships ATS 1.61 truck geometry (Volvo VNL 2016 / 2009, Kenworth W900/T680/T880, Peterbilt 579/389, Freightliner Cascadia / Cascadia 2018, Mack Anthem, Western Star 49X/4900, International LT/LoneStar). `TruckDoorConfigFromTruckState` matches the live `truck.placement.id` against the table and applies the per-truck offset delta on top of the generic cabin-derived placeholder. |
+| M7 Lander | Head tracker (FreeTrack + opentrack), shadow, light injection, door skeletal animation | **Partial — opentrack receiver done**. `OpentrackReceiver` listens on UDP port 4242 and pushes smoothed yaw/pitch/roll into `HeadTrackerProvider`. FreeTrack client linkage + shadow/flashlight injection still stubbed (require game memory scan or `light_source` global — see Lander contract below). |
+| M8 Lander | Real fuel-station prefab list + SCS fuel channels | Not yet started (RE of SCS `prefab/list_station` required; not yet wired because that RE needs a live debugging session against `amtrucks.exe`). |
+| M9 Lander | Real trailer-attach API + per-trailer king-pin offsets | **Partial**. `CouplingProvider` tracks the live `hook_position` from the SCS configuration event. The placeholder waypoints remain; replacing them with SCS `trailer.placement` + `trailer.wheel_suspension_deflection` telemetry channels is the next step. |
+| M10 Lander | Vehicle-impact normal from PhysX collision results | **Partial**. `KnockoutProvider::Tick` logs the per-angle collision direction (TMRealWalk-style probe line: `KnockoutProvider: collision direction (angle=... deg, normal=...)`). The hook into `PhysXAdapter::SphereSweep`'s contact normal remains — M3 runtime queries must be live before the hook can replace the velocity-change heuristic. |
+| M11 Lander | Dear ImGui integration under D3D11 | Not yet started (requires vendored Dear ImGui under `third_party/imgui`; the renderer in `SettingsMenu.cpp` is the existing console-style path). |
 
 All non-lander modules are written and the test scaffold is in place; the
 compilation status depends on the user's toolchain.

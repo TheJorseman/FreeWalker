@@ -294,6 +294,12 @@ public:
 
     bool isInstalled() const { return installed_; }
 
+    // Read the live config for the diagnostic dump. The config is
+    // mutable (SetConfig) but the dump only reads, so we return by
+    // const-reference. Tests that want to compare configurations can
+    // also use this to capture a snapshot before SetConfig.
+    const PhysXAdapterConfig &config_for_dump() const { return cfg_; }
+
     // IWorldGeometry overrides. M3 stub: returns "no hit" so the player
     // does not get stuck waiting for collision.
     bool Raycast(Vec3 origin,

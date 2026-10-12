@@ -195,6 +195,7 @@ void TestAbiContractDllLoads() {
         {"walker_dump_fsm"},
         {"walker_dump_version"},
         {"walker_dump_input"},
+        {"walker_dump_physx"},
     };
     const size_t kCount = sizeof(kExports) / sizeof(kExports[0]);
 

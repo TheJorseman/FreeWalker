@@ -151,6 +151,16 @@ void walker_dump_fsm(void);
 // an InputState.
 void walker_dump_input(void);
 
+// Diagnostics — focused dump of the M3 PhysX adapter: install status,
+// the catalog of known PxScene method VAs, and the slot dispatch the
+// adapter would use if a live PxScene instance were available. Use
+// this when investigating "did M3 find the catalog?" or "is the
+// catalog up to date for this build?". Safe to call at any time;
+// reports "(not initialized)" when no PhysXAdapter has been wired
+// yet. When the adapter is installed but no live PxScene has been
+// resolved, slot columns stay at "-1" (the no-hit fallback path).
+void walker_dump_physx(void);
+
 // M3 lander wire-up point. The real adapter calls this once when its
 // PxScene / public PhysX SDK link succeeds. Until then, the stub returns
 // "no hit" with one warning.

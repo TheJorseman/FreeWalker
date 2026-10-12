@@ -691,6 +691,12 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   g_world = new walkercore::PhysXAdapter();
   g_world->Install();
   g_frame_loop->BindWorld(g_world);
+  // Wire the diagnostic mirror so walker_dump_state() and the focused
+  // walker_dump_physx() report the M3 catalog + install status. The
+  // mirror follows the live g_world pointer; when PluginEntry tears
+  // down at shutdown it stays a no-op because the diagnostic layer
+  // is destroyed before g_world in the same shutdown order.
+  walkercore::diagnostic_internal::SetPhysX(g_world);
 
   // M4: install the input hook. The hook needs a game window for full
   // mouse capture; for now we install with a null window and the

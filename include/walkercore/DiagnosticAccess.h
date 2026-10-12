@@ -30,6 +30,7 @@ class FlashlightProvider;
 class DoorAnimProvider;
 class HeadTrackerProvider;
 class ShadowProvider;
+class PhysXAdapter;
 
 // Forward-declared so EncodeFsmLabel / FsmLabelNeedsReencode can take it
 // by value without forcing every consumer of DiagnosticAccess.h to pull
@@ -120,6 +121,11 @@ void SetFlashlight(const FlashlightProvider *f);
 void SetDoorAnim(const DoorAnimProvider *d);
 void SetHeadTracker(const HeadTrackerProvider *h);
 void SetShadow(const ShadowProvider *s);
+
+// Wire the M3 PhysX adapter so walker_dump_state() and the focused
+// walker_dump_physx() can report the installed catalog and any
+// last-scan result. Pass nullptr when the adapter is destroyed.
+void SetPhysX(const PhysXAdapter *p);
 
 }  // namespace diagnostic_internal
 }  // namespace walkercore

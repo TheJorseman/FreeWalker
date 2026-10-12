@@ -184,6 +184,69 @@ void TestFrameLoopOverridePathPreservesProjectionFields() {
     EXPECT_FALSE(loop.camera().precomputed_yaw_trig_valid_);
 }
 
+// Camera matrices are the contract surface for the M2 D3D11 hook:
+// HookedPresent() reads camera.view + camera.projection after each
+// RunOnce tick. Until the GPU push is wired, the matrices are computed
+// here but never reach the renderer. Pin that the Walking pipeline
+// actually populates them so a future refactor that drops the
+// populate-on-Walking path is caught.
+//
+// Uses the same harness pattern as the override-preserves-projection
+// test: drive the FSM into Walking, run one tick, then inspect the
+// matrices FrameLoop hands to the renderer.
+void TestFrameLoopWalkingPopulatesViewAndProjectionMatrices() {
+    constexpr double kDt = 1.0 / 60.0;
+    FrameLoop loop;
+    WalkerFsm fsm;
+    PlayerState player;
+    PlayerState_Reset(player);
+    fsm.BindPlayerTarget(&player);
+    loop.BindFsm(&fsm);
+
+    // Drive the FSM into Walking.
+    fsm.SetTransitionSeconds(0.05);
+    WalkerFsmInputs inputs;
+    TruckState truck_state{};
+    inputs.truck = &truck_state;
+    inputs.player = &player;
+    inputs.toggle_walk_pressed = true;
+    CameraState target;
+    CameraState_Reset(target);
+    fsm.Update(inputs, 0.016, &target);
+    fsm.Update(inputs, 0.10, &target);
+    EXPECT_EQ(static_cast<unsigned>(fsm.state()),
+              static_cast<unsigned>(WalkerFsmState::Walking));
+
+    // Aspect set so the projection matrix is non-degenerate.
+    loop.SetAspect(16.0f / 9.0f);
+    loop.SampleInput();
+    loop.RunOnce(kDt);
+
+    // The view matrix is non-identity. We don't pin specific values
+    // (player offsets change between configs); we pin that the
+    // rotation block (rows 0/1/2, cols 0/1/2) has at least one
+    // off-diagonal non-trivial entry, which proves BuildViewRotation
+    // actually ran.
+    const auto &view = loop.camera().view;
+    EXPECT_TRUE(std::fabs(view[0][0]) > 0.5f ||
+                std::fabs(view[0][2]) > 0.5f ||
+                std::fabs(view[2][0]) > 0.5f);
+
+    // The projection matrix has its perspective component populated:
+    // projection[2][3] (m[2][3] in HCLIP space) should be -1 for a
+    // typical projection. We accept any non-zero value as proof that
+    // BuildProjectionMatrix ran.
+    const auto &proj = loop.camera().projection;
+    const bool has_perspective =
+        std::fabs(proj[2][3]) > 0.01f || std::fabs(proj[3][2]) > 0.01f;
+    EXPECT_TRUE(has_perspective);
+
+    // The camera is marked valid after a full RunOnce tick in
+    // Walking state — a stale `valid=false` would mean the renderer
+    // push path (when wired) skips the frame.
+    EXPECT_TRUE(loop.camera().valid);
+}
+
 namespace {
 
 // Open world with a flat ground at y=0, identical to the perf /

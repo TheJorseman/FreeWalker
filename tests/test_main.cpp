@@ -70,6 +70,7 @@ void TestFrameLoopRunOnceDoesNotClobberConductorInput();
 void TestFrameLoopRunOnceSamplesWhenConductorDidNot();
 void TestFrameLoopPlayerSnapshotStableAcrossConductor();
 void TestFrameLoopOverridePathPreservesProjectionFields();
+void TestFrameLoopWalkingPopulatesViewAndProjectionMatrices();
 void TestWalkerFsmInputsPointerRefactorContract();
 void TestWalkerFsmTransitionOutCameraFromMatchesCabinSeatWhenPointerAliases();
 void TestCameraStateBuildViewRotationPitchZeroSkipsNormalisation();
@@ -552,6 +553,7 @@ int main() {
     // yaw-trig cache so BuildViewRotation recomputes fresh on the
     // override frame. Pin both contracts.
     RUN_TEST(walkercore::TestFrameLoopOverridePathPreservesProjectionFields);
+    RUN_TEST(walkercore::TestFrameLoopWalkingPopulatesViewAndProjectionMatrices);
 
     // WalkerFsmInputs pointer-refactor contract. The per-frame
     // conductor uses UpdateFromPointers to avoid a 152-byte/frame

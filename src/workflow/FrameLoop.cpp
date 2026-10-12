@@ -344,10 +344,28 @@ void FrameLoop::PhaseIntegrateMovement(double dt) {
     // requiring a working collision engine.
     const double vy_max =
         static_cast<double>(movement_cfg_.vertical_velocity_max_mps);
+    const double vy_before_cap = vertical_velocity_;
     if (vertical_velocity_ > vy_max) {
         vertical_velocity_ = vy_max;
     } else if (vertical_velocity_ < -vy_max) {
         vertical_velocity_ = -vy_max;
+    }
+    // DIAGNOSTIC (M11 follow-up #2): emit one log line per Walking
+    // tick so we can pin the actual vy / dt / dy values the
+    // KnockoutProvider sees. The game log on ATS 1.61.3.1s shows KO
+    // triggers with dy ≈ 0.2 m at dt ≈ 0.007 s — that's velocity ≈ 28
+    // m/s, well above the 9.81 m/s cap. Either vy is being set
+    // higher than the cap elsewhere, or PhaseIntegrateMovement is
+    // receiving a different dt than KnockoutProvider::Tick. The log
+    // resolves which. Rate-limited via a tick counter so we don't
+    // flood the game log at 110-200 Hz.
+    static uint64_t s_diag_tick = 0;
+    if ((s_diag_tick++ % 30) == 0) {
+        WALKERCORE_LOG_INFO(
+            "FrameLoop::PhaseIntegrateMovement: dt=%.4f, vy=%.3f "
+            "(pre-cap=%g), vy_max=%.3f, vy*dt=%.4f m",
+            dt, vertical_velocity_, vy_before_cap, vy_max,
+            vertical_velocity_ * dt);
     }
 
     // Capture pre-integration position for the collision phase.

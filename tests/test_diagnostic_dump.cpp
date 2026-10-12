@@ -33,6 +33,7 @@
 #include "walkercore/SettingsMenu.h"
 #include "walkercore/TruckState.h"
 #include "walkercore/TruckDoorConfig.h"
+#include "walkercore/TrailerCoupling.h"
 #include "walkercore/WalkerFsm.h"
 
 namespace {
@@ -1670,6 +1671,43 @@ void TestDumpPerTruckDoorReportsUnmatchedRow() {
     EXPECT_TRUE(ContainsCapture("vehicle.volvo.future_model (no built-in row)"));
 
     diagnostic_internal::SetPerTruckDoor(nullptr, 0, nullptr);
+}
+
+void TestDumpCouplingHandlesUninitialized() {
+    // No CouplingProvider wired. walker_dump_coupling must still
+    // emit a banner + the (not initialized) marker without crashing.
+    walkercore_log_shutdown();
+    walkercore_log_init(&DiagnosticDumpCaptureSink);
+    ResetCapture();
+    diagnostic_internal::SetCoupling(nullptr);
+    walker_dump_coupling();
+    walkercore_log_shutdown();
+    EXPECT_TRUE(ContainsCapture("--- WalkerCore coupling ---"));
+    EXPECT_TRUE(ContainsCapture("--- end coupling ---"));
+    EXPECT_TRUE(ContainsCapture("coupling             : (not initialized)"));
+}
+
+void TestDumpCouplingReportsActiveStep() {
+    // Wire a real CouplingProvider, force Start() so the state
+    // advances to ApproachToKingPin with a known waypoint, then
+    // confirm the dump reads the same values.
+    CouplingProvider cp;
+    cp.Start();
+    const CouplingState st = cp.state();
+    // Start() should advance to the first real step.
+    EXPECT_EQ(st.step, CouplingStep::ApproachToKingPin);
+
+    walkercore_log_shutdown();
+    walkercore_log_init(&DiagnosticDumpCaptureSink);
+    ResetCapture();
+    diagnostic_internal::SetCoupling(&cp);
+    walker_dump_coupling();
+    walkercore_log_shutdown();
+    EXPECT_TRUE(ContainsCapture("--- WalkerCore coupling ---"));
+    EXPECT_TRUE(ContainsCapture("step                : ApproachToKingPin"));
+    EXPECT_TRUE(ContainsCapture("waypoint_local"));
+    EXPECT_TRUE(ContainsCapture("waypoint_radius_m"));
+    diagnostic_internal::SetCoupling(nullptr);
 }
 
 }  // namespace walkercore

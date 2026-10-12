@@ -336,17 +336,33 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                 // opt in explicitly.
                 loaded.m2_camera_hijack = bv;
             } else if (lkey == "d3d11_hook" && TryParseBool(value, &bv)) {
-                // M2 lander (D3D11 hook) install gate. Default 1. Set
-                // `false` to skip MH_CreateHook/MH_EnableHook on system
-                // d3d11.dll when the install path conflicts with another
-                // mod or DLL search-order quirk on this build.
+                // M2 lander (D3D11 hook) install gate. Default 0. Set
+                // `true` to opt back in on a known-clean stack.
                 loaded.m2_d3d11_hook = bv;
             } else if (lkey == "d3d12_hook" && TryParseBool(value, &bv)) {
                 // M2 lander (D3D12 + DXGI factory hook) install gate.
-                // Default 1. Set `false` to skip MH_CreateHook/MH_EnableHook
-                // on system d3d12.dll + dxgi.dll when the install path
-                // conflicts with another mod or DLL search-order quirk.
+                // Default 0. Set `true` to opt back in on a known-clean
+                // stack.
                 loaded.m2_d3d12_hook = bv;
+            } else if (lkey == "camera_hijack_install" && TryParseBool(value, &bv)) {
+                // M2 long-term: in-process MinHook on the SCS camera
+                // state dispatcher at RVA 0xC22F40 in amtrucks.exe.
+                // Default 0 — the trampoline has been observed to
+                // break downstream 16-byte alignment on ATS 1.61.3.1s
+                // (movdqa #GP at RVA 0x1d5300a). Set `true` on a
+                // known-clean stack.
+                loaded.m2_camera_hijack_install = bv;
+            } else {
+                unknown_count++;
+            }
+        } else if (section == "m3") {
+            // M3 lander gates. Currently a single knob: the
+            // PxScene::addActor MinHook install. Default 0 — the
+            // trampoline has been observed to break downstream
+            // 16-byte alignment on ATS 1.61.3.1s.
+            bool bv = false;
+            if (lkey == "px_scene_hook_install" && TryParseBool(value, &bv)) {
+                loaded.m3_px_scene_hook_install = bv;
             } else {
                 unknown_count++;
             }
@@ -413,6 +429,29 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
             "d3d11_hook). Edit the INI to re-enable on a known-clean "
             "stack.");
         current_.m2_d3d12_hook = false;
+        migrated = true;
+    }
+    if (current_.m2_camera_hijack_install) {
+        WALKERCORE_LOG_WARN(
+            "Settings: [m2] camera_hijack_install was true; forcing to "
+            "false. The MinHook trampoline on the SCS camera state "
+            "dispatcher (RVA 0xC22F40) has been observed to break "
+            "downstream 16-byte alignment on ATS 1.61.3.1s — same "
+            "amtrucks.exe+0x1d5300a `movdqa` #GP as the d3d11/d3d12 "
+            "hooks but triggered by the in-process trampoline. Edit "
+            "the INI to re-enable on a known-clean stack.");
+        current_.m2_camera_hijack_install = false;
+        migrated = true;
+    }
+    if (current_.m3_px_scene_hook_install) {
+        WALKERCORE_LOG_WARN(
+            "Settings: [m3] px_scene_hook_install was true; forcing to "
+            "false. The MinHook trampoline on PxScene::addActor (RVA "
+            "0x1AE0B62) has been observed to break downstream 16-byte "
+            "alignment on ATS 1.61.3.1s — same amtrucks.exe+0x1d5300a "
+            "`movdqa` #GP as the d3d11/d3d12 / camera-hijack hooks. "
+            "Edit the INI to re-enable on a known-clean stack.");
+        current_.m3_px_scene_hook_install = false;
         migrated = true;
     }
     if (migrated) {
@@ -512,6 +551,14 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "camera_hijack = " << (current_.m2_camera_hijack ? "true" : "false") << "\n";
     f << "d3d11_hook = " << (current_.m2_d3d11_hook ? "true" : "false") << "\n";
     f << "d3d12_hook = " << (current_.m2_d3d12_hook ? "true" : "false") << "\n";
+    f << "camera_hijack_install = " << (current_.m2_camera_hijack_install ? "true" : "false") << "\n";
+    f << "\n";
+    f << "[m3]\n";
+    f << "# PxScene::addActor MinHook install gate. Default 0 — the\n";
+    f << "# trampoline has been observed to break downstream 16-byte\n";
+    f << "# alignment on ATS 1.61.3.1s (movdqa #GP at RVA 0x1d5300a).\n";
+    f << "# Set to 1 on a known-clean stack.\n";
+    f << "px_scene_hook_install = " << (current_.m3_px_scene_hook_install ? "true" : "false") << "\n";
     f.close();
     WALKERCORE_LOG_INFO("Settings: saved %s", path.c_str());
     return true;

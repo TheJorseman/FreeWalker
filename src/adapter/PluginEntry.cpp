@@ -1020,10 +1020,25 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   g_camera_hijack = new walkercore::CameraHijack();
   g_camera_hijack->SetEnabled(
       g_settings != nullptr && g_settings->current().m2_camera_hijack);
-  if (g_camera_hijack->isEnabled()) {
-    // Best-effort install. Logs success or install_error into
-    // game.log.txt; never aborts the SDK init.
+  // [m2] camera_hijack_install gate. Default false on
+  // ATS 1.61.3.1s + ReShade + OptiScaler + RenoDX — the in-process
+  // MinHook trampoline on the SCS camera state dispatcher at RVA
+  // 0xC22F40 has been observed to break downstream 16-byte
+  // alignment and trigger a `movdqa` #GP at RVA 0x1d5300a in
+  // amtrucks.exe. The Install() is a no-op when the gate is
+  // false; a single "SKIPPED (INI gate [m2] camera_hijack_install
+  // = false)" line is logged. The shim's PostMessage path is
+  // independent — F10 still synthesises Numpad-0 to the game
+  // window.
+  if (g_camera_hijack->isEnabled() &&
+      g_settings != nullptr &&
+      g_settings->current().m2_camera_hijack_install) {
     g_camera_hijack->Install();
+  } else if (g_camera_hijack->isEnabled()) {
+    WALKERCORE_LOG_INFO(
+        "M2 lander: camera hijack dispatcher hook SKIPPED (INI gate "
+        "[m2] camera_hijack_install = false) — shim + FSM still "
+        "active, dev free camera activates via PostMessage Numpad-0");
   }
   walkercore::diagnostic_internal::SetCameraHijack(g_camera_hijack);
 
@@ -1034,7 +1049,25 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   // not loaded" and returns false; we still keep the object alive
   // so the ABI surface + walker_dump_physx remain stable.
   g_px_scene_hook = new walkercore::PxSceneHook();
-  g_px_scene_hook->Install();
+  // [m3] px_scene_hook_install gate. Default false on
+  // ATS 1.61.3.1s + ReShade + OptiScaler + RenoDX — the MinHook
+  // trampoline on PxScene::addActor at RVA 0x1AE0B62 has been
+  // observed to break downstream 16-byte alignment and trigger
+  // a `movdqa` #GP at RVA 0x1d5300a in amtrucks.exe. The Install
+  // is a no-op when the gate is false. M3 lander remains a no-hit
+  // stub (the world's sphere-sweep returns no collision; the
+  // Y-clamp in PhaseIntegrateMovement keeps the player anchored
+  // to the truck's ground level). M3 functionality is not required
+  // for F10 / FSM / shim to work.
+  if (g_settings != nullptr &&
+      g_settings->current().m3_px_scene_hook_install) {
+    g_px_scene_hook->Install();
+  } else {
+    WALKERCORE_LOG_INFO(
+        "M3 lander: PxScene::addActor hook SKIPPED (INI gate [m3] "
+        "px_scene_hook_install = false) — M3 stays a no-hit stub, "
+        "Y-clamp anchors player to truck ground");
+  }
   walkercore::diagnostic_internal::SetPxSceneHook(g_px_scene_hook);
 
   // M11 ImGui overlay. Scaffolding: the provider is created and

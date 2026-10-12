@@ -83,6 +83,22 @@ struct WalkerSettings {
     // Set `[m2] d3d12_hook = true` in the INI to opt back in when
     // the user's stack is known to be clean.
     bool m2_d3d12_hook = false;
+    // M2 long-term: in-process MinHook on the SCS camera state
+    // dispatcher at RVA 0xC22F40 in amtrucks.exe. The hook is
+    // observation-only (v1+v2 scope: counts calls, surfaces state
+    // in the F12 dump; does not write to GPU). Default `false` —
+    // the MinHook trampoline itself has been observed to break
+    // downstream 16-byte alignment on ATS 1.61.3.1s (same
+    // amtrucks.exe+0x1d5300a `movdqa` #GP as the d3d11/d3d12 hooks,
+    // but triggered by the trampoline rather than the SYSTEM32
+    // DLL patch). Set `[m2] camera_hijack_install = true` in the
+    // INI to opt in on a known-clean stack. When the gate is
+    // false, the Install() is a no-op and the SCS state machine
+    // drives the camera unobserved. The shim's PostMessage path
+    // (which dispatches Numpad-0 to the game window on F10
+    // Walking entry) still works — the dev free camera activates
+    // the same way manual Numpad-0 would.
+    bool m2_camera_hijack_install = false;
 
     // M11 ImGui overlay gate. False by default — opt in via
     // `[m11] imgui_overlay = true` in `WalkerCore.ini`. When true,
@@ -90,6 +106,24 @@ struct WalkerSettings {
     // chain (the actual D3D11 Present-path integration is a TODO;
     // the surface + ABI are wired in this commit).
     bool m11_imgui_overlay = false;
+
+    // M3 lander: in-process MinHook on PxScene::addActor at RVA
+    // 0x1AE0B62 in amtrucks.exe. The hook captures the live
+    // PxScene instance pointer (waiting for the first addActor
+    // call from the game) so the M3 lander can query the PhysX
+    // scene for collision meshes, actor counts, etc. Default
+    // `false` — the MinHook trampoline has been observed to break
+    // downstream 16-byte alignment on ATS 1.61.3.1s (same
+    // amtrucks.exe+0x1d5300a `movdqa` #GP as the other in-process
+    // MinHooks). Set `[m3] px_scene_hook_install = true` in the
+    // INI to opt in on a known-clean stack. When the gate is
+    // false, the Install() is a no-op and the M3 lander remains a
+    // no-hit stub (the world's sphere-sweep returns no collision,
+    // the integrator's Y-clamp keeps the player from falling to
+    // -∞). M3 functionality is not yet required for the F10
+    // Walking transition to work — only the per-frame loop + FSM
+    // + shim are.
+    bool m3_px_scene_hook_install = false;
 
     // Returns the same values as the inline defaults in MovementConfig +
     // KeyBindings + HeadTrackerConfig. Centralised so Save() produces a

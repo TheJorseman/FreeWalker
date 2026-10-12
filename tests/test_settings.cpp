@@ -614,4 +614,122 @@ void TestIniM2D3DHookGatesAutoMigratesOldTrueValues() {
     std::remove(path.c_str());
 }
 
+// M2 camera_hijack_install + M3 px_scene_hook_install defaults
+// (both `false`) + auto-migration from old `true` values. Same
+// rationale as the d3d11/d3d12 gates: the in-process MinHook
+// trampolines on amtrucks.exe break downstream 16-byte alignment
+// on ATS 1.61.3.1s, triggering the same amtrucks.exe+0x1d5300a
+// `movdqa` #GP.
+
+void TestIniM2CameraHijackInstallDefaultIsFalse() {
+    SettingsStore defaults;
+    EXPECT_FALSE(defaults.current().m2_camera_hijack_install);
+}
+
+void TestIniM3PxSceneHookInstallDefaultIsFalse() {
+    SettingsStore defaults;
+    EXPECT_FALSE(defaults.current().m3_px_scene_hook_install);
+}
+
+void TestIniM2CameraHijackInstallParseAndRoundTrip() {
+    const std::string path = MakeTempIniPath("m2_camera_hijack_install");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "camera_hijack_install = true\n";
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    // The auto-migration forces to false (the same as d3d11/d3d12
+    // gates). Pin: even an explicit `true` is migrated to false.
+    EXPECT_FALSE(reader.current().m2_camera_hijack_install);
+
+    SettingsStore store;
+    store.SetCurrent(reader.current());
+    EXPECT_TRUE(store.SaveToPath(path));
+    SettingsStore reader2;
+    EXPECT_TRUE(reader2.LoadFromPath(path));
+    EXPECT_FALSE(reader2.current().m2_camera_hijack_install);
+
+    std::remove(path.c_str());
+}
+
+void TestIniM3PxSceneHookInstallParseAndRoundTrip() {
+    const std::string path = MakeTempIniPath("m3_px_scene_hook_install");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m3]\n";
+        w << "px_scene_hook_install = true\n";
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_FALSE(reader.current().m3_px_scene_hook_install);
+
+    SettingsStore store;
+    store.SetCurrent(reader.current());
+    EXPECT_TRUE(store.SaveToPath(path));
+    SettingsStore reader2;
+    EXPECT_TRUE(reader2.LoadFromPath(path));
+    EXPECT_FALSE(reader2.current().m3_px_scene_hook_install);
+
+    std::remove(path.c_str());
+}
+
+void TestIniM2CameraHijackInstallAutoMigratesOldTrueValues() {
+    // Pin: a pre-existing INI with the OLD default of `true` for
+    // camera_hijack_install gets auto-migrated to `false` on load
+    // and the migration persists to disk.
+    const std::string path = MakeTempIniPath("m2_camera_hijack_migrate");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "camera_hijack_install = true\n";
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_FALSE(reader.current().m2_camera_hijack_install);
+
+    {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const std::string content = ss.str();
+        EXPECT_TRUE(content.find("camera_hijack_install = false") !=
+                    std::string::npos);
+    }
+
+    std::remove(path.c_str());
+}
+
+void TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues() {
+    const std::string path = MakeTempIniPath("m3_px_scene_migrate");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m3]\n";
+        w << "px_scene_hook_install = true\n";
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_FALSE(reader.current().m3_px_scene_hook_install);
+
+    {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const std::string content = ss.str();
+        EXPECT_TRUE(content.find("px_scene_hook_install = false") !=
+                    std::string::npos);
+    }
+
+    std::remove(path.c_str());
+}
+
 }  // namespace walkercore

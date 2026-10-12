@@ -47,6 +47,15 @@ void TestIniHeadTrackerUnknownKeyIgnored();
 void TestIniM2D3DHookGatesParseAndDefault();
 void TestIniM2D3DHookGatesUnknownKeyIgnored();
 void TestIniM2D3DHookGatesAutoMigratesOldTrueValues();
+// M2 long-term + M3 lander INI gates — same rationale as the d3d11/
+// d3d12 gates but for the in-process MinHook trampolines on
+// amtrucks.exe. Default `false` for both.
+void TestIniM2CameraHijackInstallDefaultIsFalse();
+void TestIniM3PxSceneHookInstallDefaultIsFalse();
+void TestIniM2CameraHijackInstallParseAndRoundTrip();
+void TestIniM3PxSceneHookInstallParseAndRoundTrip();
+void TestIniM2CameraHijackInstallAutoMigratesOldTrueValues();
+void TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues();
 void TestApplyAllPushesEveryFieldToEveryConsumer();
 void TestWalkerFsmInitialState();
 void TestWalkerFsmDrivingToWalking();
@@ -597,6 +606,15 @@ int main() {
     RUN_TEST(walkercore::TestIniM2D3DHookGatesParseAndDefault);
     RUN_TEST(walkercore::TestIniM2D3DHookGatesUnknownKeyIgnored);
     RUN_TEST(walkercore::TestIniM2D3DHookGatesAutoMigratesOldTrueValues);
+    // M2 camera_hijack_install + M3 px_scene_hook_install gates —
+    // same crash rationale as the d3d11/d3d12 gates, but for the
+    // in-process MinHook trampolines on amtrucks.exe.
+    RUN_TEST(walkercore::TestIniM2CameraHijackInstallDefaultIsFalse);
+    RUN_TEST(walkercore::TestIniM3PxSceneHookInstallDefaultIsFalse);
+    RUN_TEST(walkercore::TestIniM2CameraHijackInstallParseAndRoundTrip);
+    RUN_TEST(walkercore::TestIniM3PxSceneHookInstallParseAndRoundTrip);
+    RUN_TEST(walkercore::TestIniM2CameraHijackInstallAutoMigratesOldTrueValues);
+    RUN_TEST(walkercore::TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues);
 
     // Regression guard for the dump_state_vk / mouse-button round-trip —
     // the user observed "F12 only gives me a screenshot" because the

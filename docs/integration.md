@@ -215,6 +215,28 @@ single-header vendor), it overlays shadows + `[F]` prompts over
 whatever camera is active — the SCS free camera for now, our
 camera later.
 
+> **v3 graphics-API correction.** The original v3 plan assumed D3D11
+> (`ID3D11DeviceContext::UpdateSubresource` on a constant buffer
+> pushed to the VS). A static RE pass on `amtrucks.exe` 1.61.3.1s
+> (`REA/scripts/tmrealwalk-re/dump_d3d11_imports.py`, commit
+> `a9701556`) shows the binary does **not** statically import
+> `d3d11.dll` or `dxgi.dll` in its standard PE import directory —
+> both libraries are loaded dynamically via `LoadLibraryA` + manual
+> `GetProcAddress`, same pattern SCS uses for inline PhysX 3.4
+> (commit `cfb403bb`). Combined with the existing code comment in
+> `src/adapter/PluginEntry.cpp:114-119` ("ATS 1.61.x uses D3D12"),
+> this means:
+>   - `D3D11Hook` is a **dead path** on this build by design.
+>   - v3 must replace SCS's writes via **D3D12**: snapshot the
+>     `ID3D12GraphicsCommandList*` that SCS captures during the
+>     per-frame draw, then call
+>     `SetGraphicsRoot32BitConstants` / `SetGraphicsRootConstantBufferView`
+>     from inside `Vtable16HookThunk` to inject `walker_camera()`'s
+>     view+projection matrices.
+> The hook point (per-frame `vtable[16]` trampoline) and singleton
+> walk (camera state struct) discovered in v2 are still correct;
+> only the matrix-replacement body changes.
+
 #### M2 long-term — RE pre-work (post-M11.4 lander)
 
 Two static scans in `REA/scripts/tmrealwalk-re/` located the function

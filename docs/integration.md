@@ -296,7 +296,12 @@ implementation lands.
 **File to implement:** `src/provider/PhysXAdapter.cpp` (currently a stub).
 
 - Strategy 1 (preferred): link against the public PhysX 3.4 SDK
-  (github.com/NVIDIA-Omniverse/PhysX). Hook the game's `PxPhysics`
+  (github.com/NVIDIA-Omniverse/PhysX). **PhysX 3.4 confirmed embedded
+  in amtrucks.exe 1.61.3.1s** via static RE — every `PhysXCooking` /
+  `PhysXCore` source-path literal in the binary shows
+  `D:\manual\third\physx\version_patched\PhysX_3.4\Source\` (REA
+  commit `cfb403bb`, `scripts/tmrealwalk-re/find_physx_version.py`).
+  No v4/v5 ABI drift to worry about. Hook the game's `PxPhysics`
   instance via the game binary's exported symbol or a known global. Walk
   the scene graph to a `PxScene`. Cache triangle / box meshes locally
   for fast sweep queries.

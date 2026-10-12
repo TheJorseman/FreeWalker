@@ -220,6 +220,9 @@ void TestPhysXKnownMethodsSweepIsTheHighestVA();
 void TestPhysXKnownMethodsCatalogVAsInPhysXRange();
 void TestPhysXKnownMethodsCatalogNamesMatchSDK();
 void TestPhysXKnownMethodsCatalogOrderIsStable();
+#ifdef WALKERCORE_REAL_BINARY_TEST_PATH
+void TestPhysXRealBinaryMatchesCatalog();
+#endif
 
 // M9 SCS configuration event + CouplingProvider real-hook probes.
 void TestScsTelemetryProviderRegisterEventsNullIsSafe();
@@ -729,6 +732,9 @@ int main() {
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogVAsInPhysXRange);
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogNamesMatchSDK);
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogOrderIsStable);
+#ifdef WALKERCORE_REAL_BINARY_TEST_PATH
+    RUN_TEST(walkercore::TestPhysXRealBinaryMatchesCatalog);
+#endif
 
     // M5 PerTruckDoorTable probes — per model_id door geometry overrides.
     RUN_TEST(walkercore::TestPerTruckDoorTableBuiltInFindsKnownRow);

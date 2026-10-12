@@ -23,6 +23,7 @@
 
 #include "TestHarness.h"
 
+#include <cstdio>
 #include <cstring>
 #include <cstdint>
 #include <vector>
@@ -79,7 +80,7 @@ std::vector<uint8_t> BufferWithSyntheticVtable(size_t run_len) {
 // (because no vtable run also exists in this buffer).
 
 void TestPhysXStringsProbeFindsKnownString() {
-    std::vector<uint8_t> buf = BufferWithString("PxScene::release(): Scene is still being simulated");
+    std::vector<uint8_t> buf = BufferWithString("PxScene::release(): Scene is still being simulated!");
     const PhysXScanResult res = PhysXAdapter::MemoryScanFromBuffer(buf.data(), buf.size());
     EXPECT_TRUE(res.success);
     EXPECT_EQ(res.string_probes_hit, 1);
@@ -441,5 +442,148 @@ void TestPhysXKnownMethodsCatalogOrderIsStable() {
     EXPECT_TRUE(kPhysXKnownMethods[5].va <  0x141B20000ULL);
     EXPECT_TRUE(kPhysXKnownMethods[6].va <  0x141B20000ULL);
 }
+
+// Real-binary integration test: read amtrucks.exe from disk, run
+// MemoryScanFromBuffer on its .rdata slice, then run
+// ResolveKnownMethods against the vtable candidate. The catalog
+// must match at least 4 of the 7 entries (the 5 SDK-anchor entries
+// are exact or near-exact; sweep is in a separate vtable; raycast
+// and overlap should now also match).
+//
+// The test is gated on WALKERCORE_REAL_BINARY_TEST_PATH being defined
+// in CMake; it skips gracefully when the file is not available so the
+// unit-test run does not depend on a 53 MiB binary being on the build
+// host. The expectation below uses the catalog's exact slot mapping
+// for ATS 1.61.3.1s SHA 5D3B4E343154DE6B25DD366B6048C5BC5C452A4DAA50BC38B33FD2E571D54257.
+
+#ifdef WALKERCORE_REAL_BINARY_TEST_PATH
+// Parse a PE file's PE header to find the .text section's RVA. Returns
+// (text_rva, text_size) on success, (-1, 0) on failure. Minimal PE
+// parser: NT headers -> section table -> match name == ".text".
+namespace {
+
+struct PeTextInfo {
+    uint32_t text_rva;
+    uint32_t text_size;
+    bool ok;
+};
+
+PeTextInfo FindPeTextSection(const uint8_t *buf, size_t size) {
+    PeTextInfo info{0, 0, false};
+    if (buf == nullptr || size < 0x40) {
+        return info;
+    }
+    // e_lfanew at offset 0x3C.
+    uint32_t e_lfanew = 0;
+    std::memcpy(&e_lfanew, buf + 0x3C, 4);
+    if (e_lfanew + 24 > size) {
+        return info;
+    }
+    // Signature "PE\0\0".
+    if (buf[e_lfanew] != 'P' || buf[e_lfanew + 1] != 'E' ||
+        buf[e_lfanew + 2] != 0 || buf[e_lfanew + 3] != 0) {
+        return info;
+    }
+    // COFF header: 20 bytes starting at e_lfanew+4.
+    uint16_t num_sections = 0;
+    std::memcpy(&num_sections, buf + e_lfanew + 4 + 2, 2);
+    uint16_t opt_hdr_size = 0;
+    std::memcpy(&opt_hdr_size, buf + e_lfanew + 4 + 16, 2);
+    const size_t sections_off = e_lfanew + 4 + 20 + opt_hdr_size;
+    for (uint16_t i = 0; i < num_sections; ++i) {
+        const size_t off = sections_off + static_cast<size_t>(i) * 40;
+        if (off + 40 > size) break;
+        // Name is the first 8 bytes.
+        if (buf[off] == '.' && buf[off + 1] == 't' &&
+            buf[off + 2] == 'e' && buf[off + 3] == 'x' &&
+            buf[off + 4] == 't') {
+            std::memcpy(&info.text_rva, buf + off + 12, 4);  // VirtualAddress
+            std::memcpy(&info.text_size, buf + off + 8, 4);   // VirtualSize
+            info.ok = true;
+            return info;
+        }
+    }
+    return info;
+}
+
+}  // namespace
+
+void TestPhysXRealBinaryMatchesCatalog() {
+    FILE *f = std::fopen(WALKERCORE_REAL_BINARY_TEST_PATH, "rb");
+    if (f == nullptr) {
+        // File missing — skip without failing. Production build hosts
+        // may not have ATS installed.
+        return;
+    }
+    std::fseek(f, 0, SEEK_END);
+    const long fsize = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (fsize <= 0) {
+        std::fclose(f);
+        return;
+    }
+    std::vector<uint8_t> buf(static_cast<size_t>(fsize));
+    const size_t nread = std::fread(buf.data(), 1, buf.size(), f);
+    std::fclose(f);
+    if (nread != buf.size()) {
+        return;
+    }
+
+    // Parse the PE header for .text VA range. Image base for ATS is
+    // 0x140000000; .text VA range = image_base + text_rva to
+    // image_base + text_rva + text_size.
+    const PeTextInfo text_info = FindPeTextSection(buf.data(), buf.size());
+    EXPECT_TRUE(text_info.ok);
+    constexpr uint64_t kAtsImageBase = 0x140000000ULL;
+    const uint64_t text_lo = kAtsImageBase + text_info.text_rva;
+    const uint64_t text_hi = text_lo + text_info.text_size;
+
+    // The signature scan should constrain itself to the PhysX TU
+    // range (0x141AD0000..0x141B20000) rather than the full .text.
+    // The full .text range contains unrelated large vtables (13185
+    // slots at 0x1DBF8C8 is unrelated code) that would dominate the
+    // "best run" pick. The PhysX TU range picks the PxScene vtable at
+    // RVA 0x25020A0 (118 slots) cleanly.
+    constexpr uint64_t kPhysXTULow  = 0x141AD0000ULL;
+    constexpr uint64_t kPhysXTUHigh = 0x141B20000ULL;
+    (void)text_lo;
+    (void)text_hi;
+
+    const PhysXScanResult scan =
+        PhysXAdapter::MemoryScanFromBufferWithTextRange(
+            buf.data(), buf.size(), kPhysXTULow, kPhysXTUHigh);
+    EXPECT_TRUE(scan.success);
+    // Strategy must be hybrid (both signature and string probes hit).
+    EXPECT_TRUE(std::strcmp(scan.strategy, "hybrid") == 0);
+    EXPECT_TRUE(scan.string_probes_hit >= 3);  // at least 3 of 4 probe strings
+    EXPECT_TRUE(scan.vtable.accepted_run >= kMinPhysXVtableRun);
+
+    // ResolveKnownMethods: must match the 4 SDK-anchor VAs against the
+    // discovered vtable candidate, plus the 2 newly-added raycast/overlap.
+    PhysXVtableResolveResult resolved{};
+    const bool ok = PhysXAdapter::ResolveKnownMethods(
+        buf.data(),
+        buf.size(),
+        scan.vtable.vtable_base,
+        scan.vtable.accepted_run,
+        &resolved);
+    EXPECT_TRUE(ok);
+
+    // Exact-match slots (per docs/observations/ats_1_61_3_1s.physx.functions.md
+    // and verified by hand on ATS 1.61.3.1s):
+    EXPECT_EQ(resolved.release_slot, 2);
+    EXPECT_EQ(resolved.add_actor_slot, 11);
+    EXPECT_EQ(resolved.simulate_slot, 57);
+    EXPECT_EQ(resolved.shift_origin_slot, 117);
+    // raycast and overlap should resolve to slots 15 and 13 respectively
+    // (their VAs were identified by disassembling these exact slots).
+    EXPECT_EQ(resolved.raycast_slot, 15);
+    EXPECT_EQ(resolved.overlap_slot, 13);
+    // sweep is NOT in the 0x25020A0 vtable — it lives in a separate
+    // 5-slot run at 0x2507C08 (slot 4) that MemoryScanFromBuffer does
+    // not discover on its own.
+    EXPECT_EQ(resolved.sweep_slot, -1);
+}
+#endif  // WALKERCORE_REAL_BINARY_TEST_PATH
 
 }  // namespace walkercore

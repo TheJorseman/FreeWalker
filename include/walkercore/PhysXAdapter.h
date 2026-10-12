@@ -225,8 +225,28 @@ constexpr int kPhysXProbeStringCount = 4;
 // Minimum accepted vtable run length (count of consecutive 8-byte code
 // pointers in .rdata). Below this threshold, the signature scan reports
 // no match — TMRealWalk uses the same threshold and reports "scene vtable
-// not found" below it.
-constexpr int kMinPhysXVtableRun = 200;
+// not found" below it. The earlier value of 200 was based on outdated
+// docs that claimed the PxScene vtable on ATS 1.61.3.1s had 436
+// entries; the actual vtable @ RVA 0x25020A0 is 118 slots in the
+// 0x141AD0000..0x141B20000 PhysX TU range. 100 covers all real
+// vtables (118 > 100) while excluding random pointer runs (most have
+// < 100 contiguous PhysX-TU pointers).
+constexpr int kMinPhysXVtableRun = 100;
+
+// Maximum absolute byte distance between a vtable slot's pointer and a
+// catalog VA for ResolveKnownMethods to consider them the same method.
+// The catalog VAs were located by LEA-walking back from each method's
+// `PxScene::<method>(...)` assertion string, which can land a few bytes
+// AFTER the actual function entry (e.g., on a non-prologue instruction
+// or after an int3 padding boundary). The largest drift observed on
+// ATS 1.61.3.1s is 8 bytes (shiftOrigin: catalog VA 0x141AE6C28, slot
+// VA 0x141AE6C20 = -8). A tolerance of 8 bytes covers all observed
+// drifts. Larger tolerances risk false-positive matches against
+// neighbouring slots whose pointers drift in the opposite direction
+// (e.g., with tolerance=16, catalog overlap 0x141AE0F70 would
+// tolerance-match slot 12 at VA 0x141AE0F80 (delta +16) before
+// reaching slot 13 at VA 0x141AE0F70 (delta 0)).
+constexpr uint64_t kPhysXResolveSlotTolerance = 8;
 
 // Verbatim copy of every probe string the adapter looks for. C++17
 // inline constexpr gives every translation unit the same array without
@@ -235,10 +255,22 @@ constexpr int kMinPhysXVtableRun = 200;
 // anonymous-namespace constants. Order is stable; the SDK string
 // index matches this array index.
 inline constexpr const char *const kPhysXProbeStrings[kPhysXProbeStringCount] = {
-    "PxScene::release(): Scene is still being simulated",
+    // Verbatim copy of every PxScene assertion string the M3 scan
+    // looks for in amtrucks.exe. The strings are taken from the
+    // ATS 1.61.3.1s binary (SHA 5D3B4E343154DE6B25DD366B6048C5BC5
+    // C452A4DAA50BC38B33FD2E571D54257), not the open-source PhysX
+    // 3.4 SDK headers — the SDK has "PxScene::addActor() not
+    // allowed" but ATS uses "PxScene::addActor(): actor is in a
+    // pruning structure and cannot be added to a scene directly,
+    // use addActors(const PxPruningStructure& )" instead. Using the
+    // SDK strings verbatim would fail to match the live binary.
+    // When the SDK re-syncs the message, update this list alongside
+    // the VersionTable entry so future ATS patches don't break the
+    // string-probe strategy.
+    "PxScene::release(): Scene is still being simulated!",
     "PxScene::shiftOrigin() not allowed",
-    "PxScene::addActor() not allowed",
-    "PxScene::removeActor() not allowed",
+    "PxScene::addActor(): actor is in a pruning structure",
+    "PxScene::removeActor(): Actor",
 };
 
 class PhysXAdapter : public IWorldGeometry {
@@ -283,6 +315,19 @@ public:
     // which ones succeeded.
     static PhysXScanResult MemoryScanFromBuffer(const uint8_t *bytes,
                                                 size_t size);
+
+    // Same as MemoryScanFromBuffer but with explicit .text VA range.
+    // When the buffer is the on-disk amtrucks.exe (not a synthetic
+    // .rdata slice), the caller passes the .text section's [low, high]
+    // VA range so the signature scan only accepts pointers that
+    // actually live in .text — otherwise any non-zero 8-byte value
+    // qualifies and the scanner would mis-locate the vtable in some
+    // unrelated data structure. The real-binary integration test
+    // uses this overload after parsing the PE headers.
+    static PhysXScanResult MemoryScanFromBufferWithTextRange(const uint8_t *bytes,
+                                                              size_t size,
+                                                              uint64_t text_lo,
+                                                              uint64_t text_hi);
 
     // Dump the first `max_entries` 8-byte values from the vtable the
     // signature scan identifies. The output is the function pointer

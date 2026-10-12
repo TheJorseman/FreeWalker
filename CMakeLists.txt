@@ -191,6 +191,23 @@ endif()
 
 option(WALKERCORE_BUILD_TESTS "Build WalkerCore unit tests" OFF)
 
+# Real-binary integration test: when the path to amtrucks.exe is
+# supplied via -DWALKERCORE_REAL_BINARY_TEST_PATH="..." (or the
+# WALKERCORE_REAL_BINARY_TEST_PATH env var), the test build adds
+# TestPhysXRealBinaryMatchesCatalog to the unit test runner. The
+# test reads amtrucks.exe from disk, runs MemoryScanFromBuffer +
+# ResolveKnownMethods against its bytes, and asserts that the
+# catalog VAs (release/2, addActor/11, simulate/57, shiftOrigin/117,
+# raycast/15, overlap/13) all match. When the path is not supplied,
+# the test is gated out and the rest of the unit-test suite is
+# unaffected. The default path targets the REA workspace, which
+# contains the unmodified ATS 1.61.3.1s binary.
+if (NOT DEFINED WALKERCORE_REAL_BINARY_TEST_PATH
+        AND EXISTS "C:/Users/migue/OneDrive/Documentos/GitHub/rea/American Truck Simulator/bin/win_x64/amtrucks.exe")
+    set(WALKERCORE_REAL_BINARY_TEST_PATH
+        "C:/Users/migue/OneDrive/Documentos/GitHub/rea/American Truck Simulator/bin/win_x64/amtrucks.exe")
+endif()
+
 if (WALKERCORE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

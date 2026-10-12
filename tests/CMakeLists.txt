@@ -117,6 +117,19 @@ else()
         WALKERCORE_TEST_NO_PER_FRAME_TICK=1)
 endif()
 
+# Real-binary integration test: when WALKERCORE_REAL_BINARY_TEST_PATH
+# is set (typically by the root CMakeLists.txt auto-detect), gate in
+# the TestPhysXRealBinaryMatchesCatalog test that reads amtrucks.exe
+# from disk and runs the catalog through it. Both WalkerCoreTestLib
+# and WalkerCoreTests need the define; the test code is in
+# test_physx_adapter.cpp and the registration is in test_main.cpp.
+if (DEFINED WALKERCORE_REAL_BINARY_TEST_PATH)
+    target_compile_definitions(WalkerCoreTestLib PRIVATE
+        WALKERCORE_REAL_BINARY_TEST_PATH="${WALKERCORE_REAL_BINARY_TEST_PATH}")
+    target_compile_definitions(WalkerCoreTests PRIVATE
+        WALKERCORE_REAL_BINARY_TEST_PATH="${WALKERCORE_REAL_BINARY_TEST_PATH}")
+endif()
+
 # Register with CTest. Each RUN_TEST macro is a sub-check; we register the
 # binary itself so CTest returns nonzero on failure.
 add_test(NAME WalkerCoreTests COMMAND WalkerCoreTests)

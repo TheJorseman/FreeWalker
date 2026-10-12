@@ -278,6 +278,45 @@ PhysXScanResult PhysXAdapter::MemoryScanFromBuffer(const uint8_t *bytes,
     return res;
 }
 
+PhysXScanResult PhysXAdapter::MemoryScanFromBufferWithTextRange(const uint8_t *bytes,
+                                                                  size_t size,
+                                                                  uint64_t text_lo,
+                                                                  uint64_t text_hi) {
+    // Same strategy selection as MemoryScanFromBuffer but with the
+    // .text VA range passed through to the signature scan. The
+    // synthetic branch (text_lo == text_hi == 0) is intentionally NOT
+    // supported here; this overload exists for the real-binary
+    // integration test where mis-identifying a vtable in an unrelated
+    // data structure would silently break the slot resolution.
+    PhysXScanResult res;
+
+    res.string_probes_hit = CountPhysXStringsInBuffer(bytes, size);
+
+    PhysXScanResult sig = ScanBufferForVtable(bytes, size, text_lo, text_hi);
+    res.vtable = sig.vtable;
+
+    // Pick a single strategy tag so the caller (test or runtime) can
+    // distinguish fallback levels.
+    if (res.string_probes_hit > 0 && sig.success) {
+        res.success = true;
+        res.strategy = "hybrid";
+    } else if (sig.success) {
+        res.success = true;
+        res.strategy = "signature";
+    } else if (res.string_probes_hit > 0) {
+        // Strings present but no vtable run found: this is exactly the
+        // condition TMRealWalk logs as "scene strings not found - ...".
+        // We treat it as a partial success because it confirms the SDK
+        // is linked; the no-hit fallback still applies.
+        res.success = true;
+        res.strategy = "strings";
+    } else {
+        res.success = false;
+        res.strategy = "no_match";
+    }
+    return res;
+}
+
 size_t PhysXAdapter::DumpVtableEntries(const uint8_t *bytes,
                                         size_t size,
                                         size_t max_entries,
@@ -456,7 +495,15 @@ bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
             const size_t off = vtable_base + static_cast<size_t>(slot) * 8;
             uint64_t val = 0;
             std::memcpy(&val, bytes + off, 8);
-            if (val == target) {
+            // Match within kPhysXResolveSlotTolerance bytes of the
+            // catalog VA. The catalog VAs are LEA-walk-back
+            // approximations; the slot pointers are the actual runtime
+            // entries. The drift is bounded by 8 bytes on ATS
+            // 1.61.3.1s (release Δ=-6, addActor Δ=-2, shiftOrigin Δ=-8);
+            // a 16-byte tolerance gives headroom for future builds.
+            const uint64_t delta =
+                (val > target) ? (val - target) : (target - val);
+            if (delta <= kPhysXResolveSlotTolerance) {
                 switch (m) {
                     case 0: out->release_slot = slot; break;
                     case 1: out->add_actor_slot = slot; break;

@@ -210,6 +210,7 @@ void TestPhysXStrategyTagIsCanonical();
 void TestPhysXDumpVtableEntriesReportsFirstNVtableRun();
 void TestPhysXDumpVtableEntriesNoMatchReturnsZero();
 void TestPhysXDumpVtableEntriesRejectsNullBuffer();
+void TestPhysXDumpVtableEntriesAnnotatedLabelsCatalogMatches();
 void TestPhysXResolveKnownMethodsFindsReleaseAtSlotZero();
 void TestPhysXResolveKnownMethodsAllFiveSlotsInOrder();
 void TestPhysXResolveKnownMethodsNoMatchReturnsFalse();
@@ -717,6 +718,7 @@ int main() {
     RUN_TEST(walkercore::TestPhysXDumpVtableEntriesReportsFirstNVtableRun);
     RUN_TEST(walkercore::TestPhysXDumpVtableEntriesNoMatchReturnsZero);
     RUN_TEST(walkercore::TestPhysXDumpVtableEntriesRejectsNullBuffer);
+    RUN_TEST(walkercore::TestPhysXDumpVtableEntriesAnnotatedLabelsCatalogMatches);
     RUN_TEST(walkercore::TestPhysXResolveKnownMethodsFindsReleaseAtSlotZero);
     RUN_TEST(walkercore::TestPhysXResolveKnownMethodsAllFiveSlotsInOrder);
     RUN_TEST(walkercore::TestPhysXResolveKnownMethodsNoMatchReturnsFalse);

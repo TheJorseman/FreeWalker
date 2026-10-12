@@ -327,6 +327,65 @@ size_t PhysXAdapter::DumpVtableEntries(const uint8_t *bytes,
     return written;
 }
 
+size_t PhysXAdapter::DumpVtableEntriesAnnotated(const uint8_t *bytes,
+                                                 size_t size,
+                                                 size_t max_entries,
+                                                 char *out,
+                                                 size_t out_size) {
+    if (out == nullptr || out_size == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    if (bytes == nullptr || size == 0 || max_entries == 0) {
+        return 0;
+    }
+    PhysXScanResult sig = ScanBufferForVtable(bytes, size, 0, 0);
+    if (!sig.success) {
+        return 0;
+    }
+    const size_t vtable_off = sig.vtable.vtable_base;
+    const size_t vtable_run =
+        (sig.vtable.accepted_run > 0)
+            ? static_cast<size_t>(sig.vtable.accepted_run)
+            : 0;
+    const size_t to_dump = (max_entries < vtable_run) ? max_entries : vtable_run;
+    const size_t vtable_end = vtable_off + to_dump * 8;
+    if (vtable_end > size) {
+        return 0;
+    }
+    // Per-entry max size: "0x" + 16 hex digits + " [name]" where
+    // name is up to 12 chars (PxScene::shiftOrigin is the longest
+    // at 16 chars but the longest catalog name is "shiftOrigin" at
+    // 11 chars) + " | " separator. We size the snprintf buffer
+    // generously.
+    size_t written = 0;
+    for (size_t i = 0; i < to_dump; ++i) {
+        uint64_t val = 0;
+        std::memcpy(&val, bytes + vtable_off + i * 8, 8);
+        const char *matched = nullptr;
+        for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
+            if (kPhysXKnownMethods[m].va == val) {
+                matched = kPhysXKnownMethods[m].name;
+                break;
+            }
+        }
+        const int n = std::snprintf(
+            out + written,
+            (out_size > written) ? out_size - written : 0,
+            "%s0x%016llX%s%s%s",
+            (i == 0 ? "" : " | "),
+            static_cast<unsigned long long>(val),
+            matched ? " [" : "",
+            matched ? matched  : "",
+            matched ? "]"       : "");
+        if (n <= 0 || static_cast<size_t>(n) >= out_size - written) {
+            break;
+        }
+        written += static_cast<size_t>(n);
+    }
+    return written;
+}
+
 // The runtime catalog of known PxScene method VAs. VA = image base +
 // RVA; image base is 0x140000000 for ATS 1.61.3.1s. VAs sourced from
 // scripts/physx-vta-scan/README.md § "Hallazgos confirmados" (each

@@ -225,6 +225,54 @@ void TestPhysXDumpVtableEntriesRejectsNullBuffer() {
     EXPECT_EQ(n, 0u);
 }
 
+// DumpVtableEntriesAnnotated: when the vtable contains catalog VAs at
+// known slot indices, the annotated dump must label those slots with
+// the catalog name. This is the diagnostic the maintainer reads when
+// verifying the catalog against the live binary — without the
+// annotations, they would have to compare 8-byte VAs by hand against
+// the catalog. With annotations, the matched slots are immediately
+// visible.
+
+void TestPhysXDumpVtableEntriesAnnotatedLabelsCatalogMatches() {
+    // Build a vtable >= kMinPhysXVtableRun so the signature scan
+    // accepts it. Embed the catalog's first 3 VAs at the start of
+    // the run; the rest are synthetic non-catalog values. The
+    // synthetic scan accepts any non-zero 8-byte value, so a
+    // contiguous run of any non-zero pointers is enough.
+    constexpr int kRun = kMinPhysXVtableRun + 8;
+    std::vector<uint8_t> buf(kRun * 8, 0);
+    // Place the catalog's first 3 VAs at slots 0, 3, 5.
+    const uint64_t v0 = walkercore::kPhysXKnownMethods[0].va;
+    const uint64_t v1 = walkercore::kPhysXKnownMethods[1].va;
+    const uint64_t v2 = walkercore::kPhysXKnownMethods[2].va;
+    std::memcpy(buf.data() + 0 * 8, &v0, 8);
+    std::memcpy(buf.data() + 3 * 8, &v1, 8);
+    std::memcpy(buf.data() + 5 * 8, &v2, 8);
+    // Fill the remaining slots with synthetic non-catalog values so
+    // the run stays >= kMinPhysXVtableRun.
+    for (int i = 0; i < kRun; ++i) {
+        if (i == 0 || i == 3 || i == 5) continue;
+        const uint64_t v = static_cast<uint64_t>(0x1ull << 33) | static_cast<uint64_t>(i + 100);
+        std::memcpy(buf.data() + i * 8, &v, 8);
+    }
+    char out[2048] = {0};
+    const size_t n = PhysXAdapter::DumpVtableEntriesAnnotated(
+        buf.data(), buf.size(), 8, out, sizeof(out));
+    EXPECT_TRUE(n > 0);
+    // The output should contain the catalog name for kPhysXKnownMethods[0]
+    // (release) somewhere — at minimum "[release]" must appear.
+    EXPECT_TRUE(std::strstr(out, "[release]") != nullptr);
+    EXPECT_TRUE(std::strstr(out, "[addActor]") != nullptr);
+    EXPECT_TRUE(std::strstr(out, "[simulate]") != nullptr);
+    // The annotated function should produce exactly 3 brackets (one
+    // per matched catalog row).
+    int bracket_count = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (out[i] == '[') bracket_count += 1;
+    }
+    EXPECT_EQ(bracket_count, 3);
+}
+
 // ResolveKnownMethods: synthesises a vtable whose entry at slot 0 is
 // equal to kPhysXKnownMethods[0].va (release). The matcher must
 // resolve slot 0 for release and skip the others (whose VAs are not

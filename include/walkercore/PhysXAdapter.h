@@ -292,6 +292,26 @@ public:
                                     char *out,
                                     size_t out_size);
 
+    // Dump the first `max_entries` 8-byte values from the vtable the
+    // signature scan identifies, with catalog-match annotations.
+    // Each entry is rendered as either `0x<VA> [name]` (when the
+    // entry's VA matches a row in `kPhysXKnownMethods`) or just
+    // `0x<VA>`. Entries are separated by " | ". This is the
+    // "maintainer-friendly" form of `DumpVtableEntries`: when
+    // reading the dump, the matched slots are immediately
+    // identified without needing to compare against the catalog by
+    // hand.
+    //
+    // Same buffer-size constraints as `DumpVtableEntries` apply;
+    // the per-entry size grows to ~32 bytes when a name is
+    // present, so a 512-byte buffer holds ~16 entries with full
+    // annotations.
+    static size_t DumpVtableEntriesAnnotated(const uint8_t *bytes,
+                                             size_t size,
+                                             size_t max_entries,
+                                             char *out,
+                                             size_t out_size);
+
     // Resolve the candidate vtable at vtable_base by matching each
     // entry's 8-byte pointer against the catalog of known PxScene
     // function VAs (kPhysXKnownMethods). When a catalog row's VA

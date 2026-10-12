@@ -84,6 +84,23 @@ constexpr VersionEntry kEntries[] = {
         {{}, {}, {}, {}},
         0,
     },
+    {
+        // Steam build of ATS 1.61.3.1 reports SCS SDK API version
+        // (major=1, minor=7) instead of the (1, 13..1, 16) range the
+        // CD/standalone editions use. The game's display name still
+        // says "1.61.3.1s" — see game.log.txt evidence in the M1
+        // rollout notes. Without this entry, the build hit
+        // "game build not in version table" and most subsystems
+        // refused to activate (the user observed F-1/F-10 do nothing
+        // in-game). Offsets stay zero until M3/M7 verify them on a
+        // Steam install.
+        "ats",
+        kVersion(1, 7),
+        kVersion(1, 7),
+        "ATS 1.61.3.1s (Steam)",
+        {{}, {}, {}, {}},
+        0,
+    },
 };
 
 constexpr const VersionEntry *kCatchAllEntry = nullptr;

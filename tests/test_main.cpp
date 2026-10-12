@@ -164,6 +164,16 @@ void TestGameIdentityMajorMinorHighBits();
 void TestFeatureNameReturnsNameForEveryValue();
 void TestFeatureBitsAreUniquePowersOfTwo();
 void TestFeatureProbeTableHasExpectedCount();
+void TestAtS1_61_3_1sLookupMatchesSteamBuild();
+void TestVersionTableUnknownBuildReturnsCatchAll();
+void TestVersionTableEveryDocumentedBuildResolves();
+
+// Settings INI Save/Load regression — guards the dump_state_vk /
+// zoom_mouse_button / flashlight_toggle_mouse_button round-trip
+// that previously caused "F12 dumps nothing" reports.
+void TestIniDumpStateVkRoundTrip();
+void TestIniSaveEmitsDumpStateVkAndMouseButtons();
+void TestIniMissingKeysDefaultIsPreserved();
 
 // ABI contract: LoadLibrary + GetProcAddress for the 14 documented
 // public exports of libWalkerCore.dll. See tests/test_abi_contract.cpp.
@@ -318,6 +328,7 @@ void TestD3D12HookDestructorOnFreshInstanceIsSafe();
 void TestD3D12HookDestructorAfterUninstallIsSafe();
 void TestD3D11AndD3D12GenerationCountersAreIndependent();
 void TestD3D12HookInstallStateSurvivesSecondUninstall();
+void TestD3D11AndD3D12ShareProcessWideMinHook();
 
 // Time.h contract probes — NowMicros monotonicity / defensive
 // fallback / realistic delta, plus DeltaSeconds positive / zero /
@@ -370,6 +381,14 @@ int main() {
     RUN_TEST(walkercore::TestIniRoundtrip);
     RUN_TEST(walkercore::TestIniHeadTrackerSectionParsed);
     RUN_TEST(walkercore::TestIniHeadTrackerUnknownKeyIgnored);
+
+    // Regression guard for the dump_state_vk / mouse-button round-trip —
+    // the user observed "F12 only gives me a screenshot" because the
+    // dump key collided with the in-game screenshot binding and the
+    // INI never exposed a way to override it.
+    RUN_TEST(walkercore::TestIniDumpStateVkRoundTrip);
+    RUN_TEST(walkercore::TestIniSaveEmitsDumpStateVkAndMouseButtons);
+    RUN_TEST(walkercore::TestIniMissingKeysDefaultIsPreserved);
 
     // SettingsStore::ApplyAll() push contract — every leaf field must
     // reach its bound consumer.
@@ -582,6 +601,13 @@ int main() {
     RUN_TEST(walkercore::TestFeatureBitsAreUniquePowersOfTwo);
     RUN_TEST(walkercore::TestFeatureProbeTableHasExpectedCount);
 
+    // VersionTable build-coverage probes — pin that every documented
+    // game build (incl. the Steam-shipped ATS 1.61.3.1s the user
+    // reported) resolves to a VersionEntry with the right label.
+    RUN_TEST(walkercore::TestAtS1_61_3_1sLookupMatchesSteamBuild);
+    RUN_TEST(walkercore::TestVersionTableUnknownBuildReturnsCatchAll);
+    RUN_TEST(walkercore::TestVersionTableEveryDocumentedBuildResolves);
+
     // ABI contract: the 14 public symbols are loadable + callable.
     RUN_TEST(walkercore::TestAbiContractDllLoads);
 
@@ -777,6 +803,7 @@ int main() {
     RUN_TEST(walkercore::TestD3D12HookDestructorAfterUninstallIsSafe);
     RUN_TEST(walkercore::TestD3D11AndD3D12GenerationCountersAreIndependent);
     RUN_TEST(walkercore::TestD3D12HookInstallStateSurvivesSecondUninstall);
+    RUN_TEST(walkercore::TestD3D11AndD3D12ShareProcessWideMinHook);
 
     // Time.h contract probes — the per-frame conductor and the
     // settings store both rely on NowMicros() being a real

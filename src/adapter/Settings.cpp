@@ -291,6 +291,12 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                 loaded.keys.eye_down_vk = iv;
             else if (lkey == "eye_reset_vk" && TryParseInt(value, &iv))
                 loaded.keys.eye_reset_vk = iv;
+            else if (lkey == "dump_state_vk" && TryParseInt(value, &iv))
+                loaded.keys.dump_state_vk = iv;
+            else if (lkey == "zoom_mouse_button" && TryParseInt(value, &iv))
+                loaded.keys.zoom_mouse_button = iv;
+            else if (lkey == "flashlight_toggle_mouse_button" && TryParseInt(value, &iv))
+                loaded.keys.flashlight_toggle_mouse_button = iv;
             else
                 unknown_count++;
         } else if (section == "head_tracker") {
@@ -389,6 +395,15 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "eye_up_vk = " << current_.keys.eye_up_vk << "    # 'E' = 69\n";
     f << "eye_down_vk = " << current_.keys.eye_down_vk << "    # 'Q' = 81\n";
     f << "eye_reset_vk = " << current_.keys.eye_reset_vk << "    # 'R' = 82\n";
+    // dump_state_vk: defaults to VK_F12 (123). NOTE — ATS / ETS2 own
+    // F12 as the in-game screenshot key (the game captures via its
+    // own WndProc, not Windows Game Bar). If you want a dump key that
+    // does NOT collide, set this to VK_F11 (122), VK_INSERT (45), or
+    // VK_NUMLOCK (144). The dump output is written to game.log.txt
+    // anyway, so prefer a non-screenshot key here.
+    f << "dump_state_vk = " << current_.keys.dump_state_vk << "    # VK_F12 = 123 (collides with ATS in-game screenshot)\n";
+    f << "zoom_mouse_button = " << current_.keys.zoom_mouse_button << "    # 0 = VK_LBUTTON\n";
+    f << "flashlight_toggle_mouse_button = " << current_.keys.flashlight_toggle_mouse_button << "    # 1 = VK_RBUTTON\n";
     f << "\n";
     f << "[head_tracker]\n";
     f << "# Source enable flags. All default to off to avoid double-counting\n";

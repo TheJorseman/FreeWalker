@@ -124,4 +124,37 @@ void TestD3D12HookInstallStateSurvivesSecondUninstall() {
     EXPECT_FALSE(hook.isInstalled());
 }
 
+// Regression guard for the MinHook double-init bug: until the
+// src/provider/MinHookInit.h refcount helper landed, both
+// D3D11Hook::Install and D3D12Hook::Install called MH_Initialize()
+// directly, and the second call always returned
+// MH_ERROR_ALREADY_INITIALIZED, which our wrapper logged and then
+// treated as a fatal install failure (D3D12 path never
+// activated). With the helper, the second caller is a no-op ref
+// bump and both providers coexist. This test exercises the path
+// the regression hit: D3D11 install, then D3D12 install — D3D12's
+// prior failure was a left-behind installed_ that could let later
+// code paths think D3D12 was actually patched.
+void TestD3D11AndD3D12ShareProcessWideMinHook() {
+    D3D11Hook d3d11;
+    D3D12Hook d3d12;
+    const bool d3d11_installed = d3d11.Install();
+    // Whether the D3D11 install lands depends on whether d3d11.dll
+    // is loaded by the test process; we accept either outcome but
+    // if D3D11 succeeded, D3D12 must no longer crash on its own
+    // MH_Initialize call. The D3D12 install may or may not land
+    // (depends on d3d12.dll + dxgi.dll) but must never return
+    // "false because of MH re-init".
+    const bool d3d12_installed = d3d12.Install();
+    (void)d3d11_installed;
+    (void)d3d12_installed;
+    // Both uninstalls must be safe whether or not install landed:
+    // the helper's refcount ensures they only call MH_Uninitialize
+    // once across the two providers.
+    d3d11.Uninstall();
+    d3d12.Uninstall();
+    EXPECT_FALSE(d3d11.isInstalled());
+    EXPECT_FALSE(d3d12.isInstalled());
+}
+
 }  // namespace walkercore

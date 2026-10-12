@@ -34,6 +34,8 @@
 #include "MinHook.h"
 #endif
 
+#include "MinHookInit.h"
+
 namespace walkercore {
 
 // g_swap_chain_gen is always defined so CurrentSwapChainGeneration() works
@@ -316,15 +318,17 @@ bool D3D11Hook::Install() {
         return false;
     }
 #if defined(WALKERCORE_HAVE_MINHOOK)
-    if (MH_Initialize() != MH_OK) {
-        WALKERCORE_LOG_ERROR("D3D11Hook::Install: MH_Initialize failed");
+    if (!walkercore::MinHookInit()) {
+        WALKERCORE_LOG_ERROR("D3D11Hook::Install: MinHookInit failed");
         return false;
     }
     HMODULE d3d11 = GetModuleHandleW(L"d3d11.dll");
     if (d3d11 == nullptr) {
         // Game might not have loaded d3d11 yet. Defer. Re-trying is
-        // idempotent because installed_ stays false.
-        MH_Uninitialize();
+        // idempotent because installed_ stays false. Release the
+        // MinHook ref the call above took — the per-provider
+        // bail-out contract is "leave no global state perturbed".
+        walkercore::MinHookShutdown();
         WALKERCORE_LOG_WARN(
             "D3D11Hook::Install: d3d11.dll not loaded yet — retry later");
         return false;
@@ -332,7 +336,7 @@ bool D3D11Hook::Install() {
     void *create_addr = reinterpret_cast<void *>(
         GetProcAddress(d3d11, "D3D11CreateDeviceAndSwapChain"));
     if (create_addr == nullptr) {
-        MH_Uninitialize();
+        walkercore::MinHookShutdown();
         WALKERCORE_LOG_ERROR(
             "D3D11Hook::Install: GetProcAddress(D3D11CreateDeviceAndSwapChain) failed");
         return false;
@@ -341,13 +345,13 @@ bool D3D11Hook::Install() {
                       reinterpret_cast<void *>(&HookedCreateDeviceAndSwapChain),
                       reinterpret_cast<void **>(&g_original_d3d11_create)) !=
         MH_OK) {
-        MH_Uninitialize();
+        walkercore::MinHookShutdown();
         WALKERCORE_LOG_ERROR(
             "D3D11Hook::Install: MH_CreateHook(D3D11CreateDeviceAndSwapChain) failed");
         return false;
     }
     if (MH_EnableHook(create_addr) != MH_OK) {
-        MH_Uninitialize();
+        walkercore::MinHookShutdown();
         WALKERCORE_LOG_ERROR(
             "D3D11Hook::Install: MH_EnableHook(D3D11CreateDeviceAndSwapChain) failed");
         return false;
@@ -372,10 +376,21 @@ void D3D11Hook::Uninstall() {
     }
 #if defined(WALKERCORE_HAVE_MINHOOK)
     if (g_present_hooked) {
-        MH_DisableHook(MH_ALL_HOOKS);
+        // Only disable OUR hooks (D3D11 lander). The D3D12 lander
+        // shares this MinHook instance via the refcount helper; if it
+        // is still installed we MUST NOT call MH_DisableHook(MH_ALL_HOOKS)
+        // because that would tear out the D3D12 swap-chain vtable
+        // patch as well, blanking the screen in D3D12 games.
+        // MH_DisableHook on the specific function pointer we hooked
+        // is the safe path.
+        MH_DisableHook(reinterpret_cast<void *>(&HookedCreateDeviceAndSwapChain));
+        MH_DisableHook(reinterpret_cast<void *>(&HookedPresent));
+        if (g_resize_buffers_hooked) {
+            MH_DisableHook(reinterpret_cast<void *>(&HookedResizeBuffers));
+        }
         g_present_hooked = false;
     }
-    MH_Uninitialize();
+    walkercore::MinHookShutdown();
     // Release ONLY the context reference we obtained from
     // GetImmediateContext. The device and swap chain were returned to
     // the game and the game owns them — releasing here would corrupt

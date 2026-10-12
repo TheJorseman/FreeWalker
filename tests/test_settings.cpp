@@ -10,8 +10,59 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <sstream>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace walkercore {
+
+namespace {
+
+// Build a unique temp path for an INI file. We avoid %TEMP% so the
+// per-test files don't fight over the system temp dir on parallel
+// test runners; we keep them next to the test exe in a temp subfolder.
+std::string MakeTempIniPath(const char *tag) {
+#if defined(_WIN32)
+    char base[MAX_PATH] = {0};
+    if (GetTempFileNameA(".", "wc_", 0, base) != 0) {
+        // base now contains a unique temp file name; reuse it but
+        // delete the zero-byte file we just got.
+        DeleteFileA(base);
+    } else {
+        // Fallback — derive from PID + tag.
+        std::snprintf(base, sizeof(base), "wc_%s_%lu.ini", tag,
+                      static_cast<unsigned long>(GetCurrentProcessId()));
+    }
+    std::string out = base;
+    // Replace the .tmp extension that GetTempFileNameA gave us with .ini
+    const auto dot = out.find_last_of('.');
+    if (dot != std::string::npos) out.replace(dot, std::string::npos, ".ini");
+    return out;
+#else
+    return std::string("wc_") + tag + ".ini";
+#endif
+}
+
+class FileWriter {
+public:
+    explicit FileWriter(const std::string &path) : f_(path) {}
+    template <typename T>
+    FileWriter &operator<<(const T &v) { f_ << v; return *this; }
+    FileWriter &operator<<(const char *v) { f_ << v; return *this; }
+private:
+    std::ofstream f_;
+};
+
+std::string ReadEntireFile(const std::string &path) {
+    std::ifstream f(path);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
+}  // namespace
 
 void TestIniParserBasic() {
     // Parser helpers.
@@ -350,6 +401,83 @@ void TestApplyAllPushesEveryFieldToEveryConsumer() {
     EXPECT_NEAR(ht.trackir_sensitivity_rad_per_unit, 11.2f, 1e-5f);
     EXPECT_NEAR(ht.opentrack_sensitivity_rad_per_unit,11.3f, 1e-5f);
     EXPECT_NEAR(ht.smoothing_factor,                11.4f, 1e-5f);
+}
+
+// -----------------------------------------------------------------------------
+// Regression guard for the dump_state_vk round-trip.
+//
+// Previously SaveToPath() did NOT write `dump_state_vk` (only up to
+// eye_reset_vk). That meant a user who edited the INI could not
+// rebind the dump key, and there was no way to free F12 from the
+// in-game ATS screenshot collision. The fix extends both
+// LoadFromPath() and SaveToPath() with three more [keys] entries:
+//   dump_state_vk
+//   zoom_mouse_button
+//   flashlight_toggle_mouse_button
+// This test pins the round-trip for all three.
+// -----------------------------------------------------------------------------
+void TestIniDumpStateVkRoundTrip() {
+    const int kDumpVk      = 0xD1;  // sentinel — not a default
+    const int kZoomBtn     = 0xD2;
+    const int kFlashlightBtn = 0xD3;
+
+    const std::string path = MakeTempIniPath("dump_state_vk");
+    std::remove(path.c_str());
+
+    SettingsStore store;
+    {
+        FileWriter w(path);
+        w << "[keys]\n";
+        w << "dump_state_vk = " << kDumpVk << "\n";
+        w << "zoom_mouse_button = " << kZoomBtn << "\n";
+        w << "flashlight_toggle_mouse_button = " << kFlashlightBtn << "\n";
+    }
+    EXPECT_TRUE(store.LoadFromPath(path));
+    EXPECT_EQ(store.current().keys.dump_state_vk,                  kDumpVk);
+    EXPECT_EQ(store.current().keys.zoom_mouse_button,              kZoomBtn);
+    EXPECT_EQ(store.current().keys.flashlight_toggle_mouse_button, kFlashlightBtn);
+
+    std::remove(path.c_str());
+}
+
+void TestIniSaveEmitsDumpStateVkAndMouseButtons() {
+    const std::string path = MakeTempIniPath("save_dump_state_vk");
+    std::remove(path.c_str());
+
+    SettingsStore store;
+    WalkerSettings s = WalkerSettings::Defaults();
+    s.keys.dump_state_vk                  = 0xE1;  // 225 decimal
+    s.keys.zoom_mouse_button              = 0xE2;  // 226
+    s.keys.flashlight_toggle_mouse_button = 0xE3;  // 227
+    store.SetCurrent(s);
+
+    EXPECT_TRUE(store.SaveToPath(path));
+    const std::string content = ReadEntireFile(path);
+
+    EXPECT_TRUE(content.find("dump_state_vk = 225") != std::string::npos);
+    EXPECT_TRUE(content.find("zoom_mouse_button = 226") != std::string::npos);
+    EXPECT_TRUE(content.find("flashlight_toggle_mouse_button = 227") != std::string::npos);
+
+    std::remove(path.c_str());
+}
+
+void TestIniMissingKeysDefaultIsPreserved() {
+    const std::string path = MakeTempIniPath("missing_keys_default");
+    std::remove(path.c_str());
+
+    SettingsStore store;
+    {
+        FileWriter w(path);
+        w << "[keys]\n";
+        w << "forward_vk = 87\n";
+    }
+    EXPECT_TRUE(store.LoadFromPath(path));
+    // Unmentioned fields must keep their declared defaults.
+    EXPECT_EQ(store.current().keys.dump_state_vk,                  123);  // VK_F12
+    EXPECT_EQ(store.current().keys.zoom_mouse_button,              0);
+    EXPECT_EQ(store.current().keys.flashlight_toggle_mouse_button, 1);
+
+    std::remove(path.c_str());
 }
 
 }  // namespace walkercore

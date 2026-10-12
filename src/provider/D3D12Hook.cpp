@@ -30,6 +30,8 @@
 #include "MinHook.h"
 #endif
 
+#include "MinHookInit.h"
+
 namespace walkercore {
 
 uint64_t g_d3d12_swap_chain_gen = 0;
@@ -110,6 +112,8 @@ IDXGISwapChain *g_swap_chain = nullptr;
 
 bool g_present_hooked = false;
 bool g_resize_buffers_hooked = false;
+bool g_d3d12_create_hooked = false;
+bool g_create_swap_chain_hooked = false;
 
 // Cached swap-chain aspect. Populated by HookedResizeBuffers (and
 // by HookedPresent's first call as a fallback). NaN sentinel
@@ -301,6 +305,7 @@ bool HookFactoryCreateSwapChain(IDXGIFactory *factory) {
         WALKERCORE_LOG_ERROR("D3D12Hook: MH_EnableHook on CreateSwapChain failed");
         return false;
     }
+    g_create_swap_chain_hooked = true;
     return true;
 }
 
@@ -354,8 +359,8 @@ bool D3D12Hook::Install() {
         return false;
     }
 #if defined(WALKERCORE_HAVE_MINHOOK)
-    if (MH_Initialize() != MH_OK) {
-        WALKERCORE_LOG_ERROR("D3D12Hook::Install: MH_Initialize failed");
+    if (!walkercore::MinHookInit()) {
+        WALKERCORE_LOG_ERROR("D3D12Hook::Install: MinHookInit failed");
         return false;
     }
 
@@ -363,8 +368,10 @@ bool D3D12Hook::Install() {
     HMODULE d3d12 = GetModuleHandleW(L"d3d12.dll");
     if (d3d12 == nullptr) {
         // Game may not have loaded d3d12 yet. Defer. Re-trying is
-        // idempotent because installed_ stays false.
-        MH_Uninitialize();
+        // idempotent because installed_ stays false. Release the
+        // MinHook ref we just took — the per-provider bail-out
+        // contract is "leave no global state perturbed".
+        walkercore::MinHookShutdown();
         WarnNoD3D12("Install");
         return false;
     }
@@ -383,6 +390,7 @@ bool D3D12Hook::Install() {
         } else {
             WALKERCORE_LOG_INFO(
                 "D3D12Hook::Install: hooked D3D12CreateDevice");
+            g_d3d12_create_hooked = true;
         }
     } else {
         WALKERCORE_LOG_WARN(
@@ -400,7 +408,7 @@ bool D3D12Hook::Install() {
     if (dxgi == nullptr) {
         WALKERCORE_LOG_ERROR(
             "D3D12Hook::Install: dxgi.dll not loadable");
-        MH_Uninitialize();
+        walkercore::MinHookShutdown();
         return false;
     }
     void *factory1_addr = reinterpret_cast<void *>(
@@ -408,7 +416,7 @@ bool D3D12Hook::Install() {
     if (factory1_addr == nullptr) {
         WALKERCORE_LOG_ERROR(
             "D3D12Hook::Install: GetProcAddress(CreateDXGIFactory1) failed");
-        MH_Uninitialize();
+        walkercore::MinHookShutdown();
         return false;
     }
     if (MH_CreateHook(factory1_addr,
@@ -416,13 +424,13 @@ bool D3D12Hook::Install() {
                       reinterpret_cast<void **>(&g_original_create_factory1)) != MH_OK) {
         WALKERCORE_LOG_ERROR(
             "D3D12Hook::Install: MH_CreateHook(CreateDXGIFactory1) failed");
-        MH_Uninitialize();
+        walkercore::MinHookShutdown();
         return false;
     }
     if (MH_EnableHook(factory1_addr) != MH_OK) {
         WALKERCORE_LOG_ERROR(
             "D3D12Hook::Install: MH_EnableHook(CreateDXGIFactory1) failed");
-        MH_Uninitialize();
+        walkercore::MinHookShutdown();
         return false;
     }
     WALKERCORE_LOG_INFO(
@@ -446,10 +454,22 @@ void D3D12Hook::Uninstall() {
     }
 #if defined(WALKERCORE_HAVE_MINHOOK)
     if (g_present_hooked) {
-        MH_DisableHook(MH_ALL_HOOKS);
+        // Only disable our hooks. D3D11Hook shares this MinHook
+        // instance via the refcount helper; calling
+        // MH_DisableHook(MH_ALL_HOOKS) here would also tear out the
+        // D3D11 lander in games that run the D3D11+render path.
+        MH_DisableHook(reinterpret_cast<void *>(&HookedCreateDXGIFactory1));
+        MH_DisableHook(reinterpret_cast<void *>(&HookedPresent));
+        MH_DisableHook(reinterpret_cast<void *>(&HookedResizeBuffers));
+        if (g_d3d12_create_hooked) {
+            MH_DisableHook(reinterpret_cast<void *>(&HookedD3D12CreateDevice));
+        }
+        if (g_create_swap_chain_hooked) {
+            MH_DisableHook(reinterpret_cast<void *>(&HookedCreateSwapChain));
+        }
         g_present_hooked = false;
     }
-    MH_Uninitialize();
+    walkercore::MinHookShutdown();
     g_device = nullptr;
     g_swap_chain = nullptr;
     g_original_d3d12_create = nullptr;

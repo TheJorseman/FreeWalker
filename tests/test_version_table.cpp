@@ -131,4 +131,71 @@ void TestFeatureProbeTableHasExpectedCount() {
     // TestFeatureNameReturnsNameForEveryValue.
 }
 
+// Steam build of ATS reports SCS SDK version (major=1, minor=7) but
+// the in-game version label is still "1.61.3.1s". Pin: that build
+// MUST resolve to a non-null VersionEntry so subscribers see
+// "ATS 1.61.3.1s (Steam)" and the M2/M4+ subsystems activate
+// instead of refusing to start. This is the regression guard for
+// the "user pressed F-1/F-10 and nothing happened" report on the
+// Steam install.
+
+void TestAtS1_61_3_1sLookupMatchesSteamBuild() {
+    const GameIdentity id = GameIdentity::FromFields("ats", 0x00010007u);
+    EXPECT_FALSE(id.is_ets2);
+    // 0x00010007 decodes to (major=1, minor=7) per the SDK encoding
+    // documented in walkercore/GameVersion.h.
+    EXPECT_EQ(static_cast<unsigned>(id.major), 1u);
+    EXPECT_EQ(static_cast<unsigned>(id.minor), 7u);
+    EXPECT_EQ(id.game_version, 0x00010007u);
+
+    const VersionEntry *entry = VersionTable::Lookup(id);
+    EXPECT_TRUE(entry != nullptr);
+    EXPECT_TRUE(strcmp(entry->game_id, "ats") == 0);
+    EXPECT_EQ(entry->version_min, entry->version_max);
+    // The label must mention the Steam suffix so the diagnostic dump
+    // is unambiguous about which build we matched. If a future build
+    // changes the suffix this guard catches the rename.
+    EXPECT_TRUE(strstr(entry->label, "Steam") != nullptr);
+    EXPECT_TRUE(strstr(entry->label, "1.61") != nullptr);
+}
+
+// Reverse-pin: a build we DO NOT recognise (here a fake game
+// "unknown" with version 0xdeadbeef) must still return the
+// configured catch-all (nullptr) so the diagnostic dump's
+// "no match" path stays exercised.
+
+void TestVersionTableUnknownBuildReturnsCatchAll() {
+    const GameIdentity id = GameIdentity::FromFields("ats", 0xDEADBEEFu);
+    const VersionEntry *entry = VersionTable::Lookup(id);
+    // nullptr is the documented catch-all contract.
+    EXPECT_TRUE(entry == nullptr);
+}
+
+// Sanity: every documented ATS build (1.61 / 1.61.2 / 1.61.3 /
+// 1.61.3.1 / 1.61.3.1s) and every ETS2 build still resolves to
+// the correct label. Adding a new entry would force this scan
+// to break (and produce a clear compile-time table here) so we
+// don't drift from the on-disk file.
+
+void TestVersionTableEveryDocumentedBuildResolves() {
+    struct Case { const char *id; uint32_t ver; const char *expected_substring; };
+    const Case kCases[] = {
+        {"eut2", 0x0001000Du, "ETS2 1.61.1.0"},
+        {"eut2", 0x0001000Eu, "ETS2 1.61.1.1"},
+        {"ats",  0x0001000Du, "ATS 1.61"},
+        {"ats",  0x0001000Eu, "ATS 1.61.2"},
+        {"ats",  0x0001000Fu, "ATS 1.61.3"},
+        {"ats",  0x00010010u, "ATS 1.61.3.1"},
+        {"ats",  0x00010007u, "ATS 1.61.3.1s"},
+    };
+    const size_t kCount = sizeof(kCases) / sizeof(kCases[0]);
+    for (size_t i = 0; i < kCount; ++i) {
+        const GameIdentity id = GameIdentity::FromFields(kCases[i].id, kCases[i].ver);
+        const VersionEntry *entry = VersionTable::Lookup(id);
+        EXPECT_TRUE(entry != nullptr);
+        if (entry == nullptr) continue;
+        EXPECT_TRUE(strstr(entry->label, kCases[i].expected_substring) != nullptr);
+    }
+}
+
 }  // namespace walkercore

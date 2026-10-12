@@ -180,6 +180,15 @@ void walker_dump_knockout(void);
 // has populated the mirror.
 void walker_dump_per_truck_door(void);
 
+// Diagnostics — focused dump of the M9 trailer-coupling state:
+// current step (Idle/ApproachToKingPin/LowerLandingGear/...),
+// progress through that step's animation, waypoint (truck-local)
+// the player has to reach, and the active radius. Use this when
+// investigating "why isn't the coupling advancing?" or "which step
+// is the player on?". Safe to call at any time; reports "(not
+// initialized)" when no CouplingProvider has been wired yet.
+void walker_dump_coupling(void);
+
 // M3 lander wire-up point. The real adapter calls this once when its
 // PxScene / public PhysX SDK link succeeds. Until then, the stub returns
 // "no hit" with one warning.

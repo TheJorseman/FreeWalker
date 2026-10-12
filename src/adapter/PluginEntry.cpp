@@ -776,6 +776,9 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   // sees M9 is not yet shipped. The M9 lander only has to swap the
   // implementation, not re-wire the per-frame conductor.
   g_coupling = new walkercore::CouplingProvider();
+  // Mirror to the diagnostic layer so walker_dump_coupling() reports
+  // the active step + progress + waypoint on F12.
+  walkercore::diagnostic_internal::SetCoupling(g_coupling);
 
   // M7: door animator. Tweens the driver's door swing angle when the
   // FSM transitions between Driving and Walking (door opens on exit,

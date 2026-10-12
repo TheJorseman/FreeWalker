@@ -34,6 +34,7 @@
 #include "walkercore/PhysXAdapter.h"
 #include "walkercore/PerTruckDoorTable.h"
 #include "walkercore/TruckDoorConfig.h"
+#include "walkercore/TrailerCoupling.h"
 #include "walkercore/PolishProviders.h"
 #include "walkercore/ScsTelemetryProvider.h"
 #include "walkercore/Settings.h"
@@ -82,6 +83,7 @@ const DoorAnimProvider *g_door_anim = nullptr;
 const HeadTrackerProvider *g_head_tracker = nullptr;
 const ShadowProvider *g_shadow = nullptr;
 const PhysXAdapter *g_physx = nullptr;
+const CouplingProvider *g_coupling = nullptr;
 // M5 per-truck door config mirror. The model_id and resolved
 // TruckDoorConfig are pushed from PluginEntry alongside the FSM
 // SetDoorConfig call. The mirror defaults to "(no config yet)" until
@@ -188,6 +190,7 @@ void SetDoorAnim(const DoorAnimProvider *d) { g_door_anim = d; }
 void SetHeadTracker(const HeadTrackerProvider *h) { g_head_tracker = h; }
 void SetShadow(const ShadowProvider *s) { g_shadow = s; }
 void SetPhysX(const PhysXAdapter *p) { g_physx = p; }
+void SetCoupling(const CouplingProvider *p) { g_coupling = p; }
 void SetPerTruckDoor(const char *model_id, size_t model_id_len,
                      const TruckDoorConfig *cfg) {
     g_per_truck_model_id[0] = '\0';
@@ -1103,4 +1106,33 @@ extern "C" __declspec(dllexport) void walker_dump_per_truck_door(void) {
                         static_cast<double>(g_per_truck_door.cabin_inside_distance_m));
 
     WALKERCORE_LOG_INFO("--- end per-truck door ---");
+}
+
+extern "C" __declspec(dllexport) void walker_dump_coupling(void) {
+    using namespace walkercore;
+
+    auto bool_str = [](bool b) -> const char * { return b ? "true" : "false"; };
+
+    WALKERCORE_LOG_INFO("--- WalkerCore coupling ---");
+    if (g_coupling == nullptr) {
+        WALKERCORE_LOG_INFO("coupling             : (not initialized)");
+        WALKERCORE_LOG_INFO("--- end coupling ---");
+        return;
+    }
+
+    const CouplingState st = g_coupling->state();
+    WALKERCORE_LOG_INFO("active              : %s",
+                        bool_str(g_coupling->isActive()));
+    WALKERCORE_LOG_INFO("step                : %s (%u)",
+                        CouplingStepName(st.step),
+                        static_cast<unsigned>(st.step));
+    WALKERCORE_LOG_INFO("progress            : %.3f",
+                        static_cast<double>(st.progress));
+    WALKERCORE_LOG_INFO(
+        "waypoint_local      : (%.2f, %.2f, %.2f)",
+        st.waypoint_local.x, st.waypoint_local.y, st.waypoint_local.z);
+    WALKERCORE_LOG_INFO("waypoint_radius_m   : %.2f",
+                        static_cast<double>(st.waypoint_radius_m));
+
+    WALKERCORE_LOG_INFO("--- end coupling ---");
 }

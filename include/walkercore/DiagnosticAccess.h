@@ -32,6 +32,7 @@ class HeadTrackerProvider;
 class ShadowProvider;
 class PhysXAdapter;
 struct TruckDoorConfig;
+class CouplingProvider;
 
 // Forward-declared so EncodeFsmLabel / FsmLabelNeedsReencode can take it
 // by value without forcing every consumer of DiagnosticAccess.h to pull
@@ -136,6 +137,11 @@ void SetPhysX(const PhysXAdapter *p);
 // caller; the diagnostic layer copies the string + the struct.
 void SetPerTruckDoor(const char *model_id, size_t model_id_len,
                      const TruckDoorConfig *cfg);
+
+// Wire the M9 trailer coupling provider so walker_dump_coupling()
+// can report the active step + progress + waypoint. Pass nullptr
+// when the provider is destroyed.
+void SetCoupling(const CouplingProvider *p);
 
 }  // namespace diagnostic_internal
 }  // namespace walkercore

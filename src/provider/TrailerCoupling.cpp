@@ -60,6 +60,19 @@ CouplingProvider::CouplingProvider() {
 
 CouplingProvider::~CouplingProvider() = default;
 
+const char *CouplingStepName(CouplingStep s) {
+    switch (s) {
+        case CouplingStep::Idle:               return "Idle";
+        case CouplingStep::ApproachToKingPin:  return "ApproachToKingPin";
+        case CouplingStep::LowerLandingGear:   return "LowerLandingGear";
+        case CouplingStep::ConnectAirLines:    return "ConnectAirLines";
+        case CouplingStep::RaiseLandingGear:   return "RaiseLandingGear";
+        case CouplingStep::Complete:           return "Complete";
+        case CouplingStep::LastStep:           return "LastStep";
+    }
+    return "Unknown";
+}
+
 void CouplingProvider::SetStepDuration(CouplingStep step, double seconds) {
     const unsigned idx = static_cast<unsigned>(step);
     if (idx < sizeof(step_durations_) / sizeof(step_durations_[0])) {

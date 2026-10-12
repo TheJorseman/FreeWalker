@@ -41,6 +41,13 @@ enum class CouplingStep : unsigned {
     LastStep,  // sentinel — array bound + iteration terminator
 };
 
+// Human-readable name for a CouplingStep. Returns ASCII literals
+// ("Idle", "ApproachToKingPin", ...). The exhaustive coverage is
+// guaranteed by -Wswitch-enum in the implementation; the diagnostic
+// dump uses this so analysts see the step name instead of the
+// numeric enum value.
+const char *CouplingStepName(CouplingStep s);
+
 struct CouplingState {
     CouplingStep step = CouplingStep::Idle;
     // 0..1 progress through the current step's animation.

@@ -198,6 +198,7 @@ void TestAbiContractDllLoads() {
         {"walker_dump_physx"},
         {"walker_dump_knockout"},
         {"walker_dump_per_truck_door"},
+        {"walker_dump_coupling"},
     };
     const size_t kCount = sizeof(kExports) / sizeof(kExports[0]);
 

@@ -18,6 +18,7 @@ add_library(WalkerCoreTestLib STATIC
     ${CMAKE_SOURCE_DIR}/src/domain/GameVersion.cpp
     ${CMAKE_SOURCE_DIR}/src/domain/VersionTable.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/D3D11Hook.cpp
+    ${CMAKE_SOURCE_DIR}/src/provider/D3D12Hook.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/FuelPump.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/InputHook.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/Knockout.cpp
@@ -79,6 +80,7 @@ add_executable(WalkerCoreTests
     test_movement_config_probes.cpp
     test_settings_check_file_changed.cpp
     test_d3d11_hook.cpp
+    test_d3d12_hook.cpp
     test_scstelemetry_provider.cpp
     test_time.cpp)
 

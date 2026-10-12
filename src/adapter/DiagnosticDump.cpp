@@ -20,6 +20,7 @@
 
 #include "walkercore/CameraState.h"
 #include "walkercore/D3D11Hook.h"
+#include "walkercore/D3D12Hook.h"
 #include "walkercore/DiagnosticAccess.h"
 #include "walkercore/FrameLoop.h"
 #include "walkercore/GameVersion.h"
@@ -71,6 +72,7 @@ const InputHook *g_input = nullptr;
 const FuelProvider *g_fuel = nullptr;
 const KnockoutProvider *g_knockout = nullptr;
 const D3D11Hook *g_d3d11_hook = nullptr;
+const D3D12Hook *g_d3d12_hook = nullptr;
 const FlashlightProvider *g_flashlight = nullptr;
 const DoorAnimProvider *g_door_anim = nullptr;
 const HeadTrackerProvider *g_head_tracker = nullptr;
@@ -167,6 +169,7 @@ void SetInput(const InputHook *i) { g_input = i; }
 void SetFuel(const FuelProvider *f) { g_fuel = f; }
 void SetKnockout(const KnockoutProvider *k) { g_knockout = k; }
 void SetD3D11(const D3D11Hook *d) { g_d3d11_hook = d; }
+void SetD3D12(const D3D12Hook *d) { g_d3d12_hook = d; }
 void SetFlashlight(const FlashlightProvider *f) { g_flashlight = f; }
 void SetDoorAnim(const DoorAnimProvider *d) { g_door_anim = d; }
 void SetHeadTracker(const HeadTrackerProvider *h) { g_head_tracker = h; }
@@ -341,6 +344,16 @@ extern "C" __declspec(dllexport) void walker_dump_state(void) {
                                 walkercore::CurrentSwapChainGeneration()));
     } else {
         WALKERCORE_LOG_INFO("d3d11 hook           : (not initialized)");
+    }
+
+    if (g_d3d12_hook != nullptr) {
+        WALKERCORE_LOG_INFO("d3d12 hook           : installed=%s "
+                            "swap_chain_gen=%llu",
+                            bool_str(g_d3d12_hook->isInstalled()),
+                            static_cast<unsigned long long>(
+                                walkercore::CurrentD3D12SwapChainGeneration()));
+    } else {
+        WALKERCORE_LOG_INFO("d3d12 hook           : (not initialized)");
     }
 
     if (g_flashlight != nullptr) {

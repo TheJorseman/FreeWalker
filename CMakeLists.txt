@@ -91,6 +91,7 @@ add_library(WalkerCore SHARED
     src/domain/GameVersion.cpp
     src/domain/VersionTable.cpp
     src/provider/D3D11Hook.cpp
+    src/provider/D3D12Hook.cpp
     src/provider/FuelPump.cpp
     src/provider/InputHook.cpp
     src/provider/Knockout.cpp

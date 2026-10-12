@@ -27,6 +27,7 @@
 #include "walkercore/BuildInfo.h"
 #include "walkercore/CameraState.h"
 #include "walkercore/D3D11Hook.h"
+#include "walkercore/D3D12Hook.h"
 #include "walkercore/DiagnosticAccess.h"
 #include "walkercore/FrameLoop.h"
 #include "walkercore/FuelPump.h"
@@ -105,8 +106,18 @@ walkercore::WalkerFsmState g_prev_encoded_fsm_state =
     walkercore::WalkerFsmState::Driving;
 
 // M2 lander: D3D11 Present hook. Installed at init time, drives every
-// frame via walker_per_frame_tick.
+// frame via walker_per_frame_tick. The D3D11 hook fires when the game
+// uses D3D11; ATS 1.61.x uses D3D12 (see g_d3d12_hook below), in which
+// case this hook's D3D11CreateDeviceAndSwapChain trampoline is never
+// called and g_d3d11_hook->Install() returns false.
 walkercore::D3D11Hook *g_d3d11_hook = nullptr;
+
+// M2 lander (D3D12 path): DXGI factory + Present hook for D3D12 games.
+// Installed in parallel with the D3D11 hook. Whichever path fires first
+// (the one matching the game's D3D runtime) becomes the per-frame
+// owner. Both hooks write to the same g_frame_loop, so there is no
+// double-tick risk: only one will successfully capture a swap chain.
+walkercore::D3D12Hook *g_d3d12_hook = nullptr;
 
 // M8: FuelProvider owns the local fill-rate math + station availability.
 // ScsTelemetryProvider gives us truck.fuel / truck.adblue amounts; we
@@ -705,12 +716,48 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
     g_d3d11_hook = nullptr;
   }
 
+  // M2 lander (D3D12 path): install the D3D12 + DXGI factory + Present
+  // hook. Whichever path matches the game's D3D runtime (D3D11 or
+  // D3D12) becomes the per-frame owner. ATS 1.61.x uses D3D12 — the
+  // D3D11 hook above will fail to install in that case, and this
+  // D3D12 hook will be the one that actually drives the per-frame
+  // tick. Both hook the same IDXGISwapChain::Present vtable slot, but
+  // their install paths are independent, so there is no double-tick
+  // risk: the game calls exactly one CreateDXGIFactory1 (or exactly
+  // one D3D11CreateDeviceAndSwapChain), only one chain captures a
+  // swap chain, and only that chain reaches the Present patch.
+  g_d3d12_hook = new walkercore::D3D12Hook();
+  g_d3d12_hook->BindFrameLoop(g_frame_loop);
+  if (g_d3d12_hook->Install()) {
+    WALKERCORE_LOG_INFO("M2 lander: D3D12 + DXGI factory hook active");
+    walkercore::diagnostic_internal::SetD3D12(g_d3d12_hook);
+  } else {
+    WALKERCORE_LOG_WARN(
+        "M2 lander: D3D12 hook install failed (d3d12.dll or dxgi.dll "
+        "not loaded yet?) — frame loop will not tick until game "
+        "creates its device");
+    delete g_d3d12_hook;
+    g_d3d12_hook = nullptr;
+  }
+
   return SCS_RESULT_ok;
 }
 
 extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
-  // M2: tear down the D3D11 hook first — it holds the MinHook state and
-  // references the captured device/swap chain.
+  // M2: tear down the D3D12 hook first — it holds the MinHook state
+  // for d3d12.dll + dxgi.dll and the captured D3D12 device. We
+  // uninstall D3D12 before D3D11 because both paths share the
+  // IDXGISwapChain::Present vtable patch in the abstract sense, but
+  // the static state lives in two different translation units; the
+  // first to be torn down must release its MH_ALL_HOOKS gate.
+  if (g_d3d12_hook != nullptr) {
+    walkercore::diagnostic_internal::SetD3D12(nullptr);
+    g_d3d12_hook->Uninstall();
+    delete g_d3d12_hook;
+    g_d3d12_hook = nullptr;
+  }
+
+  // M2: tear down the D3D11 hook next.
   if (g_d3d11_hook != nullptr) {
     walkercore::diagnostic_internal::SetD3D11(nullptr);
     g_d3d11_hook->Uninstall();

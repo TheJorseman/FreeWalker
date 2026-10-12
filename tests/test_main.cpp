@@ -307,6 +307,16 @@ void TestD3D11HookInstallUninstallRoundtrip();
 void TestD3D11HookSecondInstallReturnsFalse();
 void TestD3D11HookDestructorOnFreshInstanceIsSafe();
 void TestD3D11HookDestructorAfterUninstallIsSafe();
+void TestD3D12HookFreshInstanceIsNotInstalled();
+void TestD3D12HookFreshSwapChainGenerationIsZero();
+void TestD3D12HookBindFrameLoopNullIsSafe();
+void TestD3D12HookBindFrameLoopStoresPointer();
+void TestD3D12HookUninstallWithoutInstallIsSafe();
+void TestD3D12HookInstallUninstallRoundtrip();
+void TestD3D12HookSecondInstallReturnsFalse();
+void TestD3D12HookDestructorOnFreshInstanceIsSafe();
+void TestD3D12HookDestructorAfterUninstallIsSafe();
+void TestD3D11AndD3D12GenerationCountersAreIndependent();
 
 // Time.h contract probes — NowMicros monotonicity / defensive
 // fallback / realistic delta, plus DeltaSeconds positive / zero /
@@ -747,6 +757,24 @@ int main() {
     RUN_TEST(walkercore::TestD3D11HookSecondInstallReturnsFalse);
     RUN_TEST(walkercore::TestD3D11HookDestructorOnFreshInstanceIsSafe);
     RUN_TEST(walkercore::TestD3D11HookDestructorAfterUninstallIsSafe);
+
+    // D3D12Hook state-machine probes (M2 lander D3D12 path) — pin
+    // the same Install/Uninstall invariants as the D3D11 path, and
+    // pin that the two swap-chain generation counters are
+    // independent globals. The D3D12 chain (D3D12CreateDevice →
+    // CreateDXGIFactory1 → IDXGIFactory::CreateSwapChain vtable →
+    // IDXGISwapChain::Present vtable) is verified by integration
+    // against a real D3D12 process, not here.
+    RUN_TEST(walkercore::TestD3D12HookFreshInstanceIsNotInstalled);
+    RUN_TEST(walkercore::TestD3D12HookFreshSwapChainGenerationIsZero);
+    RUN_TEST(walkercore::TestD3D12HookBindFrameLoopNullIsSafe);
+    RUN_TEST(walkercore::TestD3D12HookBindFrameLoopStoresPointer);
+    RUN_TEST(walkercore::TestD3D12HookUninstallWithoutInstallIsSafe);
+    RUN_TEST(walkercore::TestD3D12HookInstallUninstallRoundtrip);
+    RUN_TEST(walkercore::TestD3D12HookSecondInstallReturnsFalse);
+    RUN_TEST(walkercore::TestD3D12HookDestructorOnFreshInstanceIsSafe);
+    RUN_TEST(walkercore::TestD3D12HookDestructorAfterUninstallIsSafe);
+    RUN_TEST(walkercore::TestD3D11AndD3D12GenerationCountersAreIndependent);
 
     // Time.h contract probes — the per-frame conductor and the
     // settings store both rely on NowMicros() being a real

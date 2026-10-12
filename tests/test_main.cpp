@@ -298,6 +298,15 @@ void TestScsTelemetryProviderFreshStateScalarFieldsAreZero();
 void TestScsTelemetryProviderStateIsStableAcrossConstAccess();
 void TestScsTelemetryProviderRegisterAllNullIsSafe();
 void TestScsTelemetryProviderUnregisterAllNullIsSafe();
+void TestD3D11HookFreshInstanceIsNotInstalled();
+void TestD3D11HookFreshSwapChainGenerationIsZero();
+void TestD3D11HookBindFrameLoopNullIsSafe();
+void TestD3D11HookBindFrameLoopStoresPointer();
+void TestD3D11HookUninstallWithoutInstallIsSafe();
+void TestD3D11HookInstallUninstallRoundtrip();
+void TestD3D11HookSecondInstallReturnsFalse();
+void TestD3D11HookDestructorOnFreshInstanceIsSafe();
+void TestD3D11HookDestructorAfterUninstallIsSafe();
 
 // Time.h contract probes — NowMicros monotonicity / defensive
 // fallback / realistic delta, plus DeltaSeconds positive / zero /
@@ -724,6 +733,20 @@ int main() {
     RUN_TEST(walkercore::TestScsTelemetryProviderStateIsStableAcrossConstAccess);
     RUN_TEST(walkercore::TestScsTelemetryProviderRegisterAllNullIsSafe);
     RUN_TEST(walkercore::TestScsTelemetryProviderUnregisterAllNullIsSafe);
+
+    // D3D11Hook state-machine probes (M2 lander) — pin the
+    // Install/Uninstall invariants, the null-safety contract, and the
+    // generation-counter reset point. The actual per-frame Present
+    // hook is verified by integration, not here.
+    RUN_TEST(walkercore::TestD3D11HookFreshInstanceIsNotInstalled);
+    RUN_TEST(walkercore::TestD3D11HookFreshSwapChainGenerationIsZero);
+    RUN_TEST(walkercore::TestD3D11HookBindFrameLoopNullIsSafe);
+    RUN_TEST(walkercore::TestD3D11HookBindFrameLoopStoresPointer);
+    RUN_TEST(walkercore::TestD3D11HookUninstallWithoutInstallIsSafe);
+    RUN_TEST(walkercore::TestD3D11HookInstallUninstallRoundtrip);
+    RUN_TEST(walkercore::TestD3D11HookSecondInstallReturnsFalse);
+    RUN_TEST(walkercore::TestD3D11HookDestructorOnFreshInstanceIsSafe);
+    RUN_TEST(walkercore::TestD3D11HookDestructorAfterUninstallIsSafe);
 
     // Time.h contract probes — the per-frame conductor and the
     // settings store both rely on NowMicros() being a real

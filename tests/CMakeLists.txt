@@ -78,6 +78,7 @@ add_executable(WalkerCoreTests
     test_frame_loop_perf.cpp
     test_movement_config_probes.cpp
     test_settings_check_file_changed.cpp
+    test_d3d11_hook.cpp
     test_scstelemetry_provider.cpp
     test_time.cpp)
 

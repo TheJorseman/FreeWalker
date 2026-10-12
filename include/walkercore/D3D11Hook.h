@@ -1,31 +1,41 @@
-// WalkerCore — D3D11 Present hook (M2).
+// WalkerCore — D3D11/DXGI Present hook (M2 lander).
 //
 // D3D11Hook captures the game's ID3D11Device and IDXGISwapChain and hooks
-// the swap chain's Present() so we can (1) read the back buffer and (2)
-// modify the renderer state before each present call.
+// the swap chain's Present() so we can run one FrameLoop tick per frame.
 //
-// This file is the **interface only**. The implementation in
-// src/provider/D3D11Hook.cpp is intentionally a stub for M2:
-//   - The actual hook requires MinHook (third_party/minhook) and is the
-//     riskiest part of the plugin (a bug here crashes the game on load).
-//   - Until we have a compiler we cannot smoke-test it.
-//   - The stub documents the algorithm so the M2 implementation lands in
-//     one well-defined pass when the toolchain is ready.
+// Implementation (src/provider/D3D11Hook.cpp) is real and ships with
+// WALKERCORE_HAVE_MINHOOK defined. The MinHook call is gated so builds
+// without the vendored library get a no-op stub instead of a build
+// failure (see Install() in D3D11Hook.cpp).
 //
-// Algorithm (target M2 implementation):
-//
+// Algorithm:
 //   1. Install on scs_telemetry_init.
 //   2. Use MinHook to patch D3D11CreateDeviceAndSwapChain in d3d11.dll
 //      so we see when the game creates its device/swap chain.
 //   3. In our wrapper, save the IDs and call the original.
 //   4. After IDXGISwapChain::Present is set up, patch the vtable entry
 //      for Present() with MinHook so we control the per-frame hook.
-//   5. On every Present: walk the FrameLoop once, push the camera, then
-//      call the original Present.
+//   5. On every Present: read the back-buffer aspect via GetDesc, walk
+//      the FrameLoop once, then call the original Present.
+//
+// Limit (real bug, see D3D12Hook for the D3D12 fix):
+//   This hook fires ONLY when the game creates its device via
+//   d3d11!D3D11CreateDeviceAndSwapChain. ATS 1.61.x uses D3D12, so the
+//   present path goes through d3d12!D3D12CreateDevice +
+//   IDXGIFactory::CreateSwapChain — the Present vtable patch in step 4
+//   still runs (it is on the DXGI swap chain, not the D3D runtime) but
+//   the device/swap-chain capture in step 3 misses the D3D12 creation
+//   path, and we never install the per-frame hook at all. The fix is
+//   the parallel D3D12Hook class that owns the d3d12!D3D12CreateDevice
+//   capture. WalkerCore instantiates both at scs_telemetry_init; the
+//   first one to win the race owns the per-frame tick.
 //
 // We respect TMRealWalk's observation that some games load a wrapper
-// dxgi.dll (MSI Afterburner, RTSS, etc.). Our hook scans for these
-// wrappers before patching to avoid double-hooking.
+// dxgi.dll (MSI Afterburner, RTSS, etc.). The hook itself goes through
+// d3d11.dll / d3d12.dll, so wrapper dxgi.dll does not affect the
+// patching — but a hooked dxgi.dll would intercept the swap chain
+// creation and could mask the Present vtable patch. We do not currently
+// scan for dxgi wrappers; if a future build needs that, add a probe here.
 
 #ifndef WALKERCORE_D3D11_HOOK_H
 #define WALKERCORE_D3D11_HOOK_H

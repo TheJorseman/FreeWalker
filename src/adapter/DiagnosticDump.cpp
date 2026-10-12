@@ -1255,6 +1255,17 @@ extern "C" __declspec(dllexport) void walker_dump_camera_hijack(void) {
     if (h->install_error()) {
         WALKERCORE_LOG_INFO("install_error       : %s", h->install_error_msg());
     }
+    WALKERCORE_LOG_INFO("v2 (lazy singleton walk + vtable[16]):");
+    WALKERCORE_LOG_INFO("vtable16_installed  : %s", bool_str(h->vtable16_installed()));
+    WALKERCORE_LOG_INFO("vtable16_calls      : %d", h->vtable16_calls());
+    WALKERCORE_LOG_INFO("singleton_global_va : 0x%llX",
+                        static_cast<unsigned long long>(h->singleton_global_va()));
+    WALKERCORE_LOG_INFO("cam_state_struct_va : 0x%llX",
+                        static_cast<unsigned long long>(h->cam_state_struct_va()));
+    WALKERCORE_LOG_INFO("vtable_base_va      : 0x%llX",
+                        static_cast<unsigned long long>(h->vtable_base_va()));
+    WALKERCORE_LOG_INFO("vtable16_va         : 0x%llX",
+                        static_cast<unsigned long long>(h->vtable16_va()));
     WALKERCORE_LOG_INFO("--- end camera hijack ---");
 }
 

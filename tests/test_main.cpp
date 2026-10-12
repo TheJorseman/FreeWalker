@@ -192,6 +192,12 @@ void TestCouplingStubWarnsExactlyOnce();
 void TestPolishStubWarnsExactlyOncePerName();
 void TestFuelPumpStubWarnsExactlyOnce();
 
+// M3 PxScene vtable memory-scan probes.
+void TestPhysXMemoryScanSyntheticVtable();
+void TestPhysXMemoryScanRejectsShortBuffer();
+void TestPhysXMemoryScanRejectsNullBuffer();
+void TestPhysXMemoryScanRejectsAllZeroBuffer();
+
 void TestLogCustomSinkReceivesAllLevels();
 void TestLogLevelReachesSink();
 void TestLogShutdownIdempotent();
@@ -641,6 +647,12 @@ int main() {
     RUN_TEST(walkercore::TestCouplingStubWarnsExactlyOnce);
     RUN_TEST(walkercore::TestPolishStubWarnsExactlyOncePerName);
     RUN_TEST(walkercore::TestFuelPumpStubWarnsExactlyOnce);
+
+    // M3 PxScene vtable memory-scan probes.
+    RUN_TEST(walkercore::TestPhysXMemoryScanSyntheticVtable);
+    RUN_TEST(walkercore::TestPhysXMemoryScanRejectsShortBuffer);
+    RUN_TEST(walkercore::TestPhysXMemoryScanRejectsNullBuffer);
+    RUN_TEST(walkercore::TestPhysXMemoryScanRejectsAllZeroBuffer);
 
     RUN_TEST(walkercore::TestLogCustomSinkReceivesAllLevels);
     RUN_TEST(walkercore::TestLogLevelReachesSink);

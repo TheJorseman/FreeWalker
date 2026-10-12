@@ -20,8 +20,10 @@
 #include "TestHarness.h"
 #include "TestStubReset.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdarg>
+#include <cstring>
 #include <string.h>
 
 #include "walkercore/FrameLoop.h"
@@ -108,6 +110,59 @@ void TestPhysXStubWarnsExactlyOnce() {
     walkercore_log_shutdown();
     EXPECT_EQ(after_first - before_first, 1);
     EXPECT_EQ(after_five - after_first, 0);
+}
+
+// -----------------------------------------------------------------------------
+// M3 PxScene vtable memory-scan (signature path).
+//
+// Builds a synthetic .rdata payload with 250 fake entries pointing at
+// increasing 8-byte values, then verifies the scan picks the start of
+// that block. Also verifies the scan refuses to flag a buffer that is
+// too short or has no qualifying run.
+// -----------------------------------------------------------------------------
+
+void TestPhysXMemoryScanSyntheticVtable() {
+    constexpr int kRun = 250;
+    uint8_t buf[kRun * 8 + 64];
+    std::memset(buf, 0, sizeof(buf));
+    // The 2-arg MemoryScanFromBuffer accepts any non-zero 8-byte value
+    // as a "code pointer" (synthetic branch with text_lo=0/text_hi=0),
+    // so we fill the run with values 0x100, 0x108, 0x110, ... which are
+    // all non-zero 8-byte aligned integers.
+    for (int i = 0; i < kRun; ++i) {
+        const uint64_t v = static_cast<uint64_t>(0x100 + i * 8);
+        std::memcpy(buf + 16 + i * 8, &v, 8);
+    }
+    const auto scan = PhysXAdapter::MemoryScanFromBuffer(buf, sizeof(buf));
+    EXPECT_TRUE(scan.success);
+    EXPECT_TRUE(scan.strategy != nullptr);
+    EXPECT_EQ(scan.vtable.accepted_run, kRun);
+    EXPECT_EQ(scan.vtable.vtable_base, static_cast<uint64_t>(16));
+    EXPECT_EQ(scan.vtable.raycast_slot, -1);
+    EXPECT_EQ(scan.vtable.overlap_slot, -1);
+    EXPECT_EQ(scan.vtable.sweep_slot, -1);
+}
+
+void TestPhysXMemoryScanRejectsShortBuffer() {
+    const uint8_t buf[8] = {0};
+    const auto scan = PhysXAdapter::MemoryScanFromBuffer(buf, sizeof(buf));
+    EXPECT_FALSE(scan.success);
+    EXPECT_EQ(scan.vtable.accepted_run, 0);
+}
+
+void TestPhysXMemoryScanRejectsNullBuffer() {
+    const auto scan = PhysXAdapter::MemoryScanFromBuffer(nullptr, 1024);
+    EXPECT_FALSE(scan.success);
+    EXPECT_EQ(scan.vtable.accepted_run, 0);
+}
+
+void TestPhysXMemoryScanRejectsAllZeroBuffer() {
+    constexpr int kRun = 300;
+    uint8_t buf[kRun * 8];
+    std::memset(buf, 0, sizeof(buf));
+    const auto scan = PhysXAdapter::MemoryScanFromBuffer(buf, sizeof(buf));
+    EXPECT_FALSE(scan.success);
+    EXPECT_EQ(scan.vtable.accepted_run, 0);
 }
 
 // -----------------------------------------------------------------------------

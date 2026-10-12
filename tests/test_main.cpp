@@ -230,6 +230,15 @@ void TestTruckDoorConfigFromStateAnchorsDoorToCabin();
 void TestTruckDoorConfigFromStateDriverSeatFromHeadPosition();
 void TestTruckDoorConfigFromStateOnlyCabinSetFallsBack();
 
+// M5 PerTruckDoorTable probes (door geometry per truck.model_id).
+void TestPerTruckDoorTableBuiltInFindsKnownRow();
+void TestPerTruckDoorTableBuiltInUnknownReturnsNull();
+void TestPerTruckDoorTableBuiltInHasMultipleAtsRows();
+void TestApplyOverrideNullIsNoOp();
+void TestApplyOverrideDoorPatchIsSentinelAware();
+void TestApplyOverrideCabinBoxPatch();
+void TestTruckDoorConfigAppliesOverride();
+
 void TestLogCustomSinkReceivesAllLevels();
 void TestLogLevelReachesSink();
 void TestLogShutdownIdempotent();
@@ -694,6 +703,15 @@ int main() {
     RUN_TEST(walkercore::TestPhysXSignatureRunRejectedBelowThreshold);
     RUN_TEST(walkercore::TestPhysXBothStrategiesHybrid);
     RUN_TEST(walkercore::TestPhysXStrategyTagIsCanonical);
+
+    // M5 PerTruckDoorTable probes — per model_id door geometry overrides.
+    RUN_TEST(walkercore::TestPerTruckDoorTableBuiltInFindsKnownRow);
+    RUN_TEST(walkercore::TestPerTruckDoorTableBuiltInUnknownReturnsNull);
+    RUN_TEST(walkercore::TestPerTruckDoorTableBuiltInHasMultipleAtsRows);
+    RUN_TEST(walkercore::TestApplyOverrideNullIsNoOp);
+    RUN_TEST(walkercore::TestApplyOverrideDoorPatchIsSentinelAware);
+    RUN_TEST(walkercore::TestApplyOverrideCabinBoxPatch);
+    RUN_TEST(walkercore::TestTruckDoorConfigAppliesOverride);
 
     // M9 SCS configuration event + CouplingProvider real-hook probes.
     RUN_TEST(walkercore::TestScsTelemetryProviderRegisterEventsNullIsSafe);

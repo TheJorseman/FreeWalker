@@ -26,6 +26,7 @@ add_library(WalkerCoreTestLib STATIC
     ${CMAKE_SOURCE_DIR}/src/provider/PhysXAdapter.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/PolishProviders.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/OpentrackReceiver.cpp
+    ${CMAKE_SOURCE_DIR}/src/provider/PerTruckDoorTable.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/ScsTelemetryProvider.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/TrailerCoupling.cpp
     ${CMAKE_SOURCE_DIR}/src/workflow/FrameLoop.cpp
@@ -89,7 +90,8 @@ add_executable(WalkerCoreTests
     test_truck_door_config_from_state.cpp
     test_time.cpp
     test_per_frame_thread.cpp
-    test_physx_adapter.cpp)
+    test_physx_adapter.cpp
+    test_per_truck_door_table.cpp)
 
 target_link_libraries(WalkerCoreTests PRIVATE WalkerCoreTestLib)
 if (WIN32)

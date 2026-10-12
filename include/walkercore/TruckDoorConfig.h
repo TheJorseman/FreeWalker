@@ -25,6 +25,7 @@
 
 #include <math.h>
 
+#include "walkercore/PerTruckDoorTable.h"
 #include "walkercore/TruckState.h"
 
 namespace walkercore {
@@ -110,14 +111,32 @@ inline TruckDoorConfig DefaultTruckDoorConfig() {
 // `config.valid` and treat `valid = false` as "fall back to
 // DefaultTruckDoorConfig()".
 //
-// This is a partial M5: a real lander would also have a
-// per-truck table that maps `truck.model_id` (e.g.
-// "vehicle.volvo.vnl_2016") to door geometry that better matches
-// the cabin shape (the SCS cabin_position is the cabin CENTRE,
-// but the door pivot is offset from the centre by a per-truck
-// amount). The real lander table is shipped in a separate data
-// file; this function is the integration point the table feeds.
+// Per-truck override (forward declaration is in the header — the
+// table is consulted whenever TruckState::model_id matches a row in
+// PerTruckDoorTable::BuiltIn()):
+//   - The door pivot offsets are replaced when the table row has
+//     non-zero door_outward_x/y/z values.
+//   - The cabin bounding box is replaced when the row has non-zero
+//     cabin_size_* values.
+//   - has_passenger_door and driver_seat_local keep using the
+//     Cabin-derived defaults; per-truck tweaks there are not
+//     currently part of the M5 contract.
+//
+// Two overloads:
+//   - `TruckDoorConfigFromTruckState(t)` uses the built-in
+//     PerTruckDoorTable singleton. Production callers (PluginEntry)
+//     hit this overload.
+//   - `TruckDoorConfigFromTruckState(t, table)` lets tests / future
+//     loaders inject a custom table.
+inline TruckDoorConfig TruckDoorConfigFromTruckState(
+    const TruckState &t,
+    const PerTruckDoorTable &table);
 inline TruckDoorConfig TruckDoorConfigFromTruckState(const TruckState &t) {
+    return TruckDoorConfigFromTruckState(t, PerTruckDoorTable::BuiltIn());
+}
+inline TruckDoorConfig TruckDoorConfigFromTruckState(
+    const TruckState &t,
+    const PerTruckDoorTable &table) {
     if (!t.has_cabin_position || !t.has_head_position) {
         // Configuration event has not fired (or this is a build
         // that does not publish these attributes). Return the
@@ -162,9 +181,8 @@ inline TruckDoorConfig TruckDoorConfigFromTruckState(const TruckState &t) {
     // Cabin bounding box: a 2.0 × 1.65 × 1.4 m box centred on
     // the cabin anchor. This is the same shape as the default
     // placeholder's box, just translated to the per-truck
-    // cabin anchor. The real lander's per-truck table would
-    // override this for trucks with non-rectangular cabins
-    // (e.g. cab-overs with a flat-front).
+    // cabin anchor. Per-truck overrides (cabovers, sleepers,
+    // etc.) come from PerTruckDoorTable below.
     c.cabin_min = Vec3{
         t.cabin_position.x - 1.10,
         t.cabin_position.y,
@@ -182,6 +200,17 @@ inline TruckDoorConfig TruckDoorConfigFromTruckState(const TruckState &t) {
     c.driver_seat_local = t.head_position;
 
     c.valid = true;
+
+    // Per-truck override. Only consulted when the configuration
+    // event delivered a non-empty `model_id`. The table itself
+    // can return a no-op override (model_id not in the table)
+    // — that branch is the same as "no override".
+    if (t.has_model_id && t.model_id[0] != '\0') {
+        const TruckDoorConfigOverride *ov = table.Find(t.model_id);
+        if (ov != nullptr) {
+            PerTruckDoorTable::ApplyOverride(c, ov, c);
+        }
+    }
     return c;
 }
 

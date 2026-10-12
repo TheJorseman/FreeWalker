@@ -100,6 +100,7 @@ add_library(WalkerCore SHARED
     src/provider/PolishProviders.cpp
     src/provider/OpentrackReceiver.cpp
     src/provider/ScsTelemetryProvider.cpp
+    src/provider/PerTruckDoorTable.cpp
     src/provider/TrailerCoupling.cpp
     src/workflow/FrameLoop.cpp
     src/workflow/SettingsMenu.cpp

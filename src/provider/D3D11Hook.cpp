@@ -1,0 +1,319 @@
+// WalkerCore — D3D11 hook implementation (M2 lander, real).
+//
+// Uses MinHook (vendored at third_party/minhook) to patch the d3d11.dll
+// entry D3D11CreateDeviceAndSwapChain. Our wrapper captures the
+// IDXGISwapChain that the game creates, then patches the swap chain's
+// Present() vtable entry so we run one FrameLoop tick per frame.
+//
+// ABI note: this file uses raw COM vtable types. The d3d11.h and dxgi.h
+// headers come with the Windows SDK; MinHook requires only <windows.h>.
+//
+// Lifetime: the device, swap chain and context returned by
+// D3D11CreateDeviceAndSwapChain are owned by the game (the caller holds
+// the reference that was AddRef'd by D3D11CreateDeviceAndSwapChain).
+// We only borrow them — no Release() at Uninstall — because the game
+// decides when to release. A generation counter (g_swap_chain_gen)
+// guards against the rare case where the game destroys and recreates
+// the swap chain between our capture and a Present() call.
+//
+// When WALKERCORE_HAVE_MINHOOK is not defined (MinHook not vendored),
+// the class becomes a no-op stub so the rest of the build still compiles.
+
+#include "walkercore/D3D11Hook.h"
+
+#include <windows.h>
+
+#include "walkercore/FrameLoop.h"
+#include "walkercore/Log.h"
+#include "walkercore/PerFrame.h"
+#include "walkercore/Time.h"
+
+#if defined(WALKERCORE_HAVE_MINHOOK)
+#include <d3d11.h>
+#include <dxgi.h>
+#include "MinHook.h"
+#endif
+
+namespace walkercore {
+
+// g_swap_chain_gen is always defined so CurrentSwapChainGeneration() works
+// in both DLL and test builds. The test build doesn't define
+// WALKERCORE_HAVE_MINHOOK so we can't reference it inside the gated
+// block. It's only ever incremented in the real-implementation branch.
+uint64_t g_swap_chain_gen = 0;
+
+#if defined(WALKERCORE_HAVE_MINHOOK)
+
+namespace {
+
+// Real signature (verified Microsoft Learn 2024-12):
+//   HRESULT WINAPI D3D11CreateDeviceAndSwapChain(
+//       IDXGIAdapter              *pAdapter,
+//       D3D_DRIVER_TYPE            DriverType,
+//       HMODULE                    Software,
+//       UINT                       Flags,
+//       const D3D_FEATURE_LEVEL   *pFeatureLevels,
+//       UINT                       FeatureLevels,
+//       UINT                       SDKVersion,
+//       const DXGI_SWAP_CHAIN_DESC *pSwapChainDesc,
+//       IDXGISwapChain           **ppSwapChain,
+//       ID3D11Device             **ppDevice,
+//       D3D_FEATURE_LEVEL         *pFeatureLevel,
+//       ID3D11DeviceContext      **ppImmediateContext);
+typedef HRESULT(WINAPI *CreateFn)(IDXGIAdapter *,
+                                  D3D_DRIVER_TYPE,
+                                  HMODULE,
+                                  UINT,
+                                  const D3D_FEATURE_LEVEL *, UINT, UINT,
+                                  const DXGI_SWAP_CHAIN_DESC *,
+                                  IDXGISwapChain **,
+                                  ID3D11Device **,
+                                  D3D_FEATURE_LEVEL *,
+                                  ID3D11DeviceContext **);
+
+// COM vtable typedef for IDXGISwapChain::Present. Method index 8 in the
+// IDXGISwapChain vtable.
+typedef HRESULT(STDMETHODCALLTYPE *PresentFn)(IDXGISwapChain *self,
+                                              UINT sync_interval,
+                                              UINT present_flags);
+
+// Original (unhooked) function pointers. Saved so we can chain.
+PresentFn g_original_present = nullptr;
+void *g_original_d3d11_create = nullptr;
+
+// Captured device/swap chain (borrowed, not owned). Single-instance —
+// WalkerCore assumes the game has exactly one D3D11 device and one
+// swap chain.
+ID3D11Device *g_device = nullptr;
+IDXGISwapChain *g_swap_chain = nullptr;
+ID3D11DeviceContext *g_context = nullptr;
+
+// TRUE once the Present vtable entry has been patched.
+bool g_present_hooked = false;
+
+HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain *self,
+                                        UINT sync_interval,
+                                        UINT present_flags) {
+    // Compute dt from the wall clock. On the very first call, dt = 0;
+    // subsequent calls measure the delta since the last Present.
+    static uint64_t last_us = 0;
+    const uint64_t now_us = NowMicros();
+    const double dt = (last_us == 0)
+                          ? 0.0
+                          : static_cast<double>(now_us - last_us) / 1e6;
+    last_us = now_us;
+
+    // Read the swap chain's back-buffer aspect from the *same* swap chain
+    // that is calling Present (not the cached g_swap_chain pointer, which
+    // can be stale if the game recreated it).
+    //
+    // We intentionally re-query every frame: caching by the swap-chain
+    // pointer alone misses the ResizeBuffers case, where the game calls
+    // IDXGISwapChain::ResizeBuffers to change the back-buffer size (and
+    // hence the aspect) while keeping the same vtable pointer. The
+    // FrameLoop's SetAspect() is now a no-op when the aspect is unchanged,
+    // so the per-frame walker_set_swapchain_aspect() call here is cheap
+    // in steady state (it just returns after the equality check), and
+    // the per-frame GetDesc() call is the one remaining price for
+    // correctness on window resize. A future commit could hook
+    // ResizeBuffers (vtable slot 14) to drop the per-frame GetDesc as
+    // well, at the cost of another MinHook integration.
+    DXGI_SWAP_CHAIN_DESC desc{};
+    if (self != nullptr && SUCCEEDED(self->GetDesc(&desc))) {
+        const float aspect =
+            (desc.BufferDesc.Height > 0)
+                ? static_cast<float>(desc.BufferDesc.Width) /
+                      static_cast<float>(desc.BufferDesc.Height)
+                : 16.0f / 9.0f;
+        walker_set_swapchain_aspect(aspect);
+    }
+
+    // Per-frame simulation tick.
+    walker_per_frame_tick(dt);
+
+    // Chain to the original. We deliberately do NOT modify any D3D state
+    // here yet — pushing view/projection constants into the game's shader
+    // pipeline is the M2 lander's next deliverable. The walker camera
+    // state is exposed via walker_camera() for the integration step.
+    if (g_original_present != nullptr) {
+        return g_original_present(self, sync_interval, present_flags);
+    }
+    return E_FAIL;
+}
+
+// Helper: hook the Present vtable slot on the captured swap chain.
+bool HookPresent(IDXGISwapChain *sc) {
+    if (sc == nullptr || g_present_hooked) return false;
+
+    // The COM vtable layout has Present at index 8 for IDXGISwapChain.
+    // We cast through LPVOID * and read the function pointer.
+    void **vtable = *reinterpret_cast<void ***>(sc);
+    void *present_slot = vtable[8];
+    if (MH_CreateHook(present_slot,
+                      reinterpret_cast<void *>(&HookedPresent),
+                      reinterpret_cast<void **>(&g_original_present)) != MH_OK) {
+        WALKERCORE_LOG_ERROR("D3D11Hook: MH_CreateHook on Present failed");
+        return false;
+    }
+    if (MH_EnableHook(present_slot) != MH_OK) {
+        WALKERCORE_LOG_ERROR("D3D11Hook: MH_EnableHook on Present failed");
+        return false;
+    }
+    g_present_hooked = true;
+    WALKERCORE_LOG_INFO("D3D11Hook: Present hooked");
+    return true;
+}
+
+// Our wrapper for D3D11CreateDeviceAndSwapChain. Calls the original; on
+// success, captures the device + swap chain and hooks Present. The
+// signature must match the real d3d11.dll export exactly, including
+// DriverType and Software between pAdapter and Flags — otherwise the
+// trampoline reads the arguments at the wrong stack positions and
+// dereferences an integer as a pointer.
+HRESULT WINAPI HookedCreateDeviceAndSwapChain(
+    IDXGIAdapter *p_adapter,
+    D3D_DRIVER_TYPE driver_type,
+    HMODULE software,
+    UINT flags,
+    const D3D_FEATURE_LEVEL *feature_levels, UINT feature_level_count,
+    UINT sdk_version,
+    const DXGI_SWAP_CHAIN_DESC *swap_chain_desc,
+    IDXGISwapChain **swap_chain,
+    ID3D11Device **device,
+    D3D_FEATURE_LEVEL *returned_feature_level,
+    ID3D11DeviceContext **immediate_context) {
+
+    auto original = reinterpret_cast<CreateFn>(g_original_d3d11_create);
+    const HRESULT hr = original(
+        p_adapter, driver_type, software, flags, feature_levels,
+        feature_level_count, sdk_version, swap_chain_desc, swap_chain, device,
+        returned_feature_level, immediate_context);
+    if (SUCCEEDED(hr)) {
+        if (swap_chain != nullptr && *swap_chain != nullptr) {
+            g_swap_chain = *swap_chain;
+        }
+        if (device != nullptr && *device != nullptr) {
+            g_device = *device;
+            // GetImmediateContext AddRef's the context. We must release
+            // our extra reference on uninstall, but not the device/swap
+            // chain (the game owns those).
+            if (g_context != nullptr) {
+                g_context->Release();
+                g_context = nullptr;
+            }
+            (*device)->GetImmediateContext(&g_context);
+        }
+        ++g_swap_chain_gen;
+        WALKERCORE_LOG_INFO(
+            "D3D11Hook: captured device %p swap chain %p (gen %llu)",
+            g_device, g_swap_chain,
+            static_cast<unsigned long long>(g_swap_chain_gen));
+        HookPresent(g_swap_chain);
+    }
+    return hr;
+}
+
+}  // namespace
+
+#endif  // WALKERCORE_HAVE_MINHOOK
+
+uint64_t CurrentSwapChainGeneration() {
+    return g_swap_chain_gen;
+}
+
+D3D11Hook::D3D11Hook() = default;
+
+D3D11Hook::~D3D11Hook() {
+    if (installed_) {
+        Uninstall();
+    }
+}
+
+void D3D11Hook::BindFrameLoop(FrameLoop *frame_loop) {
+    frame_loop_ = frame_loop;
+}
+
+bool D3D11Hook::Install() {
+    if (installed_) {
+        return false;
+    }
+#if defined(WALKERCORE_HAVE_MINHOOK)
+    if (MH_Initialize() != MH_OK) {
+        WALKERCORE_LOG_ERROR("D3D11Hook::Install: MH_Initialize failed");
+        return false;
+    }
+    HMODULE d3d11 = GetModuleHandleW(L"d3d11.dll");
+    if (d3d11 == nullptr) {
+        // Game might not have loaded d3d11 yet. Defer. Re-trying is
+        // idempotent because installed_ stays false.
+        MH_Uninitialize();
+        WALKERCORE_LOG_WARN(
+            "D3D11Hook::Install: d3d11.dll not loaded yet — retry later");
+        return false;
+    }
+    void *create_addr = reinterpret_cast<void *>(
+        GetProcAddress(d3d11, "D3D11CreateDeviceAndSwapChain"));
+    if (create_addr == nullptr) {
+        MH_Uninitialize();
+        WALKERCORE_LOG_ERROR(
+            "D3D11Hook::Install: GetProcAddress(D3D11CreateDeviceAndSwapChain) failed");
+        return false;
+    }
+    if (MH_CreateHook(create_addr,
+                      reinterpret_cast<void *>(&HookedCreateDeviceAndSwapChain),
+                      reinterpret_cast<void **>(&g_original_d3d11_create)) !=
+        MH_OK) {
+        MH_Uninitialize();
+        WALKERCORE_LOG_ERROR(
+            "D3D11Hook::Install: MH_CreateHook(D3D11CreateDeviceAndSwapChain) failed");
+        return false;
+    }
+    if (MH_EnableHook(create_addr) != MH_OK) {
+        MH_Uninitialize();
+        WALKERCORE_LOG_ERROR(
+            "D3D11Hook::Install: MH_EnableHook(D3D11CreateDeviceAndSwapChain) failed");
+        return false;
+    }
+    installed_ = true;
+    WALKERCORE_LOG_INFO(
+        "D3D11Hook::Install: hooked D3D11CreateDeviceAndSwapChain");
+    return true;
+#else
+    WALKERCORE_LOG_WARN(
+        "D3D11Hook::Install: stub — MinHook not vendored. "
+        "Run `git clone --depth=1 https://github.com/TsudaKageyu/minhook.git "
+        "third_party/minhook` and rebuild.");
+    installed_ = true;
+    return true;
+#endif
+}
+
+void D3D11Hook::Uninstall() {
+    if (!installed_) {
+        return;
+    }
+#if defined(WALKERCORE_HAVE_MINHOOK)
+    if (g_present_hooked) {
+        MH_DisableHook(MH_ALL_HOOKS);
+        g_present_hooked = false;
+    }
+    MH_Uninitialize();
+    // Release ONLY the context reference we obtained from
+    // GetImmediateContext. The device and swap chain were returned to
+    // the game and the game owns them — releasing here would corrupt
+    // the game's reference counts and could crash the renderer when
+    // the game later tries to use them.
+    if (g_context != nullptr) {
+        g_context->Release();
+        g_context = nullptr;
+    }
+    g_device = nullptr;
+    g_swap_chain = nullptr;
+    g_original_present = nullptr;
+    g_original_d3d11_create = nullptr;
+    WALKERCORE_LOG_INFO("D3D11Hook::Uninstall: hooks removed");
+#endif
+    installed_ = false;
+}
+
+}  // namespace walkercore

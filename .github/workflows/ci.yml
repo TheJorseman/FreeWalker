@@ -1,0 +1,89 @@
+# WalkerCore — continuous integration.
+#
+# Two jobs run on every push and PR:
+#   1. build-msvc      — windows-latest + MSVC + Ninja. Verifies the
+#                        Microsoft toolchain path stays green.
+#   2. build-mingw     — windows-latest + MSYS2 + MinGW-w64 + Ninja. This
+#                        matches the developer's primary toolchain
+#                        (MinGW 16.2.0, CMake 4.4.4) and validates the
+#                        full strict-warning flag surface.
+#
+# Both jobs build libWalkerCore.dll, build WalkerCoreTests.exe, and run
+# the unit tests. The CMake configure phase runs the architectural lint
+# (no SCS SDK headers in domain/application/workflow headers).
+
+name: CI
+
+"on":
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+# Cancel in-progress runs for the same branch when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------
+  # MSVC — the default Windows toolchain on github runners.
+  # ---------------------------------------------------------------------
+  build-msvc:
+    name: MSVC + Ninja
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (MSVC + Ninja)
+        shell: cmd
+        run: |
+          cmake -S . -B build-msvc -G "Ninja" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DWALKERCORE_BUILD_TESTS=ON
+
+      - name: Build
+        shell: cmd
+        run: cmake --build build-msvc --config Release
+
+      - name: Run unit tests
+        shell: cmd
+        run: build-msvc\tests\WalkerCoreTests.exe
+
+  # ---------------------------------------------------------------------
+  # MinGW-w64 — primary developer toolchain. Exercises the full strict
+  # warning flag surface (-Werror -Wfloat-conversion -Wsign-conversion
+  # -Wdouble-promotion -Wcast-align -Wshadow etc.) so CI catches the
+  # same regressions the developer sees locally.
+  # ---------------------------------------------------------------------
+  build-mingw:
+    name: MinGW-w64 + Ninja
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: >-
+            git
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-d3d11
+          update: true
+
+      - name: Configure (MinGW + Ninja)
+        run: |
+          cmake -S . -B build-mingw -G "Ninja" \
+            -DWALKERCORE_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build-mingw
+
+      - name: Run unit tests
+        run: build-mingw/tests/WalkerCoreTests.exe

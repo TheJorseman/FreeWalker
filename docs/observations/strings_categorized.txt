@@ -1,0 +1,246 @@
+﻿Total strings extracted: 28642
+Interesting (after filters): 972
+
+=== Truck/trailer: 257 strings ===
+  000c2c70  trailer
+  000c2c88  [trailer] kingpin at trailer-local (%.2f, %.2f, %.2f)
+  000c2ce8  [fuel] truck model '%s'
+  000c2d00  [trailer] fifth wheel at truck-local (%.2f, %.2f, %.2f)
+  000c2d38  cabin.position
+  000c2e28  Fifth wheel locked
+  000c2e50  Trailer coupled - all
+  000c2e68  Trailer uncoupled - all
+  000c2ef8  [trailer] the game's trailer object is there again
+  000c30f0  [trailer] the game's attach key could not be read from controls.sii: T is pressed
+  000c3150  [trailer] the game's attach key: 0x%02X (keyboard.%s in the game's controls)
+  000c31e0  [trailer] the game's Attach trailer control has no keyboard key (%s): the plugin cannot press it - add a keyboard key to
+
+=== Fuel: 103 strings ===
+  000c2cc8  fuel.capacity
+  000c2cd8  adblue.capacity
+  000c3de4  DIESEL
+  000c3e08  FUEL RECEIPT
+  000c3e18  [fuel] receipt printed: %s, %s
+  000c3e3c  ADBLUE
+  000c3e68  [fuel] receipt printed: diesel %s %s, %s %s %s, total %s
+  000c44b8  [fuel] nozzle put away (not walking)
+  000c4500  [fuel] pump probe: left side %s (%d still hits, %d moving, nearest %.2f m from the centre line), right side %s (%d still
+  000c45a4  AdBlue
+  000c4658  [F] %s nozzle (%.2f %s of %s)   [hold F] Receipt
+  000c4690  [F] %s nozzle   [hold F] Receipt   (%s %.0f of %.0f %s)
+
+=== Game lifecycle: 81 strings ===
+  000c30e4  attach
+  000c33d8   : exit
+  000c4858  ENTER PIN
+  000c4c00  %s %.1f of %.0f %s   [F] Stop
+  000c4d50  [F] Stop fuelling
+  000c4da8  the game did not start fuelling
+  000c5490  Tug test passed. Next - step 3/4: set the handbrake, get out and connect the air hoses at the front
+  000c56e0  Coupling step %d/%d: <color value=@@clr_txt@@>get out and connect the air hoses and cable at the front
+  000c57d0  Step %d/%d: connect the air hoses and cable, at the front
+  000c58c8  [F] %d/%d  Connect the air hoses and cable
+  000c5978  [F] 2/3  Detach the air hoses and cable
+  000c5b90  Coupling - step %d/%d: connect the air hoses and cable, at the front
+
+=== Player body: 67 strings ===
+  0000004d  !This program cannot be run in DOS mode.
+  000c3650  [input] the console/typing mode is reset for the new walk
+  000c3690  [license] the walk needs a valid licence or trial key: %ls
+  000c3a10  walk mode ended (%s)
+  000c3a80  walk mode ended (another camera was selected)
+  000c4190  [fuel] F10 ignored: the nozzle is still in hand
+  000c4338  [knock] the flashlight is knocked out of the hand
+  000c5f40  the camera did not switch in time; walk mode cancelled (if this always happens: check config.cfg has "uset g_developer \
+  000c60c8  [license] the licence is no longer valid: leaving walk mode
+  000c75f0  keys.crouch
+  000c7600  keys.jump
+  000c97d0  [camera] the free camera's speed was %g (left over from a walk): %g is put back after this walk
+
+=== Camera/render: 66 strings ===
+  000c34e8  [quit] Present hooks taken off
+  000c35a0  Present hook
+  000c3960  no seat camera to turn
+  000c3c58  plugin active again (the free camera was left)
+  000c3cc0  the game's free camera is on: the plugin is switched off until F10 is pressed
+  000c61b0  camera write failed
+  000c6208  no seat camera: shut at once
+  000c9088  [camera] could not find the camera manager creator
+  000c90c0  [camera] expected exactly one singleton store in the manager creator, found %d
+  000c9110  [camera] manager singleton pointer at exe+0x%llX (creator exe+0x%llX)
+  000c9158  [camera] census: no camera manager yet
+  000c9180  [camera] census: manager=%p field+0x10=%u field+0x14=%u slots=%llu
+
+=== UI/tab/menu: 59 strings ===
+  000c2d58  no window in front
+  000c2da8   (the plugin's menu)
+  000c2dc0   (a tool window of this game, e.g. another plugin)
+  000c2fa0  [input] Windows' staging window had the focus: %s
+  000c31a0  only a wheel, joystick or console button
+  000c3300  [quit] could not open the game log to watch for Quit (%lu): the hidden driver is put back when a menu has been open for 
+  000c33f8  back to the menu
+  000c35b0  overlay window
+  000c4068  fade overlay: Present hook %s
+  000c4088  fade overlay: overlay window (Present hook off)
+  000c42a8  the game window is not in front
+  000c4418  SHOW PROMPT
+
+=== Mouse/look/input: 50 strings ===
+  000c5e90  [hands] mouse cursor %s, game %s
+  000c7450  walker.look_smoothing
+  000ccb90  [mouse] first raw mouse packet received
+  000ccc88  [mouse] raw input registration failed (%lu)
+  000cccf0  [pad] DirectInput is not available: controller buttons cannot be used as keys
+  000cce28  [pad] controller: %s
+  000ccfe0  controller
+  000cd0a0  [pad] the game reads a controller's state (%lu bytes): its buttons can be held back
+  000cd0f8  the plugin's own controller read
+  000cd53f  ?[walker] smooth mouse look off: the game's look input cannot be read in this build, the game's own look is used
+  000cd610  [walker] smooth mouse look on (the game's look scale %.3f is paused)
+  000cd660  [walker] smooth mouse look off (the game's look scale %.3f is back)
+
+=== PhysX: 40 strings ===
+  000c7fe0  [physx] scene search read %llu MB of %llu MB committed (resident pages only) in %llu ms
+  000c8040  [physx] no .text section
+  000c80c0  [physx] scene strings not found - ground/collision unavailable
+  000c8100  [physx] scene functions not found - ground/collision unavailable
+  000c8148  [physx] scene vtable not found - ground/collision unavailable
+  000c8188  [physx] scene vtable = +0x%llX
+  000c81a8  [physx] scene candidates: %u
+  000c81c8  [physx] %s faulted: code=0x%08lX at exe+0x%llX
+  000c8200  [physx] too many faults - ground/collision disabled for this session
+  000c8250  [physx] %s faulted (a vehicle removed by the game?): code=0x%08lX at exe+0x%llX; %d more since the last line
+  000c82c0  [physx]       box half=(%.2f,%.2f,%.2f) local=(%.2f,%.2f,%.2f) localRot=(%.3f,%.3f,%.3f,%.3f)
+  000c8380  [physx]   body %d at (%.2f,%.2f,%.2f) size=(%.2f x %.2f x %.2f) bounds min=(%.2f,%.2f,%.2f) max=(%.2f,%.2f,%.2f) shapes=
+
+=== Flashlight: 38 strings ===
+  000c3560  flashlight %s
+  000c4370  flashlight beam size %d (outer angle %.0f)
+  000c7698  keys.flashlight
+  000c9620  [lights] the game's light distance settings were not found: with them at 0 the flashlight does not show
+  000c9690  [lights] %s was %s (no dynamic lights drawn): 0.5 while the flashlight is on
+  000c9b20  [lights] own light: the light_source class was not found; daytime flashlight unavailable
+  000c9cc0  [lights] own light %d: the game's destructor faulted; daytime flashlight turned off
+  000c9d40  [lights] own light: the constructor faulted; daytime flashlight turned off
+  000c9d90  [lights] own light: the new object is not a light_source; daytime flashlight turned off
+  000ca070  [lights] the game's light routines were not found in this build: flashlight unavailable
+  000ca0c8  [lights] no scene light array: flashlight unavailable
+  000ca128  [lights] flashlight uses %d light(s) of its own (%s)
+
+=== File extensions: 37 strings ===
+  000dc6c8  (game.log.txt not found in 
+  000dc750  info.txt
+  000dc770  game_log_excerpt.txt
+  001215e0  [d3d_hook] dxgi.dll is in the game folder but its module is not listed: treated as a wrapper
+  00143f6c  TMRealWalk.dll
+  00144b5c  d3d11.dll
+  00144b74  D3DCOMPILER_47.dll
+  00144ff6  USER32.dll
+  00145132  GDI32.dll
+  001451e8  WINMM.dll
+  00145216  SHELL32.dll
+  00145398  WINHTTP.dll
+
+=== Settings/config: 32 strings ===
+  000c3c40  TMRealWalk.ini reloaded
+  000c6a58  no INI found - using built-in defaults
+  000c7de8  INI: unknown key '%s' ignored
+  000c7e58  INI loaded: %d value(s) applied
+  000ce1c8  [sounds] the game's sound device setting: "%s"
+  000dc760  TMRealWalk.ini
+  00126420  no protocol option
+  0087c55a  INi<_$
+  000ce6f8  \config.cfg
+  000ce938  \tanks.ini
+  000ceb50  \adblue_ats.ini
+  000ceb70  \adblue_ets2.ini
+
+=== Sound: 32 strings ===
+  000cdff0  [sounds] the audio output could not be opened (%ls, error %u, %u output device(s) seen by Windows): the plugin's sounds 
+  000ce090  [sounds] the audio output opened after %d failed tries
+  000ce160  [sounds] the game's sound device "%s" was not matched to an output: Windows' default device is used
+  000ce660  [sounds] TMRealWalk_Door.WAV not found next to the plugin - no door/footstep sounds
+  000ce1f8  TMRealWalk_Door.WAV
+  000ce220  TMRealWalk_Footstep1.WAV
+  000ce258  TMRealWalk_Flashlight.WAV
+  000ce320  tmreceiptprint.WAV
+  000ce348  tmbeep.WAV
+  000ce360  tmtakenozle.WAV
+  000ce380  tmputnozle.WAV
+  000ce3a0  tmopencaptank.WAV
+
+=== Localization: 29 strings ===
+  000c2b90  bad locale name
+  000c7810  walker.language
+  000d7a68  language
+  001495f8  .?AVfacet@locale@std@@
+  00149a30  .?AV_Locimp@locale@std@@
+  000d7a78  Language
+  000dcd30  Bahasa ditukar. Simpan untuk kekalkan.
+  000dcd80  Language changed. Save to keep it.
+  000e8980  Bahasa diganti. Simpan untuk mempertahankannya.
+  000f64f0  English
+  000fb348  Bahasa Melayu
+  000fc568  Bahasa Indonesia
+
+=== Shadow: 27 strings ===
+  000c7388  shadow.strength
+  000c7398  shadow.softness
+  000c73a8  shadow.size
+  000c73b8  shadow.length
+  000c73c8  shadow.contact
+  000c73d8  shadow.feet_offset
+  000c73f0  shadow.min_length
+  000c7408  shadow.azimuth_offset
+  000c7420  shadow.truck_fade
+  000c7938  shadow.enabled
+  000c7948  shadow.azimuth_mirror
+  000d851c  shadow
+
+=== Head tracker: 24 strings ===
+  000c7990  walker.head_tracker
+  000cd320  [tracker] the game's head tracker table was not found (%llu ms, %llu of %llu MB read): the door animation cannot switch 
+  000cd430  [tracker] the game's head tracker dll is loaded: the walker's view follows it
+  000d5cc0  head_tracker
+  000d5bb0  Head tracker (TrackIR / opentrack) turns the view while walking|Head tracker (TrackIR / opentrack) memusing pandangan se
+  000fa54e   la porte (souris ou head tracker)
+  000fa60c  n/head tracker)
+  000fa746  /head tracker)
+  000fa970  /head tracker gerekir)
+  00101580  Head tracker (TrackIR / opentrack) turns the view while walking
+  00101600  Headtracker (TrackIR / opentrack) dreht die Sicht beim Gehen
+  00101680  Le head tracker (TrackIR / opentrack) tourne la vue en marchant
+
+=== Logging: 15 strings ===
+  000cf208  [license] the licence could not be saved (%s, error %lu): %s
+  000cf2f0  [license] the licence is saved again
+  000cf3d0  [license] a computer marker could not be written (%s, error %lu)
+  000cf498  [license] this computer's free trial: this key
+  000cf4d0  [license] another trial key was already used on this computer: refused
+  000cf670  [license] the licence server %s %s
+  000cf768  [license] %s%s
+  000cf780  [license] the licence cannot be saved: the key is only checked, this computer is not counted
+  000cf7e0  [license] this computer is counted for the key now (the first check of it here)
+  000cf898  [license] the server counts the key on %d computers: %s
+  000cf8d0  [license] the key is back within its computers: this computer works again
+  000cf940  [license] the check got no usable answer (%s); it will be tried again later
+
+=== SCS/game: 9 strings ===
+  000cab70  ETS2 1.61.1.0
+  000cab80  ETS2 1.61.1.1
+  000cab90  ATS 1.61
+  000caba0  ATS 1.61.2
+  000cabb0  ATS 1.61.3
+  000cabc0  ATS 1.61.3.1
+  000caca0  game build 0x%08X / 0x%X is NOT the analysed one (0x%08X / 0x%X): the far-ground estimate and the physics watch (ETS2 1.
+  000cbdf0  [resolve] dxgi_present not found by signature; the known address of this ATS build is used
+  000c2fd8  amtrucks
+
+=== Door/animation: 6 strings ===
+  000ce610  [sounds] door sound cut at %.2f s (slam at %.2f s) into opening and closing
+  000d9eb0  body_motion
+  000d5820  Door animation: turn to the door, blink, the steps (off = fade)|Animasi pintu: pandang pintu, kelip, tangga (tutup = fad
+  000d9d70  Body motion at each step: bend to the crank, lean in to the hoses, tug the pin|Gerakan badan setiap langkah: membongkok 
+  000ffd70  Door animation: turn to the door, blink, the steps (off = fade)
+  0011c980  Body motion at each step: bend to the crank, lean in to the hoses, tug the pin
+

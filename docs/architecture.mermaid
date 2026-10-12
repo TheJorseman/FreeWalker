@@ -1,0 +1,164 @@
+%% WalkerCore — architecture (Mermaid)
+%%
+%% Source-of-truth diagram for the four-layer dependency direction.
+%% Dependencies flow INWARD: adapter → workflow → provider → domain.
+%% The domain layer never sees an SDK header (lint-enforced).
+%%
+%% Regeneration: this file is authored by hand. Mermaid syntax only;
+%% no inline code. Rendered by GitHub in any markdown view.
+
+flowchart TB
+
+    %% =====================================================================
+    %% External callers — things outside the DLL that interact with it.
+    %% =====================================================================
+
+    subgraph External["External"]
+        Game["ETS2 / ATS<br/>(scs_telemetry_init, game.log.txt)"]
+        CDevOps["CI · Dev<br/>(F12 dump, minidump,<br/>scripts/ci_test.ps1)"]
+    end
+
+    %% =====================================================================
+    %% Adapter layer — C ABI entry points. Only this layer crosses the
+    %% DLL boundary with `extern "C"` __declspec(dllexport) symbols.
+    %% =====================================================================
+
+    subgraph Adapter["adapter/  (C ABI, no STL crossing DLL)"]
+        PluginEntry["PluginEntry<br/>DllMain · scs_telemetry_init · scs_telemetry_shutdown"]
+        Diag["DiagnosticDump<br/>walker_dump_state / settings / menu / fsm / input / version / shadow / flashlight / door / head_tracker"]
+        Log["Log<br/>game.log.txt · ringbuffer for F12"]
+    end
+
+    %% =====================================================================
+    %% Workflow layer — composers that wire providers + domain together.
+    %% =====================================================================
+
+    subgraph Workflow["workflow/"]
+        FrameLoop["FrameLoop<br/>PhaseSampleInput → ApplyMouseLook →<br/>IntegrateMovement → ResolveCollision →<br/>AnimatePlayer → AdoptPlayer → UpdateCamera"]
+        WalkerFsm["WalkerFsm<br/>Driving ⇄ TransitionOut ⇄ Walking ⇄ TransitionIn"]
+        SettingsMenu["SettingsMenu<br/>OpenClose · dirty ·<br/>slider write-through"]
+    end
+
+    %% =====================================================================
+    %% Provider layer — isolates every native API (SCS SDK, D3D11, raw
+    %% input, Windows hooks, PhysX). Each provider's interface is
+    %% declared in `include/walkercore/*` and is consumed by Workflow.
+    %% =====================================================================
+
+    subgraph Provider["provider/  (isolates native APIs)"]
+        Scs["ScsTelemetryProvider<br/>M1 — registers SCS channels"]
+        D3D11["D3D11Hook · MinHook<br/><b>M2 — implemented</b><br/>IDXGISwapChain::Present + per-frame conductor"]
+        Input["InputHook<br/>M4 — WH_KEYBOARD_LL + raw input"]
+        PhysX["PhysXAdapter<br/><b>M3 stub</b> — honest-stub-warn"]
+        Polish["PolishProviders<br/><b>M7 stub</b> — head tracker / flash / door anim<br/>stub-warn per-name"]
+        Knock["KnockoutProvider<br/><b>M10 stub</b> — velocity heuristic<br/>stub-warn"]
+        Couple["TrailerCoupling<br/><b>M9 stub</b> — waypoint anchor<br/>stub-warn"]
+        Fuel["FuelProvider<br/><b>M5/M8 partial</b> — station-placeholder<br/>stub-warn"]
+    end
+
+    %% =====================================================================
+    %% Domain layer — pure C++. NO native deps. Lint blocks SCS / D3D /
+    %% win32 headers from this layer.
+    %% =====================================================================
+
+    subgraph Domain["domain/  (pure C++, no SDK headers)"]
+        Cam["CameraState<br/>view + projection matrices<br/>(aspect / tan(half_h_fov))"]
+        PlayerState["PlayerState<br/>feet · yaw/pitch · eye_height · mode"]
+        TruckState["TruckState<br/>placement · orientation · has_* flags"]
+        WorldState["WorldState<br/>IWorldGeometry interface"]
+        InputState["InputState<br/>held / pressed / released edge bits"]
+        MoveCfg["MovementConfig<br/>walkSpeed · jumpInitialVelocity · gravity ·<br/>crouchBlend · headBob · maxStepUp · maxSlopeAngle"]
+        KnockState["KnockoutState<br/>knocked_out · time_remaining · impact_direction"]
+        FSMState["WalkerFsmState<br/>Driving · TransitionOut · Walking · TransitionIn"]
+        VersionState["VersionTable<br/>game×version → SubsystemEntry · FeatureMask"]
+    end
+
+    %% =====================================================================
+    %% Edges — inward-only dependency direction.
+    %% =====================================================================
+
+    Game -->|scs_telemetry_init| PluginEntry
+    Game -->|D3D11 present chain| D3D11
+    CDevOps -->|F12 dump call| Diag
+
+    PluginEntry --> Scs
+    PluginEntry --> FrameLoop
+    PluginEntry --> WalkerFsm
+    PluginEntry --> Knock
+    PluginEntry --> Couple
+    PluginEntry --> Fuel
+    PluginEntry --> Polish
+    PluginEntry --> Log
+    PluginEntry --> Diag
+
+    Diag --> FrameLoop
+    Diag --> WalkerFsm
+    Diag --> SettingsMenu
+
+    D3D11 --> FrameLoop
+    D3D11 --> WalkerFsm
+
+    SettingsMenu --> MoveCfg
+    SettingsMenu --> Polish
+    SettingsMenu --> Knock
+
+    FrameLoop --> Input
+    FrameLoop --> WorldState
+    FrameLoop --> WalkerFsm
+    FrameLoop --> Cam
+    FrameLoop --> PlayerState
+
+    WalkerFsm --> PlayerState
+    WalkerFsm --> TruckState
+    WalkerFsm --> Cam
+
+    Scs --> TruckState
+    Input --> InputState
+
+    Polish --> KnockState
+    Polish --> Cam
+    Polish --> DoorState["DoorAnimState"]:::unused
+    Polish --> FlashlightState["FlashlightCone"]:::unused
+
+    Knock --> KnockState
+    Couple --> TruckState
+    Fuel --> TruckState
+    PhysX --> WorldState
+
+    %% =====================================================================
+    %% Stub-mark class — lander stubs that haven't shipped yet.
+    %% The rendered fill is dashed to make M3/M5/M7/M9/M10/M11 visually
+    %% obvious in the diagram.
+    %% =====================================================================
+
+    classDef stub stroke-dasharray: 5 5,fill:#fdf6e3,color:#586e75;
+    class PhysX,Polish,Knock,Couple,Fuel,DoorState,FlashlightState stub;
+
+    %% style note: DoorState + FlashlightState are placeholders in
+    %% PolishProviders that the M7 lander will populate.
+
+    %% =====================================================================
+    %% Per-frame conductor (M2 — implemented). The single tick that runs
+    %% once per IDXGISwapChain::Present.
+    %% =====================================================================
+
+    subgraph PerFrame["per-frame conductor (one Present)"]
+        direction LR
+        A1[Sample input] --> A2[WalkerFsm::Update] --> A3[FrameLoop::RunOnce] --> A4[Update camera] --> A5[Push view+proj<br/>via walker_camera()]
+    end
+    D3D11 -.per frame.-> PerFrame
+
+    %% =====================================================================
+    %% Test surface — native exe in `tests/`. ABI contract probe DOES
+    %% LoadLibrary on the DLL; unit tests do NOT (they link the same
+    %% domain/workflow sources via tests/libWalkerCoreTestLib.a).
+    %% =====================================================================
+
+    subgraph Tests["tests/ (native exe, no SCS SDK)"]
+        Unit["Tests/TestHarness.h<br/>per-component *.cpp"]
+        Abi["ABI contract probe<br/>LoadLibraryA + GetProcAddress<br/>for the 14 documented exports"]
+    end
+    Unit -. links .-> Domain
+    Unit -. links .-> Workflow
+    Abi -. LoadLibrary .-> PluginEntry
+    Abi -. GetProcAddress .-> Diag

@@ -1,0 +1,5 @@
+LIBRARY WalkerCore
+EXPORTS
+    scs_telemetry_init
+    scs_telemetry_shutdown
+    DllMain @1 PRIVATE

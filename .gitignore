@@ -1,0 +1,32 @@
+# Build outputs
+build/
+build-*/
+cmake-build-*/
+out/
+
+# Generated headers
+**/generated/
+
+# Generated test artifacts
+Testing/
+
+# Editor / IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln
+CMakeUserPresets.json
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local-only artifacts
+*.log
+*.tmp
+
+# mavis-trash working files
+.mavis-trash/

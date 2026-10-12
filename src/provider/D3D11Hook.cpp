@@ -77,8 +77,19 @@ typedef HRESULT(STDMETHODCALLTYPE *PresentFn)(IDXGISwapChain *self,
                                               UINT sync_interval,
                                               UINT present_flags);
 
+// IDXGISwapChain::ResizeBuffers (vtable slot 13, verified dxgi.h
+// line 1579). Mirrors the D3D12Hook path so both rendering backends
+// benefit from the cached aspect and avoid the per-frame GetDesc.
+typedef HRESULT(STDMETHODCALLTYPE *ResizeBuffersFn)(IDXGISwapChain *,
+                                                    UINT,
+                                                    UINT,
+                                                    UINT,
+                                                    DXGI_FORMAT,
+                                                    UINT);
+
 // Original (unhooked) function pointers. Saved so we can chain.
 PresentFn g_original_present = nullptr;
+ResizeBuffersFn g_original_resize_buffers = nullptr;
 void *g_original_d3d11_create = nullptr;
 
 // Captured device/swap chain (borrowed, not owned). Single-instance —
@@ -90,6 +101,48 @@ ID3D11DeviceContext *g_context = nullptr;
 
 // TRUE once the Present vtable entry has been patched.
 bool g_present_hooked = false;
+bool g_resize_buffers_hooked = false;
+
+// Cached swap-chain aspect, populated by HookedResizeBuffers (and
+// by HookedPresent's first call as a fallback). The sentinel -1.0
+// is unreachable as a real aspect ratio in any sane game config
+// (a 1:1 aspect is 1.0, an ultrawide 21:9 is ~2.33), so the
+// "unset" state is unambiguous. Mirrors D3D12Hook's cache.
+float g_cached_aspect = -1.0f;
+uint32_t g_cached_width = 0;
+uint32_t g_cached_height = 0;
+
+constexpr float kAspectUnset = -1.0f;
+constexpr float kDefaultAspect = 16.0f / 9.0f;
+
+HRESULT STDMETHODCALLTYPE HookedResizeBuffers(IDXGISwapChain *self,
+                                              UINT buffer_count,
+                                              UINT width,
+                                              UINT height,
+                                              DXGI_FORMAT new_format,
+                                              UINT flags) {
+    // Update the cached dimensions before chaining to the original.
+    // The original will tear down the old back buffers and create new
+    // ones at the requested size; the g_cached_* values reflect the
+    // request the game made, which is what the next Present will
+    // actually see. We update first, chain second: even if the
+    // original fails and the swap chain keeps its old dimensions,
+    // the next Present's first-call GetDesc will overwrite the cache
+    // with the real values, so the worst case is one frame of stale
+    // aspect. See D3D12Hook::HookedResizeBuffers for the symmetric
+    // rationale.
+    g_cached_width = width;
+    g_cached_height = height;
+    g_cached_aspect = (height > 0)
+                           ? static_cast<float>(width) /
+                                 static_cast<float>(height)
+                           : kDefaultAspect;
+    if (g_original_resize_buffers != nullptr) {
+        return g_original_resize_buffers(self, buffer_count, width, height,
+                                          new_format, flags);
+    }
+    return E_FAIL;
+}
 
 HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain *self,
                                         UINT sync_interval,
@@ -103,29 +156,27 @@ HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain *self,
                           : static_cast<double>(now_us - last_us) / 1e6;
     last_us = now_us;
 
-    // Read the swap chain's back-buffer aspect from the *same* swap chain
-    // that is calling Present (not the cached g_swap_chain pointer, which
-    // can be stale if the game recreated it).
-    //
-    // We intentionally re-query every frame: caching by the swap-chain
-    // pointer alone misses the ResizeBuffers case, where the game calls
-    // IDXGISwapChain::ResizeBuffers to change the back-buffer size (and
-    // hence the aspect) while keeping the same vtable pointer. The
-    // FrameLoop's SetAspect() is now a no-op when the aspect is unchanged,
-    // so the per-frame walker_set_swapchain_aspect() call here is cheap
-    // in steady state (it just returns after the equality check), and
-    // the per-frame GetDesc() call is the one remaining price for
-    // correctness on window resize. A future commit could hook
-    // ResizeBuffers (vtable slot 14) to drop the per-frame GetDesc as
-    // well, at the cost of another MinHook integration.
-    DXGI_SWAP_CHAIN_DESC desc{};
-    if (self != nullptr && SUCCEEDED(self->GetDesc(&desc))) {
-        const float aspect =
-            (desc.BufferDesc.Height > 0)
-                ? static_cast<float>(desc.BufferDesc.Width) /
-                      static_cast<float>(desc.BufferDesc.Height)
-                : 16.0f / 9.0f;
-        walker_set_swapchain_aspect(aspect);
+    // Aspect from the cache, populated by HookedResizeBuffers. The
+    // first Present after Install (or after a game-side bypass of
+    // ResizeBuffers) reads the swap-chain's current dimensions
+    // directly via GetDesc, so the cache is correct from frame 2
+    // onward. Per-frame cost is now a single float read instead of
+    // a struct-population + validation in GetDesc. Mirrors the
+    // D3D12Hook path; both share the same ResizeBuffers vtable slot
+    // (13, verified dxgi.h).
+    if (g_cached_aspect == kAspectUnset && self != nullptr) {
+        DXGI_SWAP_CHAIN_DESC desc{};
+        if (SUCCEEDED(self->GetDesc(&desc))) {
+            g_cached_width = desc.BufferDesc.Width;
+            g_cached_height = desc.BufferDesc.Height;
+            g_cached_aspect = (g_cached_height > 0)
+                                   ? static_cast<float>(g_cached_width) /
+                                         static_cast<float>(g_cached_height)
+                                   : kDefaultAspect;
+        }
+    }
+    if (g_cached_aspect != kAspectUnset) {
+        walker_set_swapchain_aspect(g_cached_aspect);
     }
 
     // Per-frame simulation tick.
@@ -160,6 +211,33 @@ bool HookPresent(IDXGISwapChain *sc) {
         return false;
     }
     g_present_hooked = true;
+
+    // ResizeBuffers hook (slot 13). Same graceful-degrade contract
+    // as D3D12Hook: if MH_CreateHook fails, the per-frame Present
+    // path falls back to its first-call GetDesc and everything
+    // keeps working. See D3D12Hook::HookPresentOnD3D12SwapChain
+    // for the symmetric rationale.
+    if (!g_resize_buffers_hooked) {
+        void *resize_slot = vtable[13];
+        if (MH_CreateHook(resize_slot,
+                          reinterpret_cast<void *>(&HookedResizeBuffers),
+                          reinterpret_cast<void **>(&g_original_resize_buffers)) == MH_OK) {
+            if (MH_EnableHook(resize_slot) == MH_OK) {
+                g_resize_buffers_hooked = true;
+                WALKERCORE_LOG_INFO("D3D11Hook: ResizeBuffers hooked");
+            } else {
+                WALKERCORE_LOG_WARN(
+                    "D3D11Hook: MH_EnableHook on ResizeBuffers failed "
+                    "(non-fatal; per-frame path falls back to GetDesc)");
+                MH_DisableHook(resize_slot);
+            }
+        } else {
+            WALKERCORE_LOG_WARN(
+                "D3D11Hook: MH_CreateHook on ResizeBuffers failed "
+                "(non-fatal; per-frame path falls back to GetDesc)");
+        }
+    }
+
     WALKERCORE_LOG_INFO("D3D11Hook: Present hooked");
     return true;
 }
@@ -311,6 +389,11 @@ void D3D11Hook::Uninstall() {
     g_swap_chain = nullptr;
     g_original_present = nullptr;
     g_original_d3d11_create = nullptr;
+    g_original_resize_buffers = nullptr;
+    g_resize_buffers_hooked = false;
+    g_cached_aspect = kAspectUnset;
+    g_cached_width = 0;
+    g_cached_height = 0;
     WALKERCORE_LOG_INFO("D3D11Hook::Uninstall: hooks removed");
 #endif
     installed_ = false;

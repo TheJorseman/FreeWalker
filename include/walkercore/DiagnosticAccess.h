@@ -31,6 +31,7 @@ class DoorAnimProvider;
 class HeadTrackerProvider;
 class ShadowProvider;
 class PhysXAdapter;
+struct TruckDoorConfig;
 
 // Forward-declared so EncodeFsmLabel / FsmLabelNeedsReencode can take it
 // by value without forcing every consumer of DiagnosticAccess.h to pull
@@ -126,6 +127,15 @@ void SetShadow(const ShadowProvider *s);
 // walker_dump_physx() can report the installed catalog and any
 // last-scan result. Pass nullptr when the adapter is destroyed.
 void SetPhysX(const PhysXAdapter *p);
+
+// Mirror the most recent M5 per-truck door config + the source
+// model_id that produced it. PluginEntry calls SetPerTruckDoor()
+// once per SCS configuration tick; the mirror defaults to empty so
+// the focused walker_dump_per_truck_door() reports "(no config yet)"
+// before the first push. The pointer ownership stays with the
+// caller; the diagnostic layer copies the string + the struct.
+void SetPerTruckDoor(const char *model_id, size_t model_id_len,
+                     const TruckDoorConfig *cfg);
 
 }  // namespace diagnostic_internal
 }  // namespace walkercore

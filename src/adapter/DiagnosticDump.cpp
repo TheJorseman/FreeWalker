@@ -32,6 +32,8 @@
 #include "walkercore/Log.h"
 #include "walkercore/PlayerState.h"
 #include "walkercore/PhysXAdapter.h"
+#include "walkercore/PerTruckDoorTable.h"
+#include "walkercore/TruckDoorConfig.h"
 #include "walkercore/PolishProviders.h"
 #include "walkercore/ScsTelemetryProvider.h"
 #include "walkercore/Settings.h"
@@ -80,6 +82,14 @@ const DoorAnimProvider *g_door_anim = nullptr;
 const HeadTrackerProvider *g_head_tracker = nullptr;
 const ShadowProvider *g_shadow = nullptr;
 const PhysXAdapter *g_physx = nullptr;
+// M5 per-truck door config mirror. The model_id and resolved
+// TruckDoorConfig are pushed from PluginEntry alongside the FSM
+// SetDoorConfig call. The mirror defaults to "(no config yet)" until
+// the first push arrives.
+constexpr size_t kMaxModelIdLen = 64;
+char g_per_truck_model_id[kMaxModelIdLen] = "";
+TruckDoorConfig g_per_truck_door{};
+bool g_per_truck_door_set = false;
 
 }  // namespace
 
@@ -178,6 +188,29 @@ void SetDoorAnim(const DoorAnimProvider *d) { g_door_anim = d; }
 void SetHeadTracker(const HeadTrackerProvider *h) { g_head_tracker = h; }
 void SetShadow(const ShadowProvider *s) { g_shadow = s; }
 void SetPhysX(const PhysXAdapter *p) { g_physx = p; }
+void SetPerTruckDoor(const char *model_id, size_t model_id_len,
+                     const TruckDoorConfig *cfg) {
+    g_per_truck_model_id[0] = '\0';
+    if (model_id != nullptr && model_id_len > 0) {
+        // Bounded copy into the mirror's fixed buffer. model_id_len
+        // is the caller's measured length (no NUL search); we copy
+        // min(model_id_len, kMaxModelIdLen - 1) bytes and always
+        // NUL-terminate.
+        const size_t cap = sizeof(g_per_truck_model_id);
+        const size_t copy = (model_id_len < cap - 1)
+                                ? model_id_len
+                                : cap - 1;
+        std::memcpy(g_per_truck_model_id, model_id, copy);
+        g_per_truck_model_id[copy] = '\0';
+    }
+    if (cfg != nullptr) {
+        g_per_truck_door = *cfg;
+        g_per_truck_door_set = true;
+    } else {
+        g_per_truck_door = TruckDoorConfig{};
+        g_per_truck_door_set = false;
+    }
+}
 
 }  // namespace diagnostic_internal
 }  // namespace walkercore
@@ -1005,4 +1038,69 @@ extern "C" __declspec(dllexport) void walker_dump_knockout(void) {
                         mag);
 
     WALKERCORE_LOG_INFO("--- end knockout ---");
+}
+
+extern "C" __declspec(dllexport) void walker_dump_per_truck_door(void) {
+    using namespace walkercore;
+
+    WALKERCORE_LOG_INFO("--- WalkerCore per-truck door ---");
+    if (!g_per_truck_door_set) {
+        WALKERCORE_LOG_INFO("per-truck door       : (no config yet)");
+        WALKERCORE_LOG_INFO("--- end per-truck door ---");
+        return;
+    }
+
+    // Look up the row in the built-in table so the dump can show
+    // "matched row: yes/no" alongside the resolved geometry. When
+    // model_id is empty (no telemetry yet) we still emit a row
+    // saying the table was bypassed.
+    bool matched = false;
+    if (g_per_truck_model_id[0] != '\0') {
+        matched =
+            PerTruckDoorTable::BuiltIn().Find(g_per_truck_model_id) != nullptr;
+    }
+
+    WALKERCORE_LOG_INFO("model_id             : %s%s",
+                        g_per_truck_model_id,
+                        matched ? " (matched built-in row)" : " (no built-in row)");
+    WALKERCORE_LOG_INFO("config valid         : %s",
+                        g_per_truck_door.valid ? "true" : "false");
+    WALKERCORE_LOG_INFO("has_passenger_door   : %s",
+                        g_per_truck_door.has_passenger_door ? "true" : "false");
+    WALKERCORE_LOG_INFO(
+        "driver_door.position : (%.2f, %.2f, %.2f)",
+        g_per_truck_door.driver_door.local_position.x,
+        g_per_truck_door.driver_door.local_position.y,
+        g_per_truck_door.driver_door.local_position.z);
+    WALKERCORE_LOG_INFO(
+        "driver_door.anchor   : (%.2f, %.2f, %.2f)",
+        g_per_truck_door.driver_door.local_enter_anchor.x,
+        g_per_truck_door.driver_door.local_enter_anchor.y,
+        g_per_truck_door.driver_door.local_enter_anchor.z);
+    WALKERCORE_LOG_INFO("driver_door.yaw_off  : %.3f rad",
+                        static_cast<double>(
+                            g_per_truck_door.driver_door.enter_yaw_offset_rad));
+    WALKERCORE_LOG_INFO(
+        "cabin_min/max        : (%.2f, %.2f, %.2f) .. (%.2f, %.2f, %.2f)",
+        g_per_truck_door.cabin_min.x, g_per_truck_door.cabin_min.y,
+        g_per_truck_door.cabin_min.z, g_per_truck_door.cabin_max.x,
+        g_per_truck_door.cabin_max.y, g_per_truck_door.cabin_max.z);
+    WALKERCORE_LOG_INFO(
+        "driver_seat_local    : (%.2f, %.2f, %.2f)",
+        g_per_truck_door.driver_seat_local.x,
+        g_per_truck_door.driver_seat_local.y,
+        g_per_truck_door.driver_seat_local.z);
+    WALKERCORE_LOG_INFO("door_max_open_rad    : %.3f rad (%.1f deg)",
+                        static_cast<double>(g_per_truck_door.door_max_open_rad),
+                        static_cast<double>(g_per_truck_door.door_max_open_rad) *
+                            (180.0 / 3.14159265358979323846));
+    WALKERCORE_LOG_INFO("door_open_duration_s : %.2f",
+                        static_cast<double>(g_per_truck_door.door_open_duration_s));
+    WALKERCORE_LOG_INFO("door_activation_dist : %.2f m",
+                        static_cast<double>(
+                            g_per_truck_door.door_activation_distance_m));
+    WALKERCORE_LOG_INFO("cabin_inside_dist    : %.2f m",
+                        static_cast<double>(g_per_truck_door.cabin_inside_distance_m));
+
+    WALKERCORE_LOG_INFO("--- end per-truck door ---");
 }

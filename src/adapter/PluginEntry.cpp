@@ -38,6 +38,7 @@
 #include "walkercore/Log.h"
 #include "walkercore/PerFrame.h"
 #include "walkercore/PerFrameThread.h"
+#include <cstring>
 #include "walkercore/PhysXAdapter.h"
 #include "walkercore/PlayerState.h"
 #include "walkercore/PolishProviders.h"
@@ -292,6 +293,21 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
     const walkercore::TruckDoorConfig per_truck =
         walkercore::TruckDoorConfigFromTruckState(*truck_ptr);
     g_fsm->SetDoorConfig(per_truck);
+    // Mirror to the diagnostic layer so walker_dump_per_truck_door()
+    // can report the resolved geometry + matched row. The model_id
+    // field is only set when the SCS configuration event has fired;
+    // we pass the actual length + bytes (no NUL search) so the
+    // diagnostic layer can bound the copy safely.
+    size_t model_id_len = 0;
+    const char *model_id_ptr = nullptr;
+    if (truck_ptr->has_model_id) {
+        model_id_ptr = truck_ptr->model_id;
+        // model_id is char[64] in TruckState; compute strlen is fine
+        // here because the SDK fills it as a NUL-terminated string.
+        model_id_len = std::strlen(model_id_ptr);
+    }
+    walkercore::diagnostic_internal::SetPerTruckDoor(
+        model_id_ptr, model_id_len, &per_truck);
   }
 
   // Diagnostic dump on F12 rising edge. Lives in walker_per_frame_tick so

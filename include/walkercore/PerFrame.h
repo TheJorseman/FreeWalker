@@ -170,6 +170,16 @@ void walker_dump_physx(void);
 // KnockoutProvider has been wired yet.
 void walker_dump_knockout(void);
 
+// Diagnostics — focused dump of the M5 per-truck door config:
+// source model_id (verbatim from SCS telemetry), whether the
+// built-in PerTruckDoorTable matched a row, and the resolved driver
+// door + cabin + seat geometry in truck-local coordinates. Use this
+// when investigating "which truck model is the player in?" or "why
+// is the door pivot in the wrong place?". Safe to call at any time;
+// reports "(no config yet)" until the first SCS configuration event
+// has populated the mirror.
+void walker_dump_per_truck_door(void);
+
 // M3 lander wire-up point. The real adapter calls this once when its
 // PxScene / public PhysX SDK link succeeds. Until then, the stub returns
 // "no hit" with one warning.

@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <string.h>
+#include <cstring>
 
 #include "walkercore/CameraState.h"
 #include "walkercore/D3D11Hook.h"
@@ -31,6 +32,7 @@
 #include "walkercore/Settings.h"
 #include "walkercore/SettingsMenu.h"
 #include "walkercore/TruckState.h"
+#include "walkercore/TruckDoorConfig.h"
 #include "walkercore/WalkerFsm.h"
 
 namespace {
@@ -1596,6 +1598,78 @@ void TestDumpKnockoutReportsStateAndConfig() {
     EXPECT_TRUE(ContainsCapture("config fall_height_m : 5.00"));
     EXPECT_TRUE(ContainsCapture("impact_direction_mag"));
     diagnostic_internal::SetKnockout(nullptr);
+}
+
+void TestDumpPerTruckDoorHandlesEmpty() {
+    // No mirror pushed yet. walker_dump_per_truck_door must report
+    // the sentinel state without crashing.
+    walkercore_log_shutdown();
+    walkercore_log_init(&DiagnosticDumpCaptureSink);
+    diagnostic_internal::SetPerTruckDoor(nullptr, 0, nullptr);
+    walker_dump_per_truck_door();
+    walkercore_log_shutdown();
+    EXPECT_TRUE(ContainsCapture("--- WalkerCore per-truck door ---"));
+    EXPECT_TRUE(ContainsCapture("--- end per-truck door ---"));
+    EXPECT_TRUE(ContainsCapture("per-truck door       : (no config yet)"));
+}
+
+void TestDumpPerTruckDoorReportsMatchedRow() {
+    // Build a TruckDoorConfig from the built-in table for a Volvo
+    // VNL 2016 (one of the 14 built-in rows) and push it through
+    // the mirror. The dump should report the model_id and confirm
+    // the row was matched.
+    TruckState t;
+    t.cabin_position = Vec3{0, 1.0, 0};
+    t.head_position = Vec3{-0.45, 1.55, -0.50};
+    t.has_cabin_position = true;
+    t.has_head_position = true;
+    std::strncpy(t.model_id, "vehicle.volvo.vnl_2016", sizeof(t.model_id) - 1);
+    t.model_id[sizeof(t.model_id) - 1] = '\0';
+    t.has_model_id = true;
+    const TruckDoorConfig cfg = TruckDoorConfigFromTruckState(t);
+
+    walkercore_log_shutdown();
+    walkercore_log_init(&DiagnosticDumpCaptureSink);
+    diagnostic_internal::SetPerTruckDoor(
+        t.model_id, std::strlen(t.model_id), &cfg);
+    walker_dump_per_truck_door();
+    walkercore_log_shutdown();
+
+    EXPECT_TRUE(ContainsCapture("model_id             : vehicle.volvo.vnl_2016 (matched built-in row)"));
+    EXPECT_TRUE(ContainsCapture("config valid         : true"));
+    EXPECT_TRUE(ContainsCapture("driver_door.position"));
+    EXPECT_TRUE(ContainsCapture("cabin_min/max"));
+    EXPECT_TRUE(ContainsCapture("driver_seat_local"));
+    EXPECT_TRUE(ContainsCapture("door_max_open_rad"));
+
+    diagnostic_internal::SetPerTruckDoor(nullptr, 0, nullptr);
+}
+
+void TestDumpPerTruckDoorReportsUnmatchedRow() {
+    // model_id that's not in the built-in table. The dump should
+    // still report the geometry (the generic placeholder) but flag
+    // "no built-in row" so analysts know the per-truck override
+    // path did not fire.
+    TruckState t;
+    t.cabin_position = Vec3{0, 1.0, 0};
+    t.head_position = Vec3{-0.45, 1.55, -0.50};
+    t.has_cabin_position = true;
+    t.has_head_position = true;
+    std::strncpy(t.model_id, "vehicle.volvo.future_model",
+                 sizeof(t.model_id) - 1);
+    t.model_id[sizeof(t.model_id) - 1] = '\0';
+    t.has_model_id = true;
+    const TruckDoorConfig cfg = TruckDoorConfigFromTruckState(t);
+
+    walkercore_log_shutdown();
+    walkercore_log_init(&DiagnosticDumpCaptureSink);
+    diagnostic_internal::SetPerTruckDoor(
+        t.model_id, std::strlen(t.model_id), &cfg);
+    walker_dump_per_truck_door();
+    walkercore_log_shutdown();
+    EXPECT_TRUE(ContainsCapture("vehicle.volvo.future_model (no built-in row)"));
+
+    diagnostic_internal::SetPerTruckDoor(nullptr, 0, nullptr);
 }
 
 }  // namespace walkercore

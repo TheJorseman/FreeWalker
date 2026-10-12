@@ -9,6 +9,10 @@
 // The install path that actually calls MinHook is integration-tested
 // separately (it needs a real game process) and is out of scope for
 // the unit-test suite.
+//
+// v2 helpers (ComputeSingletonGlobalVa, ComputeVtableSlot16Va) are
+// pure formulas over the RVA-derived offsets and don't need a live
+// game process either, so they live alongside v1 here.
 
 #include "TestHarness.h"
 
@@ -107,6 +111,34 @@ void TestCameraHijackDispatcherRvaInText() {
     EXPECT_TRUE(CameraHijack::IsRvaExecutable(
         0xC22F40u, kAts161Sections,
         sizeof(kAts161Sections) / sizeof(kAts161Sections[0])));
+}
+
+void TestCameraHijackComputeSingletonGlobalVaZero() {
+    // kDispatcherPrologueMovRva (0xC22F4A) + length (7) +
+    // kDispatcherPrologueMovDisp (0x2A95E7F) = 0x36B8DD0.
+    // With image_base=0 the formula collapses to the constant.
+    EXPECT_EQ(CameraHijack::ComputeSingletonGlobalVa(0), 0x36B8DD0u);
+}
+
+void TestCameraHijackComputeSingletonGlobalVaAtsKbExe() {
+    // ATS image base is 0x140000000, so the singleton global is at
+    // 0x140000000 + 0x36B8DD0 = 0x1436B8DD0. The original
+    // dispatcher prologue reads from this exact address.
+    EXPECT_EQ(CameraHijack::ComputeSingletonGlobalVa(0x140000000ULL),
+              0x1436B8DD0ULL);
+}
+
+void TestCameraHijackComputeVtableSlot16VaZero() {
+    // Slot 16 lives at vtable + 16 * 8 = vtable + 0x80.
+    EXPECT_EQ(CameraHijack::ComputeVtableSlot16Va(0), 0x80u);
+}
+
+void TestCameraHijackComputeVtableSlot16VaAtsKbExe() {
+    // With the vtable base set to a fixed address, vtable[16] lands
+    // at base + 0x80. This pins the slot arithmetic and keeps v3
+    // (which needs to know exactly where to look) honest.
+    EXPECT_EQ(CameraHijack::ComputeVtableSlot16Va(0x140000000ULL),
+              0x140000080ULL);
 }
 
 }  // namespace walkercore

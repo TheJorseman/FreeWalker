@@ -30,13 +30,21 @@
 //   3. MinHooks dispatcher_va. Trampoline calls the original dispatcher
 //      first so the SCS state machine continues to work, then logs
 //      a one-line "dispatcher hooked" message that shows up in
-//      game.log.txt. v2 will replace the matrices here.
-//   4. Optionally walks the singleton path (the same RIP-relative
-//      `[rip + 0x2A95E7F]` the original prologue uses at RVA 0xC22F4A)
-//      to capture the camera state struct pointer + vtable address,
-//      then captures vtable[16] = vtable_addr + 0x80. Once captured,
-//      the second hook (vtable slot 16) is installed lazily on the
-//      first dispatch.
+//      game.log.txt.
+//   4. On the FIRST dispatcher dispatch (v2), the trampoline walks the
+//      singleton path the original prologue uses:
+//        - Read the singleton global at image_base + 0x36B8DD0
+//          (the RIP-relative target of `mov rbx, [rip + 0x2A95E7F]`
+//          from the dispatcher prologue @ RVA 0xC22F4A).
+//        - Read the camera state struct ptr at singleton + 0x2030.
+//        - Read the vtable at struct + 0.
+//        - Read vtable[16] = vtable + 0x80 (the per-frame update).
+//      All four addresses are stored in CameraHijack for diagnostic
+//      surfacing. Then a SECOND MinHook is installed on vtable[16]:
+//      that trampoline calls the original (so SCS still pushes
+//      matrices to the GPU) and bumps vtable16_calls_. v3 will
+//      replace the matrices the SCS state machine writes to the GPU
+//      constant buffer from inside that vtable[16] trampoline.
 //
 // ABI:
 //   walker_camera_hijack_set_enabled(int)
@@ -49,10 +57,10 @@
 //   [m2] camera_hijack = true   (default false — must opt in)
 //
 // v1 scope: hook the dispatcher + log every entry. No matrix writes
-// yet. v2 will add the D3D11 constant buffer override (in this same
-// module — currently a v1 stub that captures the per-frame VA so a
-// follow-up commit can install the vtable-slot-16 hook without
-// redoing the singleton walk).
+// yet. v2 (current commit) adds the lazy singleton walk + lazy
+// vtable[16] MinHook on first dispatcher dispatch. v3 will replace
+// the matrices the SCS state machine writes to the GPU constant
+// buffer.
 
 #ifndef WALKERCORE_CAMERA_HIJACK_H
 #define WALKERCORE_CAMERA_HIJACK_H
@@ -95,11 +103,34 @@ public:
     bool install_error() const { return !install_error_.empty(); }
     const char *install_error_msg() const { return install_error_.c_str(); }
 
+    // v2 diagnostic getters. Filled by the first dispatcher dispatch
+    // (LazyInstallVtable16Hook inside the trampoline).
+    std::uint64_t singleton_global_va() const { return singleton_global_va_; }
+    std::uint64_t cam_state_struct_va() const { return cam_state_struct_va_; }
+    std::uint64_t vtable_base_va() const { return vtable_base_va_; }
+    std::uint64_t vtable16_va() const { return vtable16_va_; }
+    int vtable16_calls() const { return vtable16_calls_; }
+    bool vtable16_installed() const { return vtable16_installed_; }
+
     // -- Pure resolver test seams (no game process required) ------------
     //
     // Given an image base (PE32+ optional header field), returns the
     // dispatcher VA. Used by the test suite to pin the formula.
     static std::uint64_t ComputeDispatcherVa(std::uint64_t image_base);
+
+    // Same idea for the singleton global VA the original dispatcher
+    // prologue reads with `mov rbx, [rip + 0x2A95E7F]` at RVA
+    // 0xC22F4A. The instruction is 7 bytes long, so the target VA is
+    // image_base + 0xC22F4A + 7 + 0x2A95E7F = image_base + 0x36B8DD0
+    // (= VA 0x140000000 + 0x36B8DD0 = 0x1436B8DD0 for ATS). Returning
+    // 0x36B8DD0 as a constant would also work but having the formula
+    // live in code makes the relationship to the disasm obvious and
+    // lets us pin the offset constants via tests.
+    static std::uint64_t ComputeSingletonGlobalVa(std::uint64_t image_base);
+
+    // vtable slot 16 entry-point VA = vtable base + 0x80. Each entry is
+    // 8 bytes on x64, so slot N lives at base + N * 8.
+    static std::uint64_t ComputeVtableSlot16Va(std::uint64_t vtable_base);
 
     // Given a pe_base and an rva, returns true if `rva` falls inside
     // any PE section that has IMAGE_SCN_MEM_EXECUTE set. Used by the
@@ -125,8 +156,13 @@ private:
     // signature is the natural `void(void)`.
 #ifdef _WIN32
     using DispatcherFn = void (*)();
+    using Vtable16Fn = void (*)();
     static void WINAPI DispatcherHookThunk();
+    static void WINAPI Vtable16HookThunk();
     void DispatcherHookImpl();
+    // Lazy singleton walk + vtable[16] MinHook install. Returns true on
+    // success. Idempotent: subsequent calls are no-ops.
+    bool LazyInstallVtable16Hook();
 #endif
 
     bool enabled_ = false;
@@ -138,12 +174,22 @@ private:
     int last_dispatch_ms_ = 0;
     std::string install_error_;
 
+    // v2: populated by the lazy singleton walk inside the dispatcher
+    // trampoline on first dispatch.
+    std::uint64_t singleton_global_va_ = 0;
+    std::uint64_t cam_state_struct_va_ = 0;
+    std::uint64_t vtable_base_va_ = 0;
+    std::uint64_t vtable16_va_ = 0;
+    int vtable16_calls_ = 0;
+    bool vtable16_installed_ = false;
+
     // MinHook trampoline target. Stamped by Install(), released by
     // Uninstall(). On Win64 the dispatcher is __cdecl-like (callee
     // preserves rbx/rbp/rsi/rdi per the SCS prologue) so the hook
     // signature is the natural `void(void)`.
 #ifdef WALKERCORE_HAVE_MINHOOK
     DispatcherFn original_dispatcher_ = nullptr;
+    Vtable16Fn original_vtable16_ = nullptr;
 #endif
 
     // Single global instance registered at Install(). The static

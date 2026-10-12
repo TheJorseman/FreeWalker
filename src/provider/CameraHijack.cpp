@@ -52,6 +52,23 @@ namespace {
 // raw size 0x1DBC800).
 constexpr std::uint32_t kDispatcherRva = 0xC22F40u;
 
+// RVA of the `mov rbx, [rip + 0x2A95E7F]` instruction inside the
+// dispatcher prologue. RIP-relative addressing resolves to
+// image_base + 0xC22F4A + 7 + 0x2A95E7F = image_base + 0x1423A6D0.
+constexpr std::uint32_t kDispatcherPrologueMovRbxRva = 0xC22F4Au;
+constexpr std::int32_t kDispatcherPrologueMovRbxDisp = 0x2A95E7F;
+constexpr std::size_t kDispatcherPrologueMovRbxLength = 7u;
+// Convenience pre-computed RVA of the singleton global relative to
+// image_base. Computed lazily by ComputeSingletonGlobalVa() below so
+// the formula lives in one place.
+constexpr std::uint64_t kSingletonGlobalRva =
+    static_cast<std::uint64_t>(kDispatcherPrologueMovRbxRva) +
+    static_cast<std::uint64_t>(kDispatcherPrologueMovRbxLength) +
+    static_cast<std::uint64_t>(static_cast<std::uint32_t>(kDispatcherPrologueMovRbxDisp));
+
+// vtable slot index * 8 bytes/entry = 0x80 on x64.
+constexpr std::uint64_t kVtableSlot16Offset = 16ull * 8ull;
+
 // IMAGE_SCN_MEM_EXECUTE = 0x20000000. We only need this bit for
 // "is RVA inside an executable section?" checks during install.
 constexpr std::uint32_t kImageScnMemExecute = 0x20000000u;
@@ -81,6 +98,16 @@ CameraHijack::~CameraHijack() {
 // static
 std::uint64_t CameraHijack::ComputeDispatcherVa(std::uint64_t image_base) {
     return image_base + static_cast<std::uint64_t>(kDispatcherRva);
+}
+
+// static
+std::uint64_t CameraHijack::ComputeSingletonGlobalVa(std::uint64_t image_base) {
+    return image_base + kSingletonGlobalRva;
+}
+
+// static
+std::uint64_t CameraHijack::ComputeVtableSlot16Va(std::uint64_t vtable_base) {
+    return vtable_base + kVtableSlot16Offset;
 }
 
 // static
@@ -204,7 +231,7 @@ void CameraHijack::Uninstall() {
 void WINAPI CameraHijack::DispatcherHookThunk() {
     // Single-instance dispatcher hook. The trampoline routes through
     // the global instance registered at install time. In v1 we only
-    // call the original and bump the counter; v2 will fold in the
+    // call the original and bump the counter; v2 folds in the
     // singleton walk + vtable[16] hook + matrix override.
 #ifdef WALKERCORE_HAVE_MINHOOK
     using OriginalFn = void (*)();
@@ -221,6 +248,141 @@ void WINAPI CameraHijack::DispatcherHookThunk() {
         inst->last_dispatch_ms_ = static_cast<int>(NowMicros() / 1000LL);
         if ((inst->dispatch_calls_ & 0x3F) == 1) {
             WALKERCORE_LOG_INFO("CameraHijack: dispatcher called (n=%d)", inst->dispatch_calls_);
+        }
+        // v2: lazy singleton walk + vtable[16] MinHook. Runs on the
+        // first dispatch only — subsequent calls early-out because
+        // vtable16_installed_ is true.
+        if (!inst->vtable16_installed_) {
+            if (!inst->LazyInstallVtable16Hook()) {
+                // Lazy install failed (read returned null, MH_*
+                // failed). Don't re-attempt every dispatch — log
+                // once and bail. The next install attempt (DLL
+                // reload, INI flip) creates a fresh CameraHijack.
+                inst->vtable16_installed_ = true;  // sentinel: stop retrying
+            }
+        }
+    }
+#else
+    (void)0;
+#endif
+}
+
+bool CameraHijack::LazyInstallVtable16Hook() {
+    // Defensive: refuse if image_base is unset, if vtable[16] was
+    // already installed, or if MinHook isn't vendored.
+    if (image_base_ == 0) {
+        WALKERCORE_LOG_WARN("CameraHijack: LazyInstallVtable16Hook refused (image_base=0)");
+        return false;
+    }
+#ifdef WALKERCORE_HAVE_MINHOOK
+    // 1) Read the singleton global (the same RIP-relative target the
+    //    original prologue reads at RVA 0xC22F4A).
+    singleton_global_va_ = ComputeSingletonGlobalVa(image_base_);
+    std::uint64_t singleton_value = 0;
+    {
+            const auto *p = reinterpret_cast<const std::uint8_t *>(
+                static_cast<std::uintptr_t>(singleton_global_va_));
+            (void)std::memcpy(&singleton_value, p, sizeof(singleton_value));
+    }
+    if (singleton_value == 0) {
+        WALKERCORE_LOG_WARN("CameraHijack: singleton global at 0x%llX is NULL",
+                            static_cast<unsigned long long>(singleton_global_va_));
+        return false;
+    }
+    // 2) Read the camera state struct pointer at singleton + 0x2030.
+    cam_state_struct_va_ = singleton_value + 0x2030u;
+    std::uint64_t cam_state_struct = 0;
+    {
+            const auto *p = reinterpret_cast<const std::uint8_t *>(
+                static_cast<std::uintptr_t>(cam_state_struct_va_));
+            (void)std::memcpy(&cam_state_struct, p, sizeof(cam_state_struct));
+    }
+    if (cam_state_struct == 0) {
+        WALKERCORE_LOG_WARN("CameraHijack: camera state struct at 0x%llX is NULL",
+                            static_cast<unsigned long long>(cam_state_struct_va_));
+        return false;
+    }
+    // 3) Read the vtable pointer at struct + 0.
+    vtable_base_va_ = cam_state_struct;
+    std::uint64_t vtable_base = 0;
+    {
+            const auto *p = reinterpret_cast<const std::uint8_t *>(
+                static_cast<std::uintptr_t>(vtable_base_va_));
+            (void)std::memcpy(&vtable_base, p, sizeof(vtable_base));
+    }
+    if (vtable_base == 0) {
+        WALKERCORE_LOG_WARN("CameraHijack: vtable at 0x%llX is NULL",
+                            static_cast<unsigned long long>(vtable_base_va_));
+        return false;
+    }
+    // 4) Read vtable[16] = vtable_base + 0x80.
+    vtable16_va_ = ComputeVtableSlot16Va(vtable_base);
+    std::uint64_t vtable16_value = 0;
+    {
+            const auto *p = reinterpret_cast<const std::uint8_t *>(
+                static_cast<std::uintptr_t>(vtable16_va_));
+            (void)std::memcpy(&vtable16_value, p, sizeof(vtable16_value));
+    }
+    if (vtable16_value == 0) {
+        WALKERCORE_LOG_WARN("CameraHijack: vtable[16] at 0x%llX is NULL",
+                            static_cast<unsigned long long>(vtable16_va_));
+        return false;
+    }
+    // 5) MinHook vtable[16] (lazy install — only runs once per
+    //    CameraHijack lifetime).
+    MH_STATUS mh_status = MH_CreateHook(
+        reinterpret_cast<LPVOID>(vtable16_value),
+        reinterpret_cast<LPVOID>(&Vtable16HookThunk),
+        reinterpret_cast<LPVOID *>(&original_vtable16_));
+    if (mh_status != MH_OK) {
+        WALKERCORE_LOG_WARN("CameraHijack: MH_CreateHook(vtable[16]) failed (status=%d)",
+                            static_cast<int>(mh_status));
+        return false;
+    }
+    mh_status = MH_EnableHook(reinterpret_cast<LPVOID>(vtable16_value));
+    if (mh_status != MH_OK) {
+        WALKERCORE_LOG_WARN("CameraHijack: MH_EnableHook(vtable[16]) failed (status=%d)",
+                            static_cast<int>(mh_status));
+        MH_RemoveHook(reinterpret_cast<LPVOID>(vtable16_value));
+        original_vtable16_ = nullptr;
+        return false;
+    }
+    vtable16_installed_ = true;
+    WALKERCORE_LOG_INFO(
+        "CameraHijack: vtable[16] hooked at 0x%llX (vtable_base=0x%llX, "
+        "cam_state=0x%llX, singleton_global=0x%llX)",
+        static_cast<unsigned long long>(vtable16_value),
+        static_cast<unsigned long long>(vtable_base),
+        static_cast<unsigned long long>(cam_state_struct),
+        static_cast<unsigned long long>(singleton_value));
+    return true;
+#else
+    WALKERCORE_LOG_WARN("CameraHijack: LazyInstallVtable16Hook requires WALKERCORE_HAVE_MINHOOK=1");
+    return false;
+#endif
+}
+
+void WINAPI CameraHijack::Vtable16HookThunk() {
+    // The per-frame camera update trampoline. Calls the original
+    // (which writes SCS matrices to the GPU constant buffer slot 0),
+    // bumps vtable16_calls_, and emits a one-line log every 256th
+    // call so a deploy-side analyst can confirm vtable[16] is being
+    // hit. v3 will replace the GPU constant buffer push from here.
+#ifdef WALKERCORE_HAVE_MINHOOK
+    using OriginalFn = void (*)();
+    OriginalFn original = nullptr;
+    CameraHijack *inst = g_instance_;
+    if (inst != nullptr) {
+        original = reinterpret_cast<OriginalFn>(inst->original_vtable16_);
+    }
+    if (original != nullptr) {
+        original();
+    }
+    if (inst != nullptr) {
+        ++inst->vtable16_calls_;
+        if ((inst->vtable16_calls_ & 0xFF) == 1) {
+            WALKERCORE_LOG_INFO("CameraHijack: vtable[16] called (n=%d)",
+                                inst->vtable16_calls_);
         }
     }
 #else

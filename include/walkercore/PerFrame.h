@@ -245,6 +245,68 @@ uint64_t walker_pxscene_instance(void);
 // wired yet.
 void walker_dump_pxscene(void);
 
+// M11 ImGui overlay. Returns 1 when the overlay is initialised AND
+// the D3D11 device has been captured (i.e., the overlay can render
+// frames on top of the game's swap chain), 0 otherwise. Scaffolding
+// commit: the surface is wired but the D3D11 Present-path
+// integration is deferred. The dump ABI is always callable so
+// walker_dump_imgui_overlay reports "(disabled by build)" instead
+// of crashing.
+int walker_imgui_overlay_supported(void);
+
+// M11 ImGui overlay — INI gate. Pass 1 to enable, 0 to disable.
+// Default state off. The user must opt in via
+// `[m11] imgui_overlay = true` in `WalkerCore.ini`.
+void walker_imgui_overlay_set_enabled(int enabled);
+
+// M11 ImGui overlay — focused dump: enabled flag, supported flag,
+// walks_entered / walks_exited counters, ImGui version string,
+// frames_rendered counter, init_generation. Use this when
+// investigating "did the overlay init?" or "did the user enable
+// it?" or "is the D3D11 Present hook actually rendering frames?".
+// Safe to call at any time; reports "(not initialized)" when no
+// ImGuiOverlay has been wired yet.
+void walker_dump_imgui_overlay(void);
+
+// M11 ImGui overlay — version string the build was compiled
+// against. Returns "1.91.5" when ImGui is vendored, "0.0.0"
+// when not. Always non-NULL.
+const char *walker_imgui_overlay_version(void);
+
+// M11 ImGui overlay — total frames rendered by the overlay's
+// RenderFrameIfEnabled path. Counter is per-DLL-load (not
+// monotonic across unload + reload — the overlay's destructor
+// zeroes it via Shutdown). Used by deploy-side analysts to
+// confirm "is the Present hook actually drawing?".
+unsigned long long walker_imgui_overlay_frames_rendered(void);
+
+// M11 ImGui overlay — teardown. Releases the ImGui context +
+// D3D11 + Win32 backends. Safe to call multiple times; safe
+// to call from scs_telemetry_shutdown. Idempotent.
+void walker_shutdown_imgui_overlay(void);
+
+// M11 ImGui overlay — D3D11 device-capture hook. Called from
+// D3D11Hook's HookedCreateDeviceAndSwapChain after a successful
+// device + context + swap chain capture. device + context must
+// be non-NULL; hwnd may be NULL (the overlay still creates the
+// ImGui context but reports supported=false so the render path
+// stays off). Returns 1 on success, 0 on failure. Idempotent
+// (subsequent calls without an OnD3D11DeviceLost in between are
+// no-ops).
+int walker_on_d3d11_device_captured(void *device, void *context, void *hwnd);
+
+// M11 ImGui overlay — D3D11 device-lost hook. Called before the
+// game destroys the device. Frees only the GPU-side resources
+// (font texture, vertex / index buffers); the ImGui context stays
+// alive so a subsequent OnD3D11DeviceCreated can re-create them.
+void walker_on_d3d11_device_lost(void);
+
+// M11 ImGui overlay — D3D11 Present hook. Called from D3D11Hook's
+// HookedPresent AFTER walker_try_enter_per_frame_tick returns. The
+// function is a no-op when the overlay is disabled (default), the
+// D3D11 device has not been captured, or WALKERCORE_HAVE_IMGUI=0.
+void walker_render_imgui_frame_if_enabled(void);
+
 // M3 lander wire-up point. The real adapter calls this once when its
 // PxScene / public PhysX SDK link succeeds. Until then, the stub returns
 // "no hit" with one warning.

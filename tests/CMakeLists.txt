@@ -28,6 +28,7 @@ add_library(WalkerCoreTestLib STATIC
     ${CMAKE_SOURCE_DIR}/src/provider/PolishProviders.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/OpentrackReceiver.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/PxSceneHook.cpp
+    ${CMAKE_SOURCE_DIR}/src/provider/ImGuiOverlay.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/PerTruckDoorTable.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/ScsTelemetryProvider.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/TrailerCoupling.cpp
@@ -95,7 +96,8 @@ add_executable(WalkerCoreTests
     test_physx_adapter.cpp
     test_per_truck_door_table.cpp
     test_game_free_camera_shim.cpp
-    test_px_scene_hook.cpp)
+    test_px_scene_hook.cpp
+    test_imgui_overlay.cpp)
 
 target_link_libraries(WalkerCoreTests PRIVATE WalkerCoreTestLib)
 if (WIN32)
@@ -143,6 +145,51 @@ if (WALKERCORE_HAVE_MINHOOK)
     target_compile_definitions(WalkerCoreTestLib PRIVATE
         WALKERCORE_HAVE_MINHOOK=1)
     target_link_libraries(WalkerCoreTestLib PUBLIC minhook)
+endif()
+
+# Mirror the root CMakeLists.txt ImGui vendoring. When the ImGui sources
+# are present, the test build links them into WalkerCoreTestLib so
+# ImGuiOverlay's WALKERCORE_HAVE_IMGUI-gated init path actually runs.
+# When ImGui is missing, the overlay stays in scaffolding state and the
+# new lifecycle tests are stubbed out via #if defined() in test_imgui_overlay.cpp.
+# The same define + include dir must be on WalkerCoreTests itself
+# (not just WalkerCoreTestLib) so the test source files in
+# test_imgui_overlay.cpp see the same #define value and the
+# WALKERCORE_HAVE_IMGUI-gated test functions are compiled in.
+if (WALKERCORE_HAVE_IMGUI)
+    # Mirror the DLL build's ImGui static lib. The test build
+    # already builds the same ImGui sources (we do not depend
+    # on the DLL build's libimgui_vendor because tests need
+    # their own copy with WALKERCORE_TEST_NO_SDK and the
+    # WALKERCORE_GAME_FREE_CAMERA_SHIM_DISABLED defines applied
+    # to the test-only sources). The two builds share the same
+    # flag surface so the lifecycle tests exercise the same
+    # code path the DLL exercises.
+    add_library(imgui_vendor_test STATIC
+        "${WALKERCORE_IMGUI_DIR}/imgui.cpp"
+        "${WALKERCORE_IMGUI_DIR}/imgui_draw.cpp"
+        "${WALKERCORE_IMGUI_DIR}/imgui_tables.cpp"
+        "${WALKERCORE_IMGUI_DIR}/imgui_widgets.cpp"
+        "${WALKERCORE_IMGUI_DIR}/imgui_impl_dx11.cpp"
+        "${WALKERCORE_IMGUI_DIR}/imgui_impl_win32.cpp")
+    target_include_directories(imgui_vendor_test SYSTEM PUBLIC
+        "${WALKERCORE_IMGUI_DIR}")
+    target_compile_options(imgui_vendor_test PRIVATE -w)
+    if (WIN32)
+        target_link_libraries(imgui_vendor_test PUBLIC d3dcompiler dwmapi)
+    endif()
+    target_compile_definitions(WalkerCoreTestLib PRIVATE
+        WALKERCORE_HAVE_IMGUI=1)
+    target_compile_definitions(WalkerCoreTests PRIVATE
+        WALKERCORE_HAVE_IMGUI=1)
+    target_include_directories(WalkerCoreTestLib PRIVATE
+        "${WALKERCORE_IMGUI_DIR}")
+    target_include_directories(WalkerCoreTests PRIVATE
+        "${WALKERCORE_IMGUI_DIR}")
+    target_link_libraries(WalkerCoreTestLib PUBLIC imgui_vendor_test)
+    if (WIN32)
+        target_link_libraries(WalkerCoreTests PRIVATE d3dcompiler dwmapi)
+    endif()
 endif()
 
 # Real-binary integration test: when WALKERCORE_REAL_BINARY_TEST_PATH

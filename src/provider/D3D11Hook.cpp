@@ -24,6 +24,7 @@
 #include <windows.h>
 
 #include "walkercore/FrameLoop.h"
+#include "walkercore/ImGuiOverlay.h"
 #include "walkercore/Log.h"
 #include "walkercore/PerFrame.h"
 #include "walkercore/PerFrameThread.h"
@@ -105,6 +106,38 @@ ID3D11DeviceContext *g_context = nullptr;
 // TRUE once the Present vtable entry has been patched.
 bool g_present_hooked = false;
 bool g_resize_buffers_hooked = false;
+
+// Find the top-level window owned by the current process. Used
+// to wire ImGui_ImplWin32_Init to the game's HWND. The game
+// window is almost always the foreground window when SCS
+// plugins load (the loader runs the telemetry after graphics
+// init), but a foreground-only lookup would miss minimised
+// sessions, so we fall back to EnumWindows +
+// GetWindowThreadProcessId.
+struct FindGameWindowContext {
+    DWORD pid;
+    HWND result;
+};
+
+static BOOL CALLBACK FindGameWindowEnumProc(HWND hwnd, LPARAM lparam) {
+    auto *ctx = reinterpret_cast<FindGameWindowContext *>(lparam);
+    DWORD wpid = 0;
+    GetWindowThreadProcessId(hwnd, &wpid);
+    if (wpid != ctx->pid) return TRUE;  // keep enumerating
+    // Skip invisible windows (the foreground game window is
+    // always WS_VISIBLE). Some games have a hidden owner
+    // window that GetParent(hwnd) != nullptr would catch, but
+    // the visible filter is sufficient for ATS / ETS2.
+    if (!IsWindowVisible(hwnd)) return TRUE;
+    ctx->result = hwnd;
+    return FALSE;  // stop enumerating
+}
+
+HWND FindGameWindowHandle() {
+    FindGameWindowContext ctx{GetCurrentProcessId(), nullptr};
+    EnumWindows(&FindGameWindowEnumProc, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.result;
+}
 
 // Cached swap-chain aspect, populated by HookedResizeBuffers (and
 // by HookedPresent's first call as a fallback). The sentinel -1.0
@@ -196,6 +229,14 @@ HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain *self,
         walker_exit_per_frame_tick();
     }
 
+    // M11 ImGui overlay. Render AFTER the per-frame tick so the
+    // walker's walk-entered counter and the F10 toggle state are
+    // current when the overlay draws its status line. No-op when
+    // the overlay is disabled (default), the D3D11 device has not
+    // been captured, or WALKERCORE_HAVE_IMGUI=0. Mirrors the
+    // D3D12Hook path's symmetric RenderFrameIfEnabled call.
+    walkercore::RenderImGuiFrameIfEnabled();
+
     // Chain to the original. We deliberately do NOT modify any D3D state
     // here yet — pushing view/projection constants into the game's shader
     // pipeline is the M2 lander's next deliverable. The walker camera
@@ -285,6 +326,15 @@ HRESULT WINAPI HookedCreateDeviceAndSwapChain(
             g_swap_chain = *swap_chain;
         }
         if (device != nullptr && *device != nullptr) {
+            // If the game is replacing an existing D3D11 device
+            // (rare but possible on graphics-restart), release the
+            // ImGui GPU resources first. The new device init comes
+            // through OnD3D11DeviceCaptured below. This is the
+            // D3D11 equivalent of IDXGISwapChain::ResizeBuffers
+            // freeing the old back buffers.
+            if (g_device != nullptr && g_device != *device) {
+                walkercore::OnD3D11DeviceLost();
+            }
             g_device = *device;
             // GetImmediateContext AddRef's the context. We must release
             // our extra reference on uninstall, but not the device/swap
@@ -301,6 +351,19 @@ HRESULT WINAPI HookedCreateDeviceAndSwapChain(
             g_device, g_swap_chain,
             static_cast<unsigned long long>(g_swap_chain_gen));
         HookPresent(g_swap_chain);
+
+        // M11 ImGui overlay. Initialize now that we have a D3D11
+        // device + context + swap chain. The HWND comes from
+        // EnumWindows (the game's top-level window for the current
+        // process). When EnumWindows fails (rare — headless
+        // services, dedicated server builds) we pass nullptr and
+        // the overlay still creates the ImGui context but stays
+        // supported=false so the render path is off.
+        HWND game_hwnd = nullptr;
+        if (swap_chain != nullptr && *swap_chain != nullptr) {
+            game_hwnd = FindGameWindowHandle();
+        }
+        walkercore::OnD3D11DeviceCaptured(g_device, g_context, game_hwnd);
     }
     return hr;
 }
@@ -386,6 +449,13 @@ void D3D11Hook::Uninstall() {
     if (!installed_) {
         return;
     }
+    // M11 ImGui overlay. Shutdown BEFORE we release the D3D11
+    // context reference so the ImGui_ImplDX11_Shutdown can still
+    // call context->Release on the font texture view. After this
+    // call, the ImGui context is destroyed and the render path
+    // becomes a no-op (RenderImGuiFrameIfEnabled checks the
+    // supported_ flag and skips).
+    walkercore::ShutdownImGuiOverlay();
 #if defined(WALKERCORE_HAVE_MINHOOK)
     if (g_present_hooked) {
         // Only disable OUR hooks (D3D11 lander). The D3D12 lander

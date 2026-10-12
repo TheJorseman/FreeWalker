@@ -101,6 +101,7 @@ add_library(WalkerCore SHARED
     src/provider/PolishProviders.cpp
     src/provider/OpentrackReceiver.cpp
     src/provider/PxSceneHook.cpp
+    src/provider/ImGuiOverlay.cpp
     src/provider/ScsTelemetryProvider.cpp
     src/provider/PerTruckDoorTable.cpp
     src/provider/TrailerCoupling.cpp
@@ -177,6 +178,65 @@ endif()
 if (WALKERCORE_HAVE_MINHOOK)
     target_link_libraries(WalkerCore PRIVATE minhook)
     target_compile_definitions(WalkerCore PRIVATE WALKERCORE_HAVE_MINHOOK=1)
+endif()
+
+# -----------------------------------------------------------------------------
+# Dear ImGui — vendored at third_party/imgui for the M11 D3D11 overlay. ImGui
+# is a single-translation-unit library built upstream by `gcc *.cpp`, so we
+# pull the six required .cpp files directly into the WalkerCore target
+# (no separate library target). The functions are hidden by default
+# (IMGUI_API is empty in imgui.h), so -fvisibility=hidden / WINDOWS_EXPORT_ALL_SYMBOLS=OFF
+# already keep them inside the DLL.
+# -----------------------------------------------------------------------------
+set(WALKERCORE_IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui" CACHE PATH
+    "Path to the vendored ImGui sources (folder with imgui.h and impl_*.cpp)")
+if (EXISTS "${WALKERCORE_IMGUI_DIR}/imgui.h"
+        AND EXISTS "${WALKERCORE_IMGUI_DIR}/imgui.cpp"
+        AND EXISTS "${WALKERCORE_IMGUI_DIR}/imgui_impl_dx11.cpp"
+        AND EXISTS "${WALKERCORE_IMGUI_DIR}/imgui_impl_win32.cpp")
+    message(STATUS "WalkerCore: linking ImGui from ${WALKERCORE_IMGUI_DIR}")
+    set(WALKERCORE_HAVE_IMGUI TRUE)
+else()
+    message(STATUS
+        "WalkerCore: ImGui not vendored at ${WALKERCORE_IMGUI_DIR}. "
+        "M11 overlay stays in scaffolding state (class API + ABI + INI gate "
+        "still ship; only the D3D11 Present-path rendering is gated off).")
+    set(WALKERCORE_HAVE_IMGUI FALSE)
+endif()
+if (WALKERCORE_HAVE_IMGUI)
+    target_compile_definitions(WalkerCore PRIVATE WALKERCORE_HAVE_IMGUI=1)
+    # Build Dear ImGui as a static library with relaxed warnings.
+    # The upstream code triggers -Wold-style-cast, -Wsign-conversion,
+    # -Wconversion, -Wnull-dereference, and -Wshadow, all of which
+    # we treat as errors in the rest of the codebase. The ImGui
+    # .cpp files include each other and the vendored headers via
+    # "..." form so the IMGUI_DIR include must be PUBLIC. SYSTEM
+    # suppresses the diagnostic stream for the included headers,
+    # and -w on the compile options silences diagnostics from
+    # the .cpp translation units themselves.
+    add_library(imgui_vendor STATIC
+        "${WALKERCORE_IMGUI_DIR}/imgui.cpp"
+        "${WALKERCORE_IMGUI_DIR}/imgui_draw.cpp"
+        "${WALKERCORE_IMGUI_DIR}/imgui_tables.cpp"
+        "${WALKERCORE_IMGUI_DIR}/imgui_widgets.cpp"
+        "${WALKERCORE_IMGUI_DIR}/imgui_impl_dx11.cpp"
+        "${WALKERCORE_IMGUI_DIR}/imgui_impl_win32.cpp")
+    target_include_directories(imgui_vendor SYSTEM PUBLIC
+        "${WALKERCORE_IMGUI_DIR}")
+    target_compile_options(imgui_vendor PRIVATE -w)
+    if (WIN32)
+        # ImGui's D3D11 backend (imgui_impl_dx11.cpp) calls
+        # D3DCompile for shader compilation in CreateDeviceObjects
+        # (font atlas upload). The Win32 backend
+        # (imgui_impl_win32.cpp) calls DwmIsCompositionEnabled /
+        # DwmGetColorizationColor / DwmEnableBlurBehindWindow for
+        # window-composition-aware styling. Both libraries are
+        # system DLLs; we link them statically into the import
+        # table via the standard MinGW .a libs. PUBLIC so the
+        # WalkerCore target also picks them up.
+        target_link_libraries(imgui_vendor PUBLIC d3dcompiler dwmapi)
+    endif()
+    target_link_libraries(WalkerCore PRIVATE imgui_vendor)
 endif()
 
 # M7 lander: opentrack UDP receiver uses Winsock2 (Windows-only).

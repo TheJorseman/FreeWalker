@@ -45,7 +45,7 @@ The M-landers are:
 | M8 Lander | Real fuel-station prefab list + SCS fuel channels | Not yet started (RE of SCS `prefab/list_station` required; not yet wired because that RE needs a live debugging session against `amtrucks.exe`). |
 | M9 Lander | Real trailer-attach API + per-trailer king-pin offsets | **Partial**. `CouplingProvider` tracks the live `hook_position` from the SCS configuration event and uses it to derive per-step waypoints (ApproachToKingPin / LowerLandingGear / ConnectAirLines / RaiseLandingGear) instead of fixed placeholders. `walker_dump_coupling()` reports the active step + progress + waypoint on F12. |
 | M10 Lander | Vehicle-impact normal from PhysX collision results | **Partial**. `KnockoutProvider::Tick` logs the per-angle collision direction (TMRealWalk-style probe line: `KnockoutProvider: collision direction (angle=... deg, normal=...)`). `walker_dump_knockout()` reports the live state + magnitude-normalized impact direction + config thresholds (vel-change, snap-re-prime, recovery, fall-height) on F12. The hook into `PhysXAdapter::SphereSweep`'s contact normal remains — M3 runtime queries must be live before the hook can replace the velocity-change heuristic. |
-| M11 Lander | Dear ImGui integration under D3D11 | Not yet started (requires vendored Dear ImGui under `third_party/imgui`; the renderer in `SettingsMenu.cpp` is the existing console-style path). |
+| M11 Lander | Dear ImGui integration under D3D11 | **D3D11 integration landed**. Dear ImGui v1.91 vendored + linked into both DLL and test builds via `imgui_vendor` static lib (`-w` warnings). `WALKERCORE_HAVE_IMGUI=1` set; 6 internal headers (`imgui_internal.h`, `imconfig.h`, `imstb_*`) added. `ImGuiOverlay` class extended with full D3D11 lifecycle (InitializeForD3D11Device / OnDeviceLost / OnDeviceCreated / RenderFrameIfEnabled / Shutdown); `D3D11Hook::HookedCreateDeviceAndSwapChain` calls `OnD3D11DeviceCaptured` (with `FindGameWindowHandle` EnumWindows helper); `HookedPresent` calls `RenderImGuiFrameIfEnabled` after the per-frame tick. ABI contract: 21 → 27 (6 new: `walker_imgui_overlay_version`, `walker_imgui_overlay_frames_rendered`, `walker_shutdown_imgui_overlay`, `walker_on_d3d11_device_captured`, `walker_on_d3d11_device_lost`, `walker_render_imgui_frame_if_enabled`). 6 new unit tests pin the lifecycle + version + null-safety contracts. |
 
 All non-lander modules are written and the test scaffold is in place; the
 compilation status depends on the user's toolchain.
@@ -354,15 +354,124 @@ channel or memory scan) to a `TruckDoorConfig`.
 
 ### M11 Lander — Dear ImGui
 
-**File to implement:** `src/workflow/SettingsMenu.cpp`.
+**Status: D3D11 Present-path integration landed.** The full UI
+design (camera preview, settings menu re-skin, real-time FSM
+state) is out of scope for this commit — the goal of the
+integration commit is to wire the ImGui context + D3D11 backend
+into the existing D3D11 Present hook so the overlay actually
+renders on top of the game's swap chain. Subsequent commits
+extend the rendered content; the plumbing is now in place.
 
-- Add Dear ImGui (github.com/ocornut/imgui, MIT) under `third_party/imgui`.
-- In `SettingsMenu::Render`, build the menu using ImGui. The widget set
-  is the existing `SetSliderValue / SetBoolValue / SetKeyBinding`
-  setters — keep the API; only the renderer changes.
-- Inject the menu after the game's Present. The M2 lander's
-  "after Present, before IDXGISwapChain::Present returns" hook is the
-  right place.
+**What ships in this commit (M11 D3D11 integration):**
+
+- `WALKERCORE_HAVE_IMGUI` build flag + ImGui static library
+  `imgui_vendor` (CMake `add_library STATIC` with relaxed
+  `-w` warnings to absorb the upstream C-style casts / sign
+  conversions). Both the DLL build and the test build link the
+  six ImGui sources (`imgui.cpp`, `imgui_draw.cpp`,
+  `imgui_tables.cpp`, `imgui_widgets.cpp`, `imgui_impl_dx11.cpp`,
+  `imgui_impl_win32.cpp`) plus the three vendored internal
+  headers (`imgui_internal.h`, `imconfig.h`, `imstb_*`).
+- `include/walkercore/ImGuiOverlay.h` extended with the D3D11
+  device lifecycle: `InitializeForD3D11Device(device, context,
+  hwnd)`, `OnDeviceLost`, `OnDeviceCreated`, `RenderFrameIfEnabled`,
+  `Shutdown`, plus `frames_rendered()` + `ImGuiVersionString()`
+  accessors. Process-wide singleton routed through
+  `OnD3D11DeviceCaptured` / `OnD3D11DeviceLost` /
+  `RenderImGuiFrameIfEnabled` / `ShutdownImGuiOverlay` free
+  functions in the `walkercore` namespace.
+- `src/provider/ImGuiOverlay.cpp` now creates the ImGui
+  context + Win32 + D3D11 backends on first device capture
+  (with `EnumWindows`-resolved HWND), invalidates / re-creates
+  GPU resources on device replacement, and runs the
+  `ImGui::NewFrame` → status window → `ImGui::Render` →
+  `ImGui_ImplDX11_RenderDrawData` cycle inside the per-frame
+  `RenderFrameIfEnabled` path. The default render is a small
+  top-left status window with the ImGui version + walk counters
+  + frame counter so deploy-side analysts can confirm the
+  rendering path is firing.
+- `src/provider/D3D11Hook.cpp` extended with `FindGameWindowHandle`
+  (EnumWindows + `GetWindowThreadProcessId` matching the current
+  PID + `IsWindowVisible` filter) and three new wire-up points:
+  - `HookedCreateDeviceAndSwapChain` calls
+    `walkercore::OnD3D11DeviceLost` when the device pointer
+    changes (rare — game recreating the D3D11 device), then
+    `walkercore::OnD3D11DeviceCaptured(device, context, hwnd)`
+    to spin up the ImGui context.
+  - `HookedPresent` calls `walkercore::RenderImGuiFrameIfEnabled()`
+    AFTER `walker_try_enter_per_frame_tick()` returns. Render
+    runs on the game thread, after the per-frame simulation
+    tick, so the overlay's status line is current.
+  - `Uninstall` calls `walkercore::ShutdownImGuiOverlay()` before
+    releasing the D3D11 context reference so the font texture
+    view can still be released cleanly.
+- 6 new ABI exports in `include/walkercore/PerFrame.h`:
+  `walker_imgui_overlay_version`,
+  `walker_imgui_overlay_frames_rendered`,
+  `walker_shutdown_imgui_overlay`,
+  `walker_on_d3d11_device_captured`,
+  `walker_on_d3d11_device_lost`,
+  `walker_render_imgui_frame_if_enabled`. ABI contract: 21 → 27
+  total (the 3 M11 scaffolding exports are still there; this
+  commit adds 6 more).
+- `walker_dump_imgui_overlay` now also reports the ImGui
+  version string and the per-DLL-load `frames_rendered` counter
+  so analysts can confirm the Present hook is actually
+  rendering. `walker_dump_state` picks up the new line
+  automatically through the existing M11 overlay block.
+- 6 new unit tests in `tests/test_imgui_overlay.cpp`:
+  - `TestImGuiOverlayVersionStringIsNonNull` — pins the
+    version-string contract for both vendored + scaffolding
+    builds.
+  - `TestImGuiOverlayInitializeRefusesNullDevice` — class
+    rejects null device/context, supported stays false.
+  - `TestImGuiOverlayInitializeIsIdempotent` — second init
+    call after first failure stays safe.
+  - `TestImGuiOverlayRenderNoOpWhenDisabled` — frame counter
+    stays at 0 when enabled=false.
+  - `TestImGuiOverlayRenderNoOpWhenSupportedFalse` —
+    enabled=true without a D3D11 device still produces 0
+    frames.
+  - `TestImGuiOverlayOnDeviceLostIsSafeWhenUninitialized` —
+    OnDeviceLost + Shutdown on an uninitialised overlay are
+    safe.
+- `tests/CMakeLists.txt` mirrors the DLL's ImGui static-lib
+  build (with relaxed warnings) plus the `d3dcompiler` +
+  `dwmapi` link line. The `WALKERCORE_HAVE_IMGUI=1` define is
+  set on BOTH `WalkerCoreTestLib` and `WalkerCoreTests` so
+  the test source files in `test_imgui_overlay.cpp` see the
+  same `#define` value as the test lib.
+
+**What does NOT ship (follow-up commits):**
+
+- Win32 message routing for mouse input. ImGui reads cursor
+  position via `ImGui_ImplWin32_NewFrame()` which needs a
+  `WNDPROC` hook. The current input hook only tracks key state;
+  adding mouse tracking for ImGui is its own small change.
+- The actual UI content (camera preview, settings menu re-skin,
+  real-time FSM state). The current overlay shows a single
+  status line ("WalkerCore v0.0.1 (imgui 1.91.5)" + walk
+  counters + frame counter) so deploy-side analysts can confirm
+  the render path is firing. The UI content work is its own
+  follow-up.
+
+**When the user enables the overlay:**
+
+`[m11] imgui_overlay = true` in `%APPDATA%\WalkerCore\WalkerCore.ini`
++ game restart. F12 in-game confirms:
+- `walker_dump_imgui_overlay` reports `enabled=true` +
+  `supported=true` (after the D3D11 hook captures the device)
+  + `imgui version=1.91.5` + `frames_rendered=N` (N>0 after
+  the first frame).
+- `walker_dump_state` shows the new `imgui overlay` block with
+  the same flags + counters.
+
+Game log should show:
+- `ImGuiOverlay: enabled=1 (set [m11] imgui_overlay = true in
+  WalkerCore.ini to keep)`
+- `D3D11Hook: captured device <addr> swap chain <addr> (gen 1)`
+- `ImGuiOverlay: initialized (device=<addr> context=<addr>
+  hwnd=<addr> imgui=1.91.5)`
 
 ## Versioning
 

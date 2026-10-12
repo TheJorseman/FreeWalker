@@ -281,6 +281,18 @@ void TestPxSceneHookObserveIgnoresZero();
 void TestPxSceneHookResetForTestingClearsState();
 void TestPxSceneHookInstallWithoutAmtrucksLeavesTargetUnreachable();
 void TestPxSceneHookInstallUninstallRoundtripIsIdempotent();
+void TestImGuiOverlayDefaultStateIsDisabled();
+void TestImGuiOverlaySetEnabledRoundTrip();
+void TestImGuiOverlayOnEnterWalkingIncrementsCounter();
+void TestImGuiOverlayOnExitWalkingIncrementsCounter();
+void TestImGuiOverlayCountersStayIndependent();
+void TestImGuiOverlayResetForTestingIsSafe();
+void TestImGuiOverlayVersionStringIsNonNull();
+void TestImGuiOverlayInitializeRefusesNullDevice();
+void TestImGuiOverlayInitializeIsIdempotent();
+void TestImGuiOverlayRenderNoOpWhenDisabled();
+void TestImGuiOverlayRenderNoOpWhenSupportedFalse();
+void TestImGuiOverlayOnDeviceLostIsSafeWhenUninitialized();
 void TestApplyOverrideCabinBoxPatch();
 void TestTruckDoorConfigAppliesOverride();
 
@@ -812,6 +824,18 @@ int main() {
     RUN_TEST(walkercore::TestPxSceneHookResetForTestingClearsState);
     RUN_TEST(walkercore::TestPxSceneHookInstallWithoutAmtrucksLeavesTargetUnreachable);
     RUN_TEST(walkercore::TestPxSceneHookInstallUninstallRoundtripIsIdempotent);
+    RUN_TEST(walkercore::TestImGuiOverlayDefaultStateIsDisabled);
+    RUN_TEST(walkercore::TestImGuiOverlaySetEnabledRoundTrip);
+    RUN_TEST(walkercore::TestImGuiOverlayOnEnterWalkingIncrementsCounter);
+    RUN_TEST(walkercore::TestImGuiOverlayOnExitWalkingIncrementsCounter);
+    RUN_TEST(walkercore::TestImGuiOverlayCountersStayIndependent);
+    RUN_TEST(walkercore::TestImGuiOverlayResetForTestingIsSafe);
+    RUN_TEST(walkercore::TestImGuiOverlayVersionStringIsNonNull);
+    RUN_TEST(walkercore::TestImGuiOverlayInitializeRefusesNullDevice);
+    RUN_TEST(walkercore::TestImGuiOverlayInitializeIsIdempotent);
+    RUN_TEST(walkercore::TestImGuiOverlayRenderNoOpWhenDisabled);
+    RUN_TEST(walkercore::TestImGuiOverlayRenderNoOpWhenSupportedFalse);
+    RUN_TEST(walkercore::TestImGuiOverlayOnDeviceLostIsSafeWhenUninitialized);
 
     // M9 SCS configuration event + CouplingProvider real-hook probes.
     RUN_TEST(walkercore::TestScsTelemetryProviderRegisterEventsNullIsSafe);

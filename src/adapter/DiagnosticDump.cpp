@@ -28,6 +28,7 @@
 #include "walkercore/FuelPump.h"
 #include "walkercore/GameFreeCameraShim.h"
 #include "walkercore/PxSceneHook.h"
+#include "walkercore/ImGuiOverlay.h"
 #include "walkercore/InputHook.h"
 #include "walkercore/InputState.h"
 #include "walkercore/Knockout.h"
@@ -99,6 +100,11 @@ GameFreeCameraShim *g_game_free_camera_shim = nullptr;
 // instance pointer, and addActor call count so a deploy-side
 // analyst can confirm the runtime hook fired.
 PxSceneHook *g_px_scene_hook = nullptr;
+// M11 ImGui overlay mirror. Wired by PluginEntry at
+// scs_telemetry_init time; null until then. Read by
+// walker_dump_imgui_overlay() to surface the enabled / supported
+// flags + the walks_entered / walks_exited counters.
+ImGuiOverlay *g_imgui_overlay = nullptr;
 // M5 per-truck door config mirror. The model_id and resolved
 // TruckDoorConfig are pushed from PluginEntry alongside the FSM
 // SetDoorConfig call. The mirror defaults to "(no config yet)" until
@@ -211,6 +217,9 @@ void SetGameFreeCameraShim(const GameFreeCameraShim *g) {
 }
 void SetPxSceneHook(const PxSceneHook *h) {
     g_px_scene_hook = const_cast<PxSceneHook *>(h);
+}
+void SetImGuiOverlay(const ImGuiOverlay *o) {
+    g_imgui_overlay = const_cast<ImGuiOverlay *>(o);
 }
 void SetPerTruckDoor(const char *model_id, size_t model_id_len,
                      const TruckDoorConfig *cfg) {
@@ -1286,4 +1295,73 @@ extern "C" __declspec(dllexport) void walker_dump_pxscene(void) {
         static_cast<unsigned long long>(h->captured_instance()));
     WALKERCORE_LOG_INFO("addActor calls      : %d", h->add_actor_calls());
     WALKERCORE_LOG_INFO("--- end PxScene hook ---");
+}
+
+// --- M11 ImGui overlay -------------------------------------------------
+
+extern "C" __declspec(dllexport) int walker_imgui_overlay_supported(void) {
+    using namespace walkercore;
+    if (g_imgui_overlay == nullptr) {
+        return 0;
+    }
+    return g_imgui_overlay->isSupported() ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) void
+walker_imgui_overlay_set_enabled(int enabled) {
+    using namespace walkercore;
+    if (g_imgui_overlay == nullptr) return;
+    g_imgui_overlay->SetEnabled(enabled != 0);
+}
+
+extern "C" __declspec(dllexport) void walker_dump_imgui_overlay(void) {
+    using namespace walkercore;
+
+    auto bool_str = [](bool b) -> const char * { return b ? "true" : "false"; };
+
+    WALKERCORE_LOG_INFO("--- WalkerCore ImGui overlay ---");
+    if (g_imgui_overlay == nullptr) {
+        WALKERCORE_LOG_INFO("overlay             : (not initialized)");
+        WALKERCORE_LOG_INFO("--- end ImGui overlay ---");
+        return;
+    }
+    const ImGuiOverlay *o = g_imgui_overlay;
+    WALKERCORE_LOG_INFO("enabled             : %s",
+                        bool_str(o->isEnabled()));
+    WALKERCORE_LOG_INFO("supported           : %s",
+                        bool_str(o->isSupported()));
+    WALKERCORE_LOG_INFO("walks_entered       : %d", o->walks_entered());
+    WALKERCORE_LOG_INFO("walks_exited        : %d", o->walks_exited());
+    WALKERCORE_LOG_INFO("imgui version       : %s", o->ImGuiVersionString());
+    WALKERCORE_LOG_INFO("frames_rendered     : %d", o->frames_rendered());
+    WALKERCORE_LOG_INFO("--- end ImGui overlay ---");
+}
+
+extern "C" __declspec(dllexport) const char *walker_imgui_overlay_version(void) {
+    return walkercore::ImGuiOverlay::ImGuiVersionString();
+}
+
+extern "C" __declspec(dllexport) unsigned long long
+walker_imgui_overlay_frames_rendered(void) {
+    return static_cast<unsigned long long>(
+        walkercore::ImGuiOverlay::TestRenderCount());
+}
+
+extern "C" __declspec(dllexport) void walker_shutdown_imgui_overlay(void) {
+    walkercore::ShutdownImGuiOverlay();
+}
+
+extern "C" __declspec(dllexport) int walker_on_d3d11_device_captured(
+    void *device, void *context, void *hwnd) {
+    using namespace walkercore;
+    OnD3D11DeviceCaptured(device, context, hwnd);
+    return (g_imgui_overlay != nullptr && g_imgui_overlay->isSupported()) ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) void walker_on_d3d11_device_lost(void) {
+    walkercore::OnD3D11DeviceLost();
+}
+
+extern "C" __declspec(dllexport) void walker_render_imgui_frame_if_enabled(void) {
+    walkercore::RenderImGuiFrameIfEnabled();
 }

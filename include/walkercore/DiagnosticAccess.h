@@ -35,6 +35,7 @@ struct TruckDoorConfig;
 class CouplingProvider;
 class GameFreeCameraShim;
 class PxSceneHook;
+class ImGuiOverlay;
 
 // Forward-declared so EncodeFsmLabel / FsmLabelNeedsReencode can take it
 // by value without forcing every consumer of DiagnosticAccess.h to pull
@@ -155,6 +156,12 @@ void SetGameFreeCameraShim(const GameFreeCameraShim *g);
 // report the supported flag, captured instance pointer, and the
 // addActor call count. Pass nullptr when the hook is destroyed.
 void SetPxSceneHook(const PxSceneHook *h);
+
+// Wire the M11 ImGui overlay so walker_dump_imgui_overlay() can
+// report the enabled / supported flags + the walks_entered /
+// walks_exited counters. Pass nullptr when the overlay is
+// destroyed.
+void SetImGuiOverlay(const ImGuiOverlay *o);
 
 }  // namespace diagnostic_internal
 }  // namespace walkercore

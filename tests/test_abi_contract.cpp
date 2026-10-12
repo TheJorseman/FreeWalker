@@ -177,8 +177,12 @@ void TestAbiContractDllLoads() {
         return;
     }
 
-    // 14 documented exports — must all resolve AND the DLL must export
-    // exactly these (no more, no fewer).
+    // Documented exports — must all resolve AND the DLL must export
+    // exactly these (no more, no fewer). The M11 D3D11 integration
+    // adds 6 more (version, frames_rendered, shutdown,
+    // on_d3d11_device_captured, on_d3d11_device_lost,
+    // render_imgui_frame_if_enabled) on top of the 3 M11
+    // scaffolding exports landed earlier.
     struct Export { const char *name; };
     const Export kExports[] = {
         {"DllMain"},
@@ -208,6 +212,15 @@ void TestAbiContractDllLoads() {
         {"walker_pxscene_supported"},
         {"walker_pxscene_instance"},
         {"walker_dump_pxscene"},
+        {"walker_imgui_overlay_supported"},
+        {"walker_imgui_overlay_set_enabled"},
+        {"walker_dump_imgui_overlay"},
+        {"walker_imgui_overlay_version"},
+        {"walker_imgui_overlay_frames_rendered"},
+        {"walker_shutdown_imgui_overlay"},
+        {"walker_on_d3d11_device_captured"},
+        {"walker_on_d3d11_device_lost"},
+        {"walker_render_imgui_frame_if_enabled"},
     };
     const size_t kCount = sizeof(kExports) / sizeof(kExports[0]);
 

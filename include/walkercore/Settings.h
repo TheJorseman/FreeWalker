@@ -52,6 +52,13 @@ struct WalkerSettings {
     // at runtime via the exported ABI.
     bool m2_game_free_camera_shim = false;
 
+    // M11 ImGui overlay gate. False by default — opt in via
+    // `[m11] imgui_overlay = true` in `WalkerCore.ini`. When true,
+    // the overlay renders a status HUD on top of the game's swap
+    // chain (the actual D3D11 Present-path integration is a TODO;
+    // the surface + ABI are wired in this commit).
+    bool m11_imgui_overlay = false;
+
     // Returns the same values as the inline defaults in MovementConfig +
     // KeyBindings + HeadTrackerConfig. Centralised so Save() produces a
     // known-good file even when the bound objects have not been wired yet.

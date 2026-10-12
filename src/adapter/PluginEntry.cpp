@@ -33,6 +33,7 @@
 #include "walkercore/FuelPump.h"
 #include "walkercore/GameFreeCameraShim.h"
 #include "walkercore/PxSceneHook.h"
+#include "walkercore/ImGuiOverlay.h"
 #include "walkercore/GameVersion.h"
 #include "walkercore/InputHook.h"
 #include "walkercore/InputState.h"
@@ -181,6 +182,16 @@ walkercore::GameFreeCameraShim *g_game_free_camera_shim = nullptr;
 // stays false and `isInstalled` returns true so the ABI surface
 // remains available.
 walkercore::PxSceneHook *g_px_scene_hook = nullptr;
+
+// M11 ImGui overlay. Scaffolding commit: the class API + ABI
+// surface are wired so the dump + INI gate work, but the actual
+// D3D11 Present-path integration (calling RenderImGuiFrameIfEnabled
+// from D3D11Hook::HookedPresent) is a TODO. The provider is
+// always installed (the ImGui context init is gated behind
+// WALKERCORE_HAVE_IMGUI which is off in this commit's build) and
+// `supported_` stays false until the integration lands. The user
+// can flip the INI gate + reload to opt in.
+walkercore::ImGuiOverlay *g_imgui_overlay = nullptr;
 
 // M7: FlashlightProvider tracks on/off state. Toggle is wired to the G
 // key and the right mouse button rising edges while the FSM is in
@@ -510,6 +521,14 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
       WALKERCORE_LOG_INFO(
           "M2 shim: enabled=%d (after INI reload)",
           g_game_free_camera_shim->isEnabled() ? 1 : 0);
+      // M11 ImGui overlay is also not a bound consumer; push
+      // its gate by hand when the file changed.
+      if (g_imgui_overlay != nullptr) {
+        g_imgui_overlay->SetEnabled(g_settings->current().m11_imgui_overlay);
+        WALKERCORE_LOG_INFO(
+            "M11 overlay: enabled=%d (after INI reload)",
+            g_imgui_overlay->isEnabled() ? 1 : 0);
+      }
     }
   }
 
@@ -870,6 +889,17 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   g_px_scene_hook->Install();
   walkercore::diagnostic_internal::SetPxSceneHook(g_px_scene_hook);
 
+  // M11 ImGui overlay. Scaffolding: the provider is created and
+  // mirrored to the diagnostic layer; the actual D3D11 Present-
+  // path integration is deferred (see ImGuiOverlay.h). The
+  // INI gate `[m11] imgui_overlay` controls the user-visible
+  // enabled flag; the underlying rendering path is a no-op in
+  // this commit.
+  g_imgui_overlay = new walkercore::ImGuiOverlay();
+  g_imgui_overlay->SetEnabled(
+      g_settings != nullptr && g_settings->current().m11_imgui_overlay);
+  walkercore::diagnostic_internal::SetImGuiOverlay(g_imgui_overlay);
+
   // M7: door animator. Tweens the driver's door swing angle when the
   // FSM transitions between Driving and Walking (door opens on exit,
   // closes on entry). Tick is wired in walker_per_frame_tick; we only
@@ -1133,6 +1163,17 @@ extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
     g_px_scene_hook->Uninstall();
     delete g_px_scene_hook;
     g_px_scene_hook = nullptr;
+  }
+
+  // M11 ImGui overlay. Mirror cleared first so any in-flight
+  // walker_dump_imgui_overlay() reads null instead of freed
+  // memory; then plain delete (no Uninit path because the ImGui
+  // context init is gated behind WALKERCORE_HAVE_IMGUI which is
+  // off in this commit's build).
+  walkercore::diagnostic_internal::SetImGuiOverlay(nullptr);
+  if (g_imgui_overlay != nullptr) {
+    delete g_imgui_overlay;
+    g_imgui_overlay = nullptr;
   }
 
   // M11: tear down the settings menu. Closing it first ensures any

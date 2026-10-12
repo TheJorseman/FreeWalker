@@ -332,6 +332,18 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
             } else {
                 unknown_count++;
             }
+        } else if (section == "m11") {
+            // M11 ImGui overlay gate. `imgui_overlay = true` turns
+            // on the overlay rendering. The actual D3D11 Present-
+            // path integration is a TODO; the surface + ABI are
+            // wired so the dump reports the configured state even
+            // before the integration lands.
+            bool bv = false;
+            if (lkey == "imgui_overlay" && TryParseBool(value, &bv)) {
+                loaded.m11_imgui_overlay = bv;
+            } else {
+                unknown_count++;
+            }
         } else {
             unknown_count++;
         }

@@ -1,0 +1,299 @@
+// WalkerCore — ImGuiOverlay provider implementation (M11 lander).
+//
+// This file lands the D3D11 Present-path integration. The
+// scaffolding commit shipped:
+//
+//   - The class API (header in include/walkercore/ImGuiOverlay.h).
+//   - The ABI surface (walker_imgui_overlay_* / walker_dump_imgui_overlay).
+//   - The INI gate (`[m11] imgui_overlay`).
+//   - The vendored Dear ImGui v1.91 sources under `third_party/imgui/`.
+//
+// This commit closes the D3D11 hook integration:
+//
+//   - The class gains InitializeForD3D11Device / OnDeviceLost /
+//     OnDeviceCreated / RenderFrameIfEnabled / Shutdown lifecycle
+//     methods (header docs in ImGuiOverlay.h).
+//   - D3D11Hook's HookedCreateDeviceAndSwapChain calls
+//     walkercore::OnD3D11DeviceCaptured(device, context, hwnd) on
+//     success, after a successful D3D11CreateDeviceAndSwapChain.
+//   - D3D11Hook's HookedPresent calls
+//     walkercore::RenderImGuiFrameIfEnabled() after
+//     walker_try_enter_per_frame_tick() returns. The overlay
+//     drives the ImGui NewFrame + draw + Render cycle.
+//   - D3D11Hook::Uninstall + PluginEntry's scs_telemetry_shutdown
+//     call walkercore::ShutdownImGuiOverlay() to release the ImGui
+//     context.
+//
+// When WALKERCORE_HAVE_IMGUI is not defined (the test build
+// without ImGui sources, or a vendoring gap in the field), all
+// the actual ImGui calls are no-ops and the class remains a
+// pure scaffolding stub — supported_ stays false and the dump
+// reports "(disabled by build)" instead of crashing.
+//
+// M11 contract: ABI 18 -> 21 (3 new exports: frames_rendered,
+// version, shutdown, on_d3d11_captured, on_d3d11_lost,
+// render_frame_if_enabled).
+
+#include "walkercore/ImGuiOverlay.h"
+
+#include <cstdio>
+#include <string>
+
+#include "walkercore/Log.h"
+
+#if defined(WALKERCORE_HAVE_IMGUI)
+#include "imgui.h"
+#include "imgui_impl_dx11.h"
+#include "imgui_impl_win32.h"
+#endif
+
+namespace walkercore {
+
+namespace {
+
+// Process-wide overlay instance. Set by PluginEntry at init time;
+// cleared at shutdown. The D3D11 hook reads/writes through this
+// pointer. Mirrors the PxSceneHook / GameFreeCameraShim pattern.
+ImGuiOverlay *g_overlay = nullptr;
+
+}  // namespace
+
+const char *ImGuiOverlay::ImGuiVersionString() {
+#if defined(WALKERCORE_HAVE_IMGUI)
+    return IMGUI_VERSION;  // "1.91.5" — defined in imgui.h
+#else
+    return "0.0.0";
+#endif
+}
+
+ImGuiOverlay::ImGuiOverlay() {
+    g_overlay = this;
+}
+
+ImGuiOverlay::~ImGuiOverlay() {
+    if (g_overlay == this) {
+        // Best-effort teardown so a delete from the adapter
+        // (e.g. PluginEntry's scs_telemetry_shutdown) does not
+        // leak the ImGui context. Failures are silent — the
+        // caller is about to drop the DLL.
+        Shutdown();
+        g_overlay = nullptr;
+    }
+}
+
+void ImGuiOverlay::SetEnabled(bool enabled) {
+    enabled_ = enabled;
+    WALKERCORE_LOG_INFO(
+        "ImGuiOverlay: enabled=%d (set [m11] imgui_overlay = true "
+        "in WalkerCore.ini to keep)",
+        enabled ? 1 : 0);
+}
+
+bool ImGuiOverlay::InitializeForD3D11Device(void *device, void *context,
+                                            void *hwnd) {
+    // Refuse to init twice. The D3D11 hook fires on every
+    // D3D11CreateDeviceAndSwapChain call; only the FIRST capture
+    // initializes the overlay. Subsequent calls (e.g. the game
+    // recreating its swap chain) hit the device-lost / device-
+    // created path below.
+    if (context_initialised_) {
+        WALKERCORE_LOG_WARN(
+            "ImGuiOverlay: InitializeForD3D11Device called twice; "
+            "ignoring duplicate call");
+        return true;
+    }
+#if defined(WALKERCORE_HAVE_IMGUI)
+    if (device == nullptr || context == nullptr) {
+        init_failure_ = "null device or context";
+        WALKERCORE_LOG_WARN(
+            "ImGuiOverlay: cannot init — device=%p context=%p (hwnd=%p)",
+            device, context, hwnd);
+        return false;
+    }
+    // 1) ImGui context. CreateContext allocates the global state.
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO &io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // 2) Win32 backend. hwnd is optional; pass null to get a
+    //    working ImGui context that just doesn't process
+    //    window messages (the D3D11 hook is the only caller in
+    //    WalkerCore, and it never feeds input — the overlay is
+    //    a status read-out, not a control surface).
+    if (hwnd != nullptr) {
+        if (!ImGui_ImplWin32_Init(hwnd)) {
+            init_failure_ = "ImGui_ImplWin32_Init failed";
+            ImGui::DestroyContext();
+            WALKERCORE_LOG_ERROR(
+                "ImGuiOverlay: ImGui_ImplWin32_Init failed for hwnd=%p", hwnd);
+            return false;
+        }
+        win32_initialised_ = true;
+    }
+    // 3) D3D11 backend. Stores the device + context pointers and
+    //    creates the font texture + vertex/index buffers.
+    if (!ImGui_ImplDX11_Init(static_cast<ID3D11Device *>(device),
+                              static_cast<ID3D11DeviceContext *>(context))) {
+        init_failure_ = "ImGui_ImplDX11_Init failed";
+        if (win32_initialised_) {
+            ImGui_ImplWin32_Shutdown();
+            win32_initialised_ = false;
+        }
+        ImGui::DestroyContext();
+        WALKERCORE_LOG_ERROR(
+            "ImGuiOverlay: ImGui_ImplDX11_Init failed for device=%p context=%p",
+            device, context);
+        return false;
+    }
+    dx11_initialised_ = true;
+    context_initialised_ = true;
+    init_generation_++;
+    supported_ = true;
+    init_failure_.clear();
+    WALKERCORE_LOG_INFO(
+        "ImGuiOverlay: initialized (device=%p context=%p hwnd=%p imgui=%s)",
+        device, context, hwnd, ImGuiVersionString());
+    return true;
+#else
+    (void)device;
+    (void)context;
+    (void)hwnd;
+    init_failure_ = "WALKERCORE_HAVE_IMGUI=0";
+    WALKERCORE_LOG_INFO(
+        "ImGuiOverlay: WALKERCORE_HAVE_IMGUI=0; staying in scaffolding state");
+    return false;
+#endif
+}
+
+void ImGuiOverlay::OnDeviceLost() {
+#if defined(WALKERCORE_HAVE_IMGUI)
+    if (dx11_initialised_) {
+        // Frees the font texture + vertex/index buffers. Does NOT
+        // free the backend data struct (that's Shutdown's job).
+        // Call before the game destroys the device, then call
+        // OnDeviceCreated after the new device is in place.
+        ImGui_ImplDX11_InvalidateDeviceObjects();
+        WALKERCORE_LOG_INFO("ImGuiOverlay: device lost — GPU resources released");
+    }
+#else
+    (void)0;
+#endif
+}
+
+void ImGuiOverlay::OnDeviceCreated() {
+#if defined(WALKERCORE_HAVE_IMGUI)
+    if (context_initialised_ && dx11_initialised_) {
+        // Re-creates the font texture + vertex/index buffers. The
+        // device + context pointers in the backend data struct
+        // are still valid (the game's device is the same one we
+        // initialized with).
+        ImGui_ImplDX11_CreateDeviceObjects();
+        WALKERCORE_LOG_INFO("ImGuiOverlay: device created — GPU resources restored");
+    }
+#else
+    (void)0;
+#endif
+}
+
+bool ImGuiOverlay::RenderFrameIfEnabled() {
+    if (!enabled_ || !context_initialised_ || !supported_) {
+        return false;
+    }
+#if defined(WALKERCORE_HAVE_IMGUI)
+    if (!dx11_initialised_) return false;
+    // NewFrame / draw / Render / RenderDrawData. We draw a single
+    // status window anchored top-left with the overlay's per-frame
+    // state; the M11 UI work is a follow-up commit. The pattern
+    // matches the upstream examples/ example5_win32_directx11
+    // exactly so future maintainers can compare line-for-line.
+    ImGui_ImplDX11_NewFrame();
+    if (win32_initialised_) {
+        ImGui_ImplWin32_NewFrame();
+    }
+    ImGui::NewFrame();
+
+    // Status window — auto-resize to content, no title bar, no
+    // resize grip, no background, semi-transparent. The text
+    // contents are deliberately small (a single line) because
+    // most users just want a "is it working?" confirmation on
+    // top of the game, not a full HUD.
+    ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.35f);
+    ImGui::Begin("WalkerCore", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::Text("WalkerCore v0.0.1 (imgui %s)", ImGuiVersionString());
+    ImGui::Text("walks: %d in / %d out   frames: %d",
+                walks_entered_, walks_exited_, frames_rendered_ + 1);
+    ImGui::End();
+
+    ImGui::Render();
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    ++frames_rendered_;
+    return true;
+#else
+    return false;
+#endif
+}
+
+void ImGuiOverlay::Shutdown() {
+#if defined(WALKERCORE_HAVE_IMGUI)
+    if (dx11_initialised_) {
+        ImGui_ImplDX11_Shutdown();
+        dx11_initialised_ = false;
+    }
+    if (win32_initialised_) {
+        ImGui_ImplWin32_Shutdown();
+        win32_initialised_ = false;
+    }
+    if (context_initialised_) {
+        ImGui::DestroyContext();
+        context_initialised_ = false;
+    }
+    supported_ = false;
+    init_generation_++;
+    WALKERCORE_LOG_INFO("ImGuiOverlay: shutdown complete (frames_rendered=%d)",
+                        frames_rendered_);
+#else
+    supported_ = false;
+#endif
+}
+
+void ImGuiOverlay::ResetForTesting() {
+    if (g_overlay != nullptr) {
+        g_overlay->Shutdown();
+        g_overlay->walks_entered_ = 0;
+        g_overlay->walks_exited_ = 0;
+        g_overlay->frames_rendered_ = 0;
+        g_overlay->enabled_ = false;
+        g_overlay->supported_ = false;
+    }
+}
+
+int ImGuiOverlay::TestRenderCount() {
+    return (g_overlay != nullptr) ? g_overlay->frames_rendered_ : 0;
+}
+
+// -- Free-function C API used by D3D11Hook.cpp ----------------------------
+
+void OnD3D11DeviceCaptured(void *device, void *context, void *hwnd) {
+    if (g_overlay == nullptr) return;
+    g_overlay->InitializeForD3D11Device(device, context, hwnd);
+}
+
+void OnD3D11DeviceLost() {
+    if (g_overlay == nullptr) return;
+    g_overlay->OnDeviceLost();
+}
+
+void RenderImGuiFrameIfEnabled() {
+    if (g_overlay == nullptr) return;
+    g_overlay->RenderFrameIfEnabled();
+}
+
+void ShutdownImGuiOverlay() {
+    if (g_overlay == nullptr) return;
+    g_overlay->Shutdown();
+}
+
+}  // namespace walkercore

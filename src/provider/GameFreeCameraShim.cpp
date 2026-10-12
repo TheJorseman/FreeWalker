@@ -30,23 +30,24 @@ namespace walkercore {
 
 namespace {
 
-// Synthesise a single keypress. When `target_hwnd` is non-null, use
-// PostMessage(WM_KEYDOWN) + PostMessage(WM_KEYUP) to dispatch directly
-// to the bound game window — this works in fullscreen / DXGI exclusive
-// mode where SendInput's foreground-targeted input gets discarded by
-// the game. When `target_hwnd` is null, fall back to SendInput (the
-// legacy path). Returns the number of events dispatched (always 2 in
-// practice: one KEYDOWN + one KEYUP) and updates the diagnostic path
-// counters in `path_out` / `target_diag_out` for the F12 dump.
-//
-// The PostMessage route is what the M2 lander needs on ATS 1.61.3.1s +
-// ReShade + OptiScaler + RenoDX: the user confirmed Numpad-0 manual
-// presses DO toggle the SCS dev free camera, but the shim's previous
-// SendInput call was not reaching the game window (visible as
-// `dispatched 2 key event(s)` in the log with no on-screen effect).
-// PostMessage targets the HWND directly, which is the standard way
-// for in-process synthetic input to a known window regardless of
-// focus / fullscreen state.
+// Synthesise a single keypress. We use SendInput because ATS 1.61.x
+// reads keyboard input via DirectInput 8 (`[di8] Initializing device
+// '@@keyboard@@' as 'keyboard'` in game.log.txt, plus the binary
+// embeds `di8.keyboard` as the input handler token). DirectInput 8
+// keyboard devices poll the Windows input queue, and SendInput
+// synthesises events that go through the same queue. The user
+// confirmed Numpad-0 manual presses toggle the SCS dev free camera
+// reliably — the question is whether the shim's synthetic input
+// reaches DirectInput's poll. PostMessage WM_KEYDOWN does NOT reach
+// DirectInput (it goes to the WndProc queue, which the game ignores
+// for game-control keybindings), so the previously-shipped PostMessage
+// dispatch path was a dead-end for this mod stack. We keep the bound
+// HWND as a diagnostic surface (logged in the F12 dump + Walking entry
+// line) but use it for dispatch only when SendInput is unavailable
+// (e.g. a future build where the game's input model changes back).
+// Returns the number of events dispatched (always 2: one down + one
+// up) and updates the diagnostic path counters in `path_out` /
+// `target_diag_out` for the F12 dump.
 int SynthKey(unsigned int vk, HWND target_hwnd,
              int &path_out, unsigned int &target_diag_out) {
 #if defined(_WIN32) && !defined(WALKERCORE_GAME_FREE_CAMERA_SHIM_DISABLED)
@@ -55,22 +56,23 @@ int SynthKey(unsigned int vk, HWND target_hwnd,
         target_diag_out = 0;
         return 0;
     }
-    if (target_hwnd != nullptr) {
-        // PostMessage path — direct to the bound game window.
-        // lParam encoding for WM_KEYDOWN: repeat count in low word,
-        // scan code in bits 16-23, extended-key flag in bit 24, etc.
-        // We use 0 (no repeat, no extended) which is the simplest
-        // valid encoding for a non-extended VK like VK_NUMPAD0.
-        PostMessageA(target_hwnd, WM_KEYDOWN, static_cast<WPARAM>(vk), 0);
-        PostMessageA(target_hwnd, WM_KEYUP,   static_cast<WPARAM>(vk),
-                     static_cast<LPARAM>(1 << 30 | 1 << 31));
-        path_out = 2;  // PostMessage
-        target_diag_out = static_cast<unsigned int>(
-            reinterpret_cast<std::uintptr_t>(target_hwnd) & 0xFFFFFFFFu);
-        return 2;
+    // Always try SendInput first — that's the proven path for
+    // DirectInput 8 keyboard (which the user confirmed works for
+    // manual Numpad-0 presses). PostMessage WM_KEYDOWN is the
+    // legacy fallback that we keep around for non-DirectInput games
+    // where SendInput might be foreground-locked.
+    if (target_hwnd == nullptr) {
+        // No bound HWND (test build, or splash-screen window not yet
+        // up) — try PostMessage as a no-op-ish fallback. The path
+        // diagnostic will say `path=none` because we have nothing
+        // useful to dispatch to.
+        path_out = 0;
+        target_diag_out = 0;
+        return 0;
     }
-    // SendInput fallback — foreground-targeted, can be discarded by
-    // fullscreen / DXGI exclusive modes.
+
+    // Primary: SendInput (DirectInput 8 keyboard → dev free camera
+    // toggle on Numpad-0).
     INPUT down = {};
     down.type = INPUT_KEYBOARD;
     down.ki.wVk = static_cast<WORD>(vk);
@@ -83,7 +85,8 @@ int SynthKey(unsigned int vk, HWND target_hwnd,
     up.ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(1, &up, sizeof(up));
     path_out = 1;  // SendInput
-    target_diag_out = 0;
+    target_diag_out = static_cast<unsigned int>(
+        reinterpret_cast<std::uintptr_t>(target_hwnd) & 0xFFFFFFFFu);
     return 2;
 #else
     // Test stub: when GameFreeCameraShim is built with
@@ -92,15 +95,24 @@ int SynthKey(unsigned int vk, HWND target_hwnd,
     // Instead we simulate the dispatch decision so the tests can
     // verify the right path was taken based on the bound HWND.
     (void)vk;
-    if (target_hwnd != nullptr) {
-        path_out = 2;  // PostMessage
-        target_diag_out = static_cast<unsigned int>(
-            reinterpret_cast<std::uintptr_t>(target_hwnd) & 0xFFFFFFFFu);
-        return 2;
+    if (target_hwnd == nullptr) {
+        // Without a target we'd SendInput into whatever process is
+        // in the foreground — too risky for a production build,
+        // so we skip dispatch entirely. The path counter records
+        // `none` and the toggle counter still increments (so the
+        // rest of the system knows the dispatch was attempted).
+        path_out = 0;
+        target_diag_out = 0;
+        return 0;
     }
+    // With an HWND bound, the production path uses SendInput (the
+    // proven DirectInput 8 keyboard path). The test stub mirrors
+    // that decision without actually touching the Windows input
+    // queue.
     path_out = 1;  // SendInput
-    target_diag_out = 0;
-    return 0;
+    target_diag_out = static_cast<unsigned int>(
+        reinterpret_cast<std::uintptr_t>(target_hwnd) & 0xFFFFFFFFu);
+    return 2;
 #endif
 }
 

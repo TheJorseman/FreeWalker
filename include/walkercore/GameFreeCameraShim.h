@@ -64,15 +64,20 @@ public:
     void SetEnabled(bool enabled);
     bool isEnabled() const { return enabled_; }
 
-    // Bind the game window so TriggerToggle can PostMessage(WM_KEYDOWN)
-    // directly to it instead of going through SendInput. PostMessage
-    // reaches the target HWND regardless of which window is in the
-    // foreground, which is critical for fullscreen / DXGI exclusive
-    // modes where SendInput's foreground-targeted input gets discarded
-    // by the game. Bound from PluginEntry via FindGameHwnd (which
-    // enumerates top-level windows owned by the current process).
-    // Safe to call with nullptr — SynthKey then falls back to
-    // SendInput. The previous value is overwritten on every call.
+    // Bind the game window. The bound HWND is the gating condition
+    // for SynthKey dispatch — without a target we would either
+    // PostMessage into the void (no HWND to receive it) or
+    // SendInput into whatever process happens to be in the
+    // foreground (which would dispatch a stray Numpad-0 into the
+    // host environment). With a target bound we SendInput (the
+    // direct path the user confirmed works for manual Numpad-0 —
+    // ATS 1.61.x reads keyboard via DirectInput 8, which polls
+    // the Windows input queue that SendInput synthesises into).
+    // Bound from PluginEntry via FindGameHwnd (which enumerates
+    // top-level windows owned by the current process). Safe to
+    // call with nullptr — SynthKey then skips dispatch and the
+    // path counter records `none`. The previous value is
+    // overwritten on every call.
     void BindGameHwnd(HWND hwnd);
     HWND game_hwnd() const { return hwnd_; }
 
@@ -116,13 +121,12 @@ public:
     bool ConsumeEchoKey(unsigned int vk);
 
     // Diagnostic getters for the F12 dump + walking-entry log line.
-    //   last_dispatch_path() — 0 = no dispatch yet, 1 = SendInput
-    //     (foreground-targeted, can be discarded in fullscreen),
-    //     2 = PostMessage (HWND-targeted, always reaches the game).
-    //   last_postmessage_target_diag() — lower 32 bits of the HWND
-    //     used on the most recent PostMessage dispatch. Useful for
-    //     confirming "the shim targeted the right window" without
-    //     exposing the raw HWND in the public ABI.
+    //   last_dispatch_path() — 0 = no dispatch (no bound HWND),
+    //     1 = SendInput (the DirectInput 8 keyboard path).
+    //   last_postmessage_target_diag() — lower 32 bits of the
+    //     bound game HWND that SynthKey most recently targeted.
+    //     Useful for confirming "the shim targeted the right
+    //     window" without exposing the raw HWND in the public ABI.
     int last_dispatch_path() const { return last_dispatch_path_; }
     unsigned int last_postmessage_target_diag() const {
         return last_postmessage_hwnd_diag_;
@@ -155,8 +159,8 @@ private:
     unsigned int toggle_vk_ = 0x60;     // VK_NUMPAD0
     unsigned int exit_press_vk_ = 0;    // 0 = no separate exit press
     bool exiting_walking_ = false;
-    HWND hwnd_ = nullptr;              // bound game window for PostMessage path
-    int last_dispatch_path_ = 0;       // 0 = none, 1 = SendInput, 2 = PostMessage
+    HWND hwnd_ = nullptr;              // bound game window — gates dispatch
+    int last_dispatch_path_ = 0;       // 0 = none, 1 = SendInput
     unsigned int last_postmessage_hwnd_diag_ = 0;  // lower 32 bits of the HWND we last targeted
     // Echo-suppression: the keystrokes we SendInput come back to our
     // keyboard hook. We tag up to 8 echo VKs seen in the last 250 ms.

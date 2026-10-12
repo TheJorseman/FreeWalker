@@ -210,47 +210,54 @@ void TestGameFreeCameraShimBindGameHwndNullClears() {
     EXPECT_TRUE(s->game_hwnd() == nullptr);
 }
 
-void TestGameFreeCameraShimDispatchFallsBackToSendInputWithoutHwnd() {
-    // With no HWND bound, the dispatch path must be SendInput
-    // (legacy foreground-targeted). This preserves the old
-    // behaviour for callers that never bind an HWND.
+void TestGameFreeCameraShimDispatchSkipsWithoutHwnd() {
+    // With no HWND bound, the dispatch path must be `none` —
+    // SendInput is foreground-targeted and would land in whatever
+    // process is in the foreground (likely the calling shell, not
+    // the game). The shim must NOT SendInput without a target
+    // because that would dispatch a stray Numpad-0 press into the
+    // host environment.
     auto s = MakeShim();
     s->SetEnabled(true);
     s->SetSupportedForTesting(true);
     s->OnEnterWalking();
-    EXPECT_EQ(s->last_dispatch_path(), 1);  // 1 = SendInput
+    EXPECT_EQ(s->last_dispatch_path(), 0);  // 0 = none
+    EXPECT_EQ(s->toggles_dispatched(), 1);  // attempted, but not delivered
 }
 
-void TestGameFreeCameraShimDispatchUsesPostMessageWhenHwndBound() {
-    // The M2 lander fix: when an HWND is bound, the dispatch path
-    // is PostMessage (HWND-targeted, works in fullscreen /
-    // exclusive). Confirms the dispatch counter still increments
-    // and the target diag records the bound HWND.
+void TestGameFreeCameraShimDispatchUsesSendInputWhenHwndBound() {
+    // The M2 lander dispatch path: when an HWND is bound, the
+    // shim uses SendInput to synthesise the Numpad-0 keypress.
+    // SendInput routes through the Windows input queue, which the
+    // game's DirectInput 8 keyboard device polls — that's the same
+    // pipeline a physical Numpad-0 keypress uses. Confirms the
+    // dispatch counter increments and the target diag records the
+    // bound HWND (for the F12 dump + Walking entry log line).
     auto s = MakeShim();
     s->SetEnabled(true);
     s->SetSupportedForTesting(true);
     s->BindGameHwnd(reinterpret_cast<HWND>(0xFEEDFACE));
     s->OnEnterWalking();
-    EXPECT_EQ(s->last_dispatch_path(), 2);  // 2 = PostMessage
+    EXPECT_EQ(s->last_dispatch_path(), 1);  // 1 = SendInput
     EXPECT_EQ(s->last_postmessage_target_diag(), 0xFEEDFACEu);
     EXPECT_EQ(s->toggles_dispatched(), 1);
 }
 
 void TestGameFreeCameraShimRebindOnEntryCatchesLateWindow() {
     // The per-frame conductor re-binds the HWND on every Walking
-    // entry when the previous bind returned null. Pin: the
-    // first OnEnterWalking with no HWND falls back to SendInput;
-    // a subsequent BindGameHwnd followed by a second OnEnterWalking
-    // flips to PostMessage.
+    // entry when the previous bind returned null. Pin: the first
+    // OnEnterWalking with no HWND skips dispatch (path=none); a
+    // subsequent BindGameHwnd followed by a second OnEnterWalking
+    // flips to SendInput (now that we have a target).
     auto s = MakeShim();
     s->SetEnabled(true);
     s->SetSupportedForTesting(true);
     s->OnEnterWalking();
-    EXPECT_EQ(s->last_dispatch_path(), 1);  // SendInput fallback
+    EXPECT_EQ(s->last_dispatch_path(), 0);  // none — no HWND
     // Simulate the late-window bind (e.g. splash screen dismissed).
     s->BindGameHwnd(reinterpret_cast<HWND>(0x12345678));
     s->OnEnterWalking();
-    EXPECT_EQ(s->last_dispatch_path(), 2);  // PostMessage
+    EXPECT_EQ(s->last_dispatch_path(), 1);  // SendInput
     EXPECT_EQ(s->last_postmessage_target_diag(), 0x12345678u);
 }
 

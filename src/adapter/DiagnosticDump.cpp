@@ -499,12 +499,15 @@ extern "C" __declspec(dllexport) void walker_dump_state(void) {
             off += static_cast<size_t>(n);
         }
         // 28 chars/line at 12-pt; 768 / 28 ≈ 27 names per row. Split
-        // every ~7 entries (≈ 200 chars) so the dump reads as a
+        // every ~4 entries (≈ 220 chars) so the dump reads as a
         // multi-row block instead of a single very long line.
+        // With the 8-entry catalog (release, addActor, simulate,
+        // shiftOrigin, sweep, raycast, overlap, removeActor) this
+        // produces [1..4] and [5..8] rows.
         WALKERCORE_LOG_INFO("physx catalog[1..4]  : %.*s",
                             220, catalog_buf);
         if (off > 220) {
-            WALKERCORE_LOG_INFO("physx catalog[5..7]  : %.*s",
+            WALKERCORE_LOG_INFO("physx catalog[5..8]  : %.*s",
                                 static_cast<int>(off - 220),
                                 catalog_buf + 220);
         }

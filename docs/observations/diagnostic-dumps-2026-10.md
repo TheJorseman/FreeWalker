@@ -42,7 +42,7 @@ max sweep distance    : 1.000 m
 max slope angle       : 0.870 rad
 disable collisions    : false
 physx runtime         : live strategy=hybrid vtable_off=0x25020A0 run=118 string_probes=4
-catalog size          : 7
+catalog size          : 8
 physx[0] release      : va=0x141AE07B6 expected_slot=2   resolved_slot=2
 physx[1] addActor     : va=0x141AE0B62 expected_slot=11  resolved_slot=11
 physx[2] simulate     : va=0x141AE4D80 expected_slot=57  resolved_slot=57
@@ -50,6 +50,7 @@ physx[3] shiftOrigin  : va=0x141AE6C28 expected_slot=117 resolved_slot=117
 physx[4] sweep        : va=0x141B06F10 expected_slot=-1  resolved_slot=-1
 physx[5] raycast      : va=0x141AE1610 expected_slot=15  resolved_slot=15
 physx[6] overlap      : va=0x141AE0F70 expected_slot=13  resolved_slot=13
+physx[7] removeActor  : va=0x141AE1C60 expected_slot=14  resolved_slot=14
 physx resolve         : tolerance=8 B min_run=100
 --- end physx ---
 ```
@@ -58,9 +59,10 @@ If `runtime` is `(no live process)` the DLL is not loaded into
 `amtrucks.exe` (e.g. the test runner, or a process where the
 `GetModuleHandleA` lookup didn't resolve the module name). The
 expected_slot column is hardcoded from offline RE on the 1.61.3.1s
-binary (catalog matches at 6 of 7 slots; sweep lives in a separate
-5-slot run at RVA 0x2507C08 so the main vtable returns -1 for it
-deliberately).
+binary (catalog matches at 7 of 8 slots: release=2, addActor=11,
+simulate=57, shiftOrigin=117, raycast=15, overlap=13,
+removeActor=14. sweep lives in a separate 5-slot run at RVA
+0x2507C08 so the main vtable returns -1 for it deliberately).
 
 ## M5 per-truck door — `walker_dump_per_truck_door`
 

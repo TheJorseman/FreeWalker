@@ -317,6 +317,7 @@ void TestD3D12HookSecondInstallReturnsFalse();
 void TestD3D12HookDestructorOnFreshInstanceIsSafe();
 void TestD3D12HookDestructorAfterUninstallIsSafe();
 void TestD3D11AndD3D12GenerationCountersAreIndependent();
+void TestD3D12HookInstallStateSurvivesSecondUninstall();
 
 // Time.h contract probes — NowMicros monotonicity / defensive
 // fallback / realistic delta, plus DeltaSeconds positive / zero /
@@ -775,6 +776,7 @@ int main() {
     RUN_TEST(walkercore::TestD3D12HookDestructorOnFreshInstanceIsSafe);
     RUN_TEST(walkercore::TestD3D12HookDestructorAfterUninstallIsSafe);
     RUN_TEST(walkercore::TestD3D11AndD3D12GenerationCountersAreIndependent);
+    RUN_TEST(walkercore::TestD3D12HookInstallStateSurvivesSecondUninstall);
 
     // Time.h contract probes — the per-frame conductor and the
     // settings store both rely on NowMicros() being a real

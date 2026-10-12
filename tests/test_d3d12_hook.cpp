@@ -111,4 +111,17 @@ void TestD3D11AndD3D12GenerationCountersAreIndependent() {
     EXPECT_TRUE((d3d12_gen == 0u) || (d3d12_gen == d3d12_gen));
 }
 
+void TestD3D12HookInstallStateSurvivesSecondUninstall() {
+    // Install + Uninstall + (do nothing) + uninstall again. The
+    // second Uninstall must not crash and must leave the state
+    // machine clean (isInstalled() == false). The point is to pin
+    // that the cache-reset block in Uninstall is idempotent and
+    // does not double-free.
+    D3D12Hook hook;
+    (void)hook.Install();
+    hook.Uninstall();
+    hook.Uninstall();
+    EXPECT_FALSE(hook.isInstalled());
+}
+
 }  // namespace walkercore

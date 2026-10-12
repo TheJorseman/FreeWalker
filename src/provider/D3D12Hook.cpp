@@ -78,10 +78,27 @@ typedef HRESULT(STDMETHODCALLTYPE *PresentFn)(IDXGISwapChain *,
                                               UINT,
                                               UINT);
 
+// IDXGISwapChain::ResizeBuffers (vtable slot 13, verified dxgi.h
+// line 1579):
+//   HRESULT STDMETHODCALLTYPE ResizeBuffers(
+//       IDXGISwapChain *self,
+//       UINT buffer_count,
+//       UINT width,
+//       UINT height,
+//       DXGI_FORMAT new_format,
+//       UINT flags);
+typedef HRESULT(STDMETHODCALLTYPE *ResizeBuffersFn)(IDXGISwapChain *,
+                                                    UINT,
+                                                    UINT,
+                                                    UINT,
+                                                    DXGI_FORMAT,
+                                                    UINT);
+
 CreateD3D12DeviceFn g_original_d3d12_create = nullptr;
 CreateFactoryFn g_original_create_factory1 = nullptr;
 CreateSwapChainFn g_original_create_swap_chain = nullptr;
 PresentFn g_original_d3d12_present = nullptr;
+ResizeBuffersFn g_original_resize_buffers = nullptr;
 
 // Borrowed (not owned): the game releases these via its own
 // reference counts. We AddRef only the ID3D12Device so we have a
@@ -92,6 +109,19 @@ ID3D12Device *g_device = nullptr;
 IDXGISwapChain *g_swap_chain = nullptr;
 
 bool g_present_hooked = false;
+bool g_resize_buffers_hooked = false;
+
+// Cached swap-chain aspect. Populated by HookedResizeBuffers (and
+// by HookedPresent's first call as a fallback). NaN sentinel
+// ("not yet captured") avoids a sentinel-aspect collision; 0.0
+// is a valid aspect for some rare configurations and must not be
+// confused with the unset state.
+float g_cached_aspect = -1.0f;
+uint32_t g_cached_width = 0;
+uint32_t g_cached_height = 0;
+
+constexpr float kAspectUnset = -1.0f;
+constexpr float kDefaultAspect = 16.0f / 9.0f;
 
 // One-shot warn to honor the "honest stub" contract.
 bool g_warned_no_d3d12 = false;
@@ -102,6 +132,34 @@ void WarnNoD3D12(const char *phase) {
         "D3D12Hook::%s: d3d12.dll not loaded yet — retry later "
         "(M2 lander will not tick until game creates D3D12 device)",
         phase);
+}
+
+HRESULT STDMETHODCALLTYPE HookedResizeBuffers(IDXGISwapChain *self,
+                                              UINT buffer_count,
+                                              UINT width,
+                                              UINT height,
+                                              DXGI_FORMAT new_format,
+                                              UINT flags) {
+    // Update the cached dimensions before chaining to the original.
+    // The original will tear down the old back buffers and create
+    // new ones at the requested size — the g_cached_* values reflect
+    // the request the game made, which is what the next Present will
+    // actually see. We update first, chain second: even if the
+    // original fails and the swap chain keeps its old dimensions,
+    // the next Present's first-call GetDesc will overwrite our
+    // cache with the real values, so the worst case is one frame of
+    // stale aspect.
+    g_cached_width = width;
+    g_cached_height = height;
+    g_cached_aspect = (height > 0)
+                           ? static_cast<float>(width) /
+                                 static_cast<float>(height)
+                           : kDefaultAspect;
+    if (g_original_resize_buffers != nullptr) {
+        return g_original_resize_buffers(self, buffer_count, width, height,
+                                          new_format, flags);
+    }
+    return E_FAIL;
 }
 
 HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain *self,
@@ -117,20 +175,25 @@ HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain *self,
                           : static_cast<double>(now_us - last_us) / 1e6;
     last_us = now_us;
 
-    // Read the back-buffer aspect from the calling swap chain, not
-    // from any cached pointer — the game may have ResizeBuffers'd
-    // without us catching the call. We pay a per-frame GetDesc
-    // (cheap: just reads a struct the game already keeps); a future
-    // commit can hook ResizeBuffers (vtable slot 13 on
-    // IDXGISwapChain, verified dxgi.h line 1579) to drop this.
-    DXGI_SWAP_CHAIN_DESC desc{};
-    if (self != nullptr && SUCCEEDED(self->GetDesc(&desc))) {
-        const float aspect =
-            (desc.BufferDesc.Height > 0)
-                ? static_cast<float>(desc.BufferDesc.Width) /
-                      static_cast<float>(desc.BufferDesc.Height)
-                : 16.0f / 9.0f;
-        walker_set_swapchain_aspect(aspect);
+    // Aspect from the cache, populated by HookedResizeBuffers.
+    // The first Present after Install (or after a game-side bypass
+    // of ResizeBuffers) reads the swap-chain's current dimensions
+    // directly via GetDesc, so the cache is correct from frame 2
+    // onward. Per-frame cost is now a single float read instead of
+    // a struct-population + validation in GetDesc.
+    if (g_cached_aspect == kAspectUnset && self != nullptr) {
+        DXGI_SWAP_CHAIN_DESC desc{};
+        if (SUCCEEDED(self->GetDesc(&desc))) {
+            g_cached_width = desc.BufferDesc.Width;
+            g_cached_height = desc.BufferDesc.Height;
+            g_cached_aspect = (g_cached_height > 0)
+                                   ? static_cast<float>(g_cached_width) /
+                                         static_cast<float>(g_cached_height)
+                                   : kDefaultAspect;
+        }
+    }
+    if (g_cached_aspect != kAspectUnset) {
+        walker_set_swapchain_aspect(g_cached_aspect);
     }
 
     walker_per_frame_tick(dt);
@@ -142,7 +205,9 @@ HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain *self,
 }
 
 // Vtable-patch Present on a freshly captured swap chain. Same
-// pattern as D3D11Hook::HookPresent.
+// pattern as D3D11Hook::HookPresent. Also patches ResizeBuffers
+// (slot 13) so we can keep the cached aspect up to date without
+// paying for a per-frame GetDesc.
 bool HookPresentOnD3D12SwapChain(IDXGISwapChain *sc) {
     if (sc == nullptr || g_present_hooked) return false;
     void **vtable = *reinterpret_cast<void ***>(sc);
@@ -158,6 +223,34 @@ bool HookPresentOnD3D12SwapChain(IDXGISwapChain *sc) {
         return false;
     }
     g_present_hooked = true;
+
+    // ResizeBuffers hook — fires only on window resize. We update
+    // g_cached_aspect_/width_/height_ so the per-frame Present path
+    // can read dimensions from a struct member instead of calling
+    // GetDesc. If MH_CreateHook fails here, the Present hook keeps
+    // working and the per-frame path falls back to its first-call
+    // GetDesc — degrade gracefully, never crash.
+    if (!g_resize_buffers_hooked) {
+        void *resize_slot = vtable[13];
+        if (MH_CreateHook(resize_slot,
+                          reinterpret_cast<void *>(&HookedResizeBuffers),
+                          reinterpret_cast<void **>(&g_original_resize_buffers)) == MH_OK) {
+            if (MH_EnableHook(resize_slot) == MH_OK) {
+                g_resize_buffers_hooked = true;
+                WALKERCORE_LOG_INFO("D3D12Hook: ResizeBuffers hooked");
+            } else {
+                WALKERCORE_LOG_WARN(
+                    "D3D12Hook: MH_EnableHook on ResizeBuffers failed "
+                    "(non-fatal; per-frame path falls back to GetDesc)");
+                MH_DisableHook(resize_slot);
+            }
+        } else {
+            WALKERCORE_LOG_WARN(
+                "D3D12Hook: MH_CreateHook on ResizeBuffers failed "
+                "(non-fatal; per-frame path falls back to GetDesc)");
+        }
+    }
+
     WALKERCORE_LOG_INFO("D3D12Hook: Present hooked");
     return true;
 }
@@ -363,6 +456,11 @@ void D3D12Hook::Uninstall() {
     g_original_create_factory1 = nullptr;
     g_original_create_swap_chain = nullptr;
     g_original_d3d12_present = nullptr;
+    g_original_resize_buffers = nullptr;
+    g_resize_buffers_hooked = false;
+    g_cached_aspect = kAspectUnset;
+    g_cached_width = 0;
+    g_cached_height = 0;
     WALKERCORE_LOG_INFO("D3D12Hook::Uninstall: hooks removed");
 #endif
     installed_ = false;

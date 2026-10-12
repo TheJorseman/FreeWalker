@@ -198,6 +198,16 @@ void TestPhysXMemoryScanRejectsShortBuffer();
 void TestPhysXMemoryScanRejectsNullBuffer();
 void TestPhysXMemoryScanRejectsAllZeroBuffer();
 
+// M3 multi-strategy detection probes — strings + signature combined.
+void TestPhysXStringsProbeFindsKnownString();
+void TestPhysXStringsProbeFindsAllKnownStrings();
+void TestPhysXStringsProbeRejectsEmptyBuffer();
+void TestPhysXStringsProbeIgnoresPartialMatch();
+void TestPhysXSignatureRunAcceptedAtThreshold();
+void TestPhysXSignatureRunRejectedBelowThreshold();
+void TestPhysXBothStrategiesHybrid();
+void TestPhysXStrategyTagIsCanonical();
+
 // M9 SCS configuration event + CouplingProvider real-hook probes.
 void TestScsTelemetryProviderRegisterEventsNullIsSafe();
 void TestScsTelemetryProviderUnregisterEventsNullIsSafe();
@@ -675,6 +685,15 @@ int main() {
     RUN_TEST(walkercore::TestPhysXMemoryScanRejectsShortBuffer);
     RUN_TEST(walkercore::TestPhysXMemoryScanRejectsNullBuffer);
     RUN_TEST(walkercore::TestPhysXMemoryScanRejectsAllZeroBuffer);
+    // M3 multi-strategy detection: strings + signature combined.
+    RUN_TEST(walkercore::TestPhysXStringsProbeFindsKnownString);
+    RUN_TEST(walkercore::TestPhysXStringsProbeFindsAllKnownStrings);
+    RUN_TEST(walkercore::TestPhysXStringsProbeRejectsEmptyBuffer);
+    RUN_TEST(walkercore::TestPhysXStringsProbeIgnoresPartialMatch);
+    RUN_TEST(walkercore::TestPhysXSignatureRunAcceptedAtThreshold);
+    RUN_TEST(walkercore::TestPhysXSignatureRunRejectedBelowThreshold);
+    RUN_TEST(walkercore::TestPhysXBothStrategiesHybrid);
+    RUN_TEST(walkercore::TestPhysXStrategyTagIsCanonical);
 
     // M9 SCS configuration event + CouplingProvider real-hook probes.
     RUN_TEST(walkercore::TestScsTelemetryProviderRegisterEventsNullIsSafe);

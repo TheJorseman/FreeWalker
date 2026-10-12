@@ -88,7 +88,8 @@ add_executable(WalkerCoreTests
     test_opentrack_receiver.cpp
     test_truck_door_config_from_state.cpp
     test_time.cpp
-    test_per_frame_thread.cpp)
+    test_per_frame_thread.cpp
+    test_physx_adapter.cpp)
 
 target_link_libraries(WalkerCoreTests PRIVATE WalkerCoreTestLib)
 if (WIN32)

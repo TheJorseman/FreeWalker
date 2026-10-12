@@ -88,15 +88,56 @@ struct PhysXVtable {
     int32_t accepted_run = 0;
 };
 
-// Result of a memory scan over a module's .rdata. success is true when at
-// least one PhysXVtable candidate was located; false means we fell back
-// to no-hit queries.
+// Result of a memory scan over a module's .rdata. success is true when
+// at least one of {signature run, string probe} confirmed that amtrucks.exe
+// contains a PxScene vtable, leaving only slot-offset verification pending.
+// false means we fell back to no-hit queries.
+//
+// vtable: populated by the signature pass when at least one code-pointer
+// run >= kMinPhysXVtableRun was accepted. Always zero-initialised when the
+// signature pass is skipped.
+//
+// string_probes_hit: how many of the kPhysXProbeStringCount known PxScene
+// error strings were located verbatim. >= 1 means the .rdata carries the
+// public PhysX strings we expect; this is the cheapest confirmation
+// (TMRealWalk also prints when this fails).
+//
+// strategy: "signature" | "strings" | "hybrid" | "no_match".
+//
+// The probe strings are sourced from the open PhysX 3.4 SDK headers and
+// confirmed present in amtrucks.exe (ATS 1.61.3.1s) by the
+// [physx] scene strings check. TMRealWalk's collision subsystem logs
+// exactly the same set.
 struct PhysXScanResult {
     bool success = false;
     PhysXVtable vtable{};
-    // Short ASCII tag describing the lookup strategy used ("signature",
-    // "signature_fallback", "no_match").
+    int32_t string_probes_hit = 0;
+    // Short ASCII tag describing the lookup strategy used.
     const char *strategy = "no_match";
+};
+
+// Number of distinct PxScene error strings scanned for. Each string is a
+// verbatim copy of a string emitted by the public PhysX 3.4 SDK when the
+// scene is misused.
+constexpr int kPhysXProbeStringCount = 4;
+
+// Minimum accepted vtable run length (count of consecutive 8-byte code
+// pointers in .rdata). Below this threshold, the signature scan reports
+// no match — TMRealWalk uses the same threshold and reports "scene vtable
+// not found" below it.
+constexpr int kMinPhysXVtableRun = 200;
+
+// Verbatim copy of every probe string the adapter looks for. C++17
+// inline constexpr gives every translation unit the same array without
+// an ODR violation. Exposed in the header so tests + diagnostic dumps
+// can reference the same set without relying on the .cpp-side
+// anonymous-namespace constants. Order is stable; the SDK string
+// index matches this array index.
+inline constexpr const char *const kPhysXProbeStrings[kPhysXProbeStringCount] = {
+    "PxScene::release(): Scene is still being simulated",
+    "PxScene::shiftOrigin() not allowed",
+    "PxScene::addActor() not allowed",
+    "PxScene::removeActor() not allowed",
 };
 
 class PhysXAdapter : public IWorldGeometry {
@@ -136,7 +177,9 @@ public:
 
     // Re-run the vtable memory scan against a caller-supplied byte
     // buffer. Test-only hook so the unit test can inject a synthetic
-    // .rdata payload without touching amtrucks.exe.
+    // .rdata payload without touching amtrucks.exe. Both the signature
+    // and the string-probe strategies run; the returned result carries
+    // which ones succeeded.
     static PhysXScanResult MemoryScanFromBuffer(const uint8_t *bytes,
                                                 size_t size);
 

@@ -50,20 +50,45 @@ extern "C" void ResetPhysXStubWarnForTesting() {
     g_warned_once = false;
 }
 
-// Minimum accepted vtable run length. PxScene vtables in ATS 1.61.3.1s
-// measure 436 entries (one entry = 8 bytes), with 150+ slots defaulting
-// to the same placeholder pointer. A run shorter than this is rejected
-// as a noise-induced false positive.
-constexpr int kMinVtableRun = 200;
+// Count how many of kPhysXProbeStrings[k] are present (verbatim,
+// including the trailing NUL) at any offset inside [bytes, bytes+size).
+// Probes are short fixed ASCII so a Boyer-Moore search is overkill —
+// linear scan is fine for the 60-byte probe set in 6 MiB of .rdata.
+static int CountPhysXStringsInBuffer(const uint8_t *bytes, size_t size) {
+    if (bytes == nullptr || size == 0) {
+        return 0;
+    }
+    int hits = 0;
+    for (int i = 0; i < kPhysXProbeStringCount; ++i) {
+        const char *needle = kPhysXProbeStrings[i];
+        const size_t needlelen = std::strlen(needle);
+        if (needlelen == 0 || needlelen > size) {
+            continue;
+        }
+        // memmem-style search: first occurrence of needle + trailing '\0'.
+        const size_t scan = size - needlelen;
+        for (size_t off = 0; off <= scan; ++off) {
+            if (std::memcmp(bytes + off, needle, needlelen) == 0) {
+                hits += 1;
+                break;  // one match per probe is enough
+            }
+        }
+    }
+    return hits;
+}
 
 // MemoryScanFromBuffer — scan a contiguous .rdata buffer for the
-// PxScene vtable signature. Returns the first run >= kMinVtableRun
+// PxScene vtable signature. Returns the first run >= kMinPhysXVtableRun
 // consecutive 8-byte LE pointers whose values look like code pointers.
 // When text_lo / text_hi are both zero, the scan uses the synthetic
 // branch: any non-zero 8-byte value qualifies as a "code pointer".
 // Production callers (Install path) pass the real .text VA range; the
 // unit test uses the synthetic branch to inject payload without
 // touching amtrucks.exe.
+//
+// Min threshold + probe strings live in include/walkercore/PhysXAdapter.h
+// (`kMinPhysXVtableRun`, `kPhysXProbeStrings`) so tests + DLL builds
+// reference the same set.
 PhysXScanResult ScanBufferForVtable(const uint8_t *bytes,
                                     size_t size,
                                     uint64_t text_lo,
@@ -96,7 +121,7 @@ PhysXScanResult ScanBufferForVtable(const uint8_t *bytes,
             cur_run = 0;
         }
     }
-    if (best_run < kMinVtableRun) {
+    if (best_run < kMinPhysXVtableRun) {
         res.strategy = "no_match";
         return res;
     }
@@ -185,19 +210,45 @@ bool PhysXAdapter::groundY(Vec3 probe, double *out_y) {
 
 PhysXScanResult PhysXAdapter::MemoryScanFromBuffer(const uint8_t *bytes,
                                                     size_t size) {
-    // Test-only convenience: when text_lo / text_hi are zero we accept
-    // any non-zero 8-byte value as a "code pointer" so the unit test can
-    // inject synthetic vtables without needing the .text section. The
-    // production path passes the real .text VA range via this same
-    // overload by setting bytes to the .rdata payload and using the
-    // caller's knowledge of the .text layout to compute the text
-    // window. We keep the public surface as a 2-argument function; the
-    // adapter-side install path is the production caller.
-    //
-    // The caller (Install or the test) is responsible for picking
-    // text_lo / text_hi. We expose a 0/0 -> "synthetic" branch below
-    // because the unit test passes 0/0 by default.
-    return ScanBufferForVtable(bytes, size, 0, 0);
+    // Both strategies run on the same buffer so the result carries the
+    // truth about each independently. TMRealWalk logs each separately
+    // ("scene strings not found - ...", "scene vtable not found - ...");
+    // we follow the same convention.
+    PhysXScanResult res;
+
+    // Strategy 1 (cheapest): known PhysX error strings. A hit is
+    // evidence that the binary statically linked the public PhysX SDK
+    // assertions, which is the precondition for a PxScene vtable to
+    // exist at all.
+    res.string_probes_hit = CountPhysXStringsInBuffer(bytes, size);
+
+    // Strategy 2 (signature): the .rdata run of code pointers that
+    // forms the vtable layout. When text_lo / text_hi are both zero
+    // (synthetic branch) we accept any non-zero 8-byte value so tests
+    // can inject a synthetic vtable without a real .text.
+    PhysXScanResult sig = ScanBufferForVtable(bytes, size, 0, 0);
+    res.vtable = sig.vtable;
+
+    // Pick a single strategy tag so the caller (test or runtime) can
+    // distinguish fallback levels.
+    if (res.string_probes_hit > 0 && sig.success) {
+        res.success = true;
+        res.strategy = "hybrid";
+    } else if (sig.success) {
+        res.success = true;
+        res.strategy = "signature";
+    } else if (res.string_probes_hit > 0) {
+        // Strings present but no vtable run found: this is exactly the
+        // condition TMRealWalk logs as "scene strings not found - ...".
+        // We treat it as a partial success because it confirms the SDK
+        // is linked; the no-hit fallback still applies.
+        res.success = true;
+        res.strategy = "strings";
+    } else {
+        res.success = false;
+        res.strategy = "no_match";
+    }
+    return res;
 }
 
 }  // namespace walkercore

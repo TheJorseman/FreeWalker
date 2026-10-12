@@ -38,7 +38,7 @@ The M-landers are:
 
 | Lander | What it implements | Status |
 | --- | --- | --- |
-| M2 Lander | D3D11 Present hook + MinHook setup | **Implemented — real MinHook path active in tests and DLL**. `D3D11Hook.cpp` hooks `D3D11CreateDeviceAndSwapChain` (11-parameter real signature) and the returned `IDXGISwapChain::Present` (vtable slot 8) plus `IDXGISwapChain::ResizeBuffers` (slot 13). MinHook is vendored at `third_party/minhook/` (submodule) and built into both `WalkerCore.dll` and `WalkerCoreTestLib`. `g_swap_chain_gen` defends against swap-chain recreation; `g_cached_aspect` lets the per-frame path skip `GetDesc` after the first `ResizeBuffers` call. Test DLL build verifies the real install/exit roundtrip — see `TestD3D11HookInstallUninstallRoundtrip` for an example that exits gracefully with the `'d3d11.dll not loaded yet — retry later'` warning because the test runner is not a D3D11 host (see `tests/TestD3DHookStubs.cpp` for the no-op adapter stubs that satisfy `walker_per_frame_tick` and `walker_set_swapchain_aspect` linkage). |
+| M2 Lander | D3D11 Present hook + MinHook setup | **Implemented — real MinHook path active in tests and DLL**. `D3D11Hook.cpp` hooks `D3D11CreateDeviceAndSwapChain` (11-parameter real signature) and the returned `IDXGISwapChain::Present` (vtable slot 8) plus `IDXGISwapChain::ResizeBuffers` (slot 13). MinHook is vendored at `third_party/minhook/` (submodule) and built into both `WalkerCore.dll` and `WalkerCoreTestLib`. `g_swap_chain_gen` defends against swap-chain recreation; `g_cached_aspect` lets the per-frame path skip `GetDesc` after the first `ResizeBuffers` call. Test DLL build verifies the real install/exit roundtrip — see `TestD3D11HookInstallUninstallRoundtrip` for an example that exits gracefully with the `'d3d11.dll not loaded yet — retry later'` warning because the test runner is not a D3D11 host (see `tests/TestD3DHookStubs.cpp` for the no-op adapter stubs that satisfy `walker_per_frame_tick` and `walker_set_swapchain_aspect` linkage). **M2 long-term (renderer hijack):** pre-work landed — function `0x140C22F40` identified as the state-machine dispatcher that calls `vtable[16]` on the camera state struct (per-frame camera update). MVP remains `GameFreeCameraShim` until either (a) runtime singleton resolve or (b) static signature scan is run; see the "M2 long-term — RE pre-work" section below. |
 | M3 Lander | Real `IWorldGeometry` (PhysX SDK or memory scan) | **Catalog + slot dispatch + runtime scan done; live PxScene queries pending**. `kPhysXKnownMethods` carries 8 entries (release, addActor, simulate, shiftOrigin, sweep, raycast, overlap, **removeActor**) with absolute VAs from `scripts/physx-vta-scan/`. `ResolveKnownMethods` walks the vtable at RVA 0x25020A0 (ATS 1.61.3.1s, 118 slots) with a slot tolerance of 8 bytes and matches 7 of 8 in the main vtable (sweep lives in a separate 5-slot run at RVA 0x2507C08; removeActor=slot 14 was identified by tracing its `'PxScene::removeActor(): Actor'` error-path string). `PhysXAdapter::Install()` runs an in-memory scan against the live `amtrucks.exe` process (PE parser + `MemoryScanFromBufferWithTextRange` + `ResolveKnownMethods`) and caches the result in `PhysXAdapter::RuntimeCache`; `walker_dump_physx()` (F12 / programmatic) reports the live resolved slots. The on-disk real-binary test (`TestPhysXRealBinaryMatchesCatalog`) and the runtime-path mirror (`TestPhysXRealBinaryRuntimeScanPath`) prove the catalog matches the binary (gated by `WALKERCORE_REAL_BINARY_TEST_PATH`). Runtime `Raycast` / `SphereSweep` / `groundY` still fall back to no-hit because no live `PxScene` instance is wired — that requires hooking the game's PxScene global or RE of the SCS physics dispatcher. |
 | M5 Lander | Per-truck door geometry from real truck models | **Implemented (14 built-in rows)**. `PerTruckDoorTable::BuiltIn()` ships ATS 1.61 truck geometry (Volvo VNL 2016 / 2009, Kenworth W900/T680/T880, Peterbilt 579/389, Freightliner Cascadia / Cascadia 2018, Mack Anthem, Western Star 49X/4900, International LT/LoneStar). `TruckDoorConfigFromTruckState` matches the live `truck.placement.id` against the table and applies the per-truck offset delta on top of the generic cabin-derived placeholder. `walker_dump_per_truck_door()` reports the matched row + resolved geometry on F12. |
 | M7 Lander | Head tracker (FreeTrack + opentrack), shadow, light injection, door skeletal animation | **Partial — opentrack receiver done**. `OpentrackReceiver` listens on UDP port 4242 and pushes smoothed yaw/pitch/roll into `HeadTrackerProvider`. FreeTrack client linkage + shadow/flashlight injection still stubbed (require game memory scan or `light_source` global — see Lander contract below). |
@@ -214,6 +214,48 @@ present-hook overlay renderer lands (M11 lander, Dear ImGui via
 single-header vendor), it overlays shadows + `[F]` prompts over
 whatever camera is active — the SCS free camera for now, our
 camera later.
+
+#### M2 long-term — RE pre-work (post-M11.4 lander)
+
+Two static scans in `REA/scripts/tmrealwalk-re/` located the function
+the SCS camera uses to call the per-frame camera update:
+
+1. `find_camera_refs.py` — scans `amtrucks.exe` (53 MB stripped) for
+   strings like `g_flyspeed`, `g_debug_camera`, `free_camera`,
+   `Only supported in free camera mode`, and reports every RIP-relative
+   LEA/MOV in `.text` that targets one of those string VAs. Output:
+   `find_camera_refs.{json,txt}` — **7 refs found**, four of them
+   clustered in `0x140033xxx` (the SCS CVar registration table),
+   three single refs (`free_camera` short form @ `0x140087082`,
+   `camera_speed` @ `0x1407C4A2A`, and `"Only supported in free
+   camera mode"` @ `0x140C230C7`).
+
+2. `find_camera_function.py` + `dump_camera_window.py` — locate the
+   function containing the `0x140C230C7` ref and disassemble it. Output:
+   `find_camera_function.txt` (narrow) + `camera_function_0x140c22f40.txt`
+   (full body). Entry point `0x140C22F40` is a state-machine dispatcher
+   that, on the `state == -1` path, **calls `qword ptr [rdx + 0x80]`**
+   (i.e. `vtable slot 16`) on the camera state struct after temporarily
+   overriding yaw/pitch to `0x42B40000` (= 75.0°). That vtable slot 16
+   is the per-frame camera update.
+
+What the long-term hijack still needs (one of):
+
+- **(a) Runtime singleton resolve.** Walk the game-camera global via a
+  Ghidra-traced pointer chain at game start, read the camera state
+  struct, read its vtable, take `vtable[16]` as the hook target.
+  Requires a live debugging session against `amtrucks.exe` to capture
+  the singleton offset at boot.
+
+- **(b) Static signature scan.** Walk `.text` for the byte pattern
+  `FF 92 80 00 00 00` (`call qword ptr [rdx + 0x80]`) and
+  cross-check against callers of `0x140C22F40`. Automatable with a
+  ~100-line scanner; would yield the vtable slot 16 function VA
+  without needing a live debug session.
+
+(a) and (b) are both out of sandbox scope; the MVP `GameFreeCameraShim`
+remains the deployed path. The captured VAs in the JSON are pinned as
+evidence for whoever picks the work up next.
 
 ### M3 Lander — Real IWorldGeometry
 

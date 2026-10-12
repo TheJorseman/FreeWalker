@@ -266,6 +266,34 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
       (g_telemetry != nullptr) ? &g_telemetry->state() : &kEmptyTruckState;
   walkercore::PlayerState *player_ptr = &g_frame_loop->player();
 
+  // M5 Lander hookup: when the SCS configuration event has delivered
+  // per-truck cabin + head anchors, rebuild the door config from
+  // them and push to the FSM. This runs BEFORE Phase B (FSM
+  // update) so a TransitionOut Driving → Walking triggered this
+  // frame uses the per-truck door pivot, not the INI default.
+  //
+  // We only push when the anchors are both present (the
+  // configuration event delivers them as a single unit; partial
+  // delivery would yield a degenerate config). We do not gate on
+  // player state — the FSM holds the door config across Driving
+  // and Walking, and a per-truck swap during Driving is the
+  // expected case (player buys a new truck, drives out, the door
+  // pivot updates mid-drive before the next exit).
+  //
+  // The push is cheap: one TruckDoorConfig copy per frame at
+  // most, only when the SDK delivers new anchors (the
+  // configuration event fires once per truck swap, not per
+  // frame). We do not diff against the FSM's current config —
+  // SetDoorConfig is a struct copy, not a per-field comparison,
+  // and the configuration event is rare enough that the cost is
+  // invisible.
+  if (g_fsm != nullptr && truck_ptr->has_cabin_position &&
+      truck_ptr->has_head_position) {
+    const walkercore::TruckDoorConfig per_truck =
+        walkercore::TruckDoorConfigFromTruckState(*truck_ptr);
+    g_fsm->SetDoorConfig(per_truck);
+  }
+
   // Diagnostic dump on F12 rising edge. Lives in walker_per_frame_tick so
   // it's reachable regardless of walk mode (useful while driving too) and
   // is independent of the FSM. The InputHook clears the rising edge in

@@ -38,8 +38,8 @@ The M-landers are:
 
 | Lander | What it implements | Status |
 | --- | --- | --- |
-| M2 Lander | D3D11 Present hook + MinHook setup | **Implemented** (`D3D11Hook.cpp`, hooks `D3D11CreateDeviceAndSwapChain` and Present vtable slot 8, calls `walker_per_frame_tick(dt)` each frame). Uses the real 11-parameter signature for `D3D11CreateDeviceAndSwapChain` and a generation counter to defend against swap-chain recreation. |
-| M3 Lander | Real `IWorldGeometry` (PhysX SDK or memory scan) | **Catalog + slot dispatch + runtime scan done; live PxScene queries pending**. `kPhysXKnownMethods` carries 7 entries (release, addActor, simulate, shiftOrigin, sweep, raycast, overlap) with absolute VAs from `scripts/physx-vta-scan/`. `ResolveKnownMethods` walks the vtable at RVA 0x25020A0 (ATS 1.61.3.1s, 118 slots) with a slot tolerance of 8 bytes and matches every catalog VA. `PhysXAdapter::Install()` runs an in-memory scan against the live `amtrucks.exe` process (PE parser + `MemoryScanFromBufferWithTextRange` + `ResolveKnownMethods`) and caches the result in `PhysXAdapter::RuntimeCache`; `walker_dump_physx()` (F12 / programmatic) reports the live resolved slots. The on-disk real-binary test (`TestPhysXRealBinaryMatchesCatalog`) and the runtime-path mirror (`TestPhysXRealBinaryRuntimeScanPath`) prove the catalog matches the binary (gated by `WALKERCORE_REAL_BINARY_TEST_PATH`). Runtime `Raycast` / `SphereSweep` / `groundY` still fall back to no-hit because no live `PxScene` instance is wired — that requires hooking the game's PxScene global or RE of the SCS physics dispatcher. |
+| M2 Lander | D3D11 Present hook + MinHook setup | **Implemented — real MinHook path active in tests and DLL**. `D3D11Hook.cpp` hooks `D3D11CreateDeviceAndSwapChain` (11-parameter real signature) and the returned `IDXGISwapChain::Present` (vtable slot 8) plus `IDXGISwapChain::ResizeBuffers` (slot 13). MinHook is vendored at `third_party/minhook/` (submodule) and built into both `WalkerCore.dll` and `WalkerCoreTestLib`. `g_swap_chain_gen` defends against swap-chain recreation; `g_cached_aspect` lets the per-frame path skip `GetDesc` after the first `ResizeBuffers` call. Test DLL build verifies the real install/exit roundtrip — see `TestD3D11HookInstallUninstallRoundtrip` for an example that exits gracefully with the `'d3d11.dll not loaded yet — retry later'` warning because the test runner is not a D3D11 host (see `tests/TestD3DHookStubs.cpp` for the no-op adapter stubs that satisfy `walker_per_frame_tick` and `walker_set_swapchain_aspect` linkage). |
+| M3 Lander | Real `IWorldGeometry` (PhysX SDK or memory scan) | **Catalog + slot dispatch + runtime scan done; live PxScene queries pending**. `kPhysXKnownMethods` carries 8 entries (release, addActor, simulate, shiftOrigin, sweep, raycast, overlap, **removeActor**) with absolute VAs from `scripts/physx-vta-scan/`. `ResolveKnownMethods` walks the vtable at RVA 0x25020A0 (ATS 1.61.3.1s, 118 slots) with a slot tolerance of 8 bytes and matches 7 of 8 in the main vtable (sweep lives in a separate 5-slot run at RVA 0x2507C08; removeActor=slot 14 was identified by tracing its `'PxScene::removeActor(): Actor'` error-path string). `PhysXAdapter::Install()` runs an in-memory scan against the live `amtrucks.exe` process (PE parser + `MemoryScanFromBufferWithTextRange` + `ResolveKnownMethods`) and caches the result in `PhysXAdapter::RuntimeCache`; `walker_dump_physx()` (F12 / programmatic) reports the live resolved slots. The on-disk real-binary test (`TestPhysXRealBinaryMatchesCatalog`) and the runtime-path mirror (`TestPhysXRealBinaryRuntimeScanPath`) prove the catalog matches the binary (gated by `WALKERCORE_REAL_BINARY_TEST_PATH`). Runtime `Raycast` / `SphereSweep` / `groundY` still fall back to no-hit because no live `PxScene` instance is wired — that requires hooking the game's PxScene global or RE of the SCS physics dispatcher. |
 | M5 Lander | Per-truck door geometry from real truck models | **Implemented (14 built-in rows)**. `PerTruckDoorTable::BuiltIn()` ships ATS 1.61 truck geometry (Volvo VNL 2016 / 2009, Kenworth W900/T680/T880, Peterbilt 579/389, Freightliner Cascadia / Cascadia 2018, Mack Anthem, Western Star 49X/4900, International LT/LoneStar). `TruckDoorConfigFromTruckState` matches the live `truck.placement.id` against the table and applies the per-truck offset delta on top of the generic cabin-derived placeholder. `walker_dump_per_truck_door()` reports the matched row + resolved geometry on F12. |
 | M7 Lander | Head tracker (FreeTrack + opentrack), shadow, light injection, door skeletal animation | **Partial — opentrack receiver done**. `OpentrackReceiver` listens on UDP port 4242 and pushes smoothed yaw/pitch/roll into `HeadTrackerProvider`. FreeTrack client linkage + shadow/flashlight injection still stubbed (require game memory scan or `light_source` global — see Lander contract below). |
 | M8 Lander | Real fuel-station prefab list + SCS fuel channels | Not yet started (RE of SCS `prefab/list_station` required; not yet wired because that RE needs a live debugging session against `amtrucks.exe`). |
@@ -108,28 +108,43 @@ is true. Otherwise it calls the original `Present` unchanged.
 
 ### M2 Lander — D3D11 Present hook
 
-**File to implement:** `src/provider/D3D11Hook.cpp` (currently a stub).
+**Status: Implemented (real MinHook path active).**
 
-- Vendor MinHook from github.com/TsudaKageyo/minhook (MIT) into
-  `third_party/minhook/`.
-- Install MinHook at DllMain time (DLL_PROCESS_ATTACH).
-- Hook `IDXGISwapChain::Present`. The trampoline reads the swap-chain
-  description for aspect, calls `walker_set_swapchain_aspect(aspect)`,
-  then calls `walker_per_frame_tick(dt)`. After the tick, depending on
-  `walker_should_override_render()`, either push our view/projection via
-  `ID3D11DeviceContext::OMSetConstantBuffers` (preferred) or a constant
-  buffer the shader samples (M2 lander detail), then call the trampoline
-  `Present`.
-- Respect wrappers. If a DXGI wrapper is present (MSI Afterburner, RTSS),
-  chain to it instead of the original. Check by walking the vtable and
-  finding the topmost non-Microsoft `DllPresent`.
-- Free the hook in `DLL_PROCESS_DETACH` BEFORE the runtime unloads us.
-  Calling `MH_DisableHook(MH_ALL_HOOKS); MH_Uninitialize();` is enough.
+`src/provider/D3D11Hook.cpp` — hooks `D3D11CreateDeviceAndSwapChain` from
+the d3d11.dll export table (MinHook-vendored at `third_party/minhook/`),
+then patches the returned `IDXGISwapChain::Present` (vtable slot 8) and
+`IDXGISwapChain::ResizeBuffers` (slot 13). Each `Present` call updates
+the cached aspect ratio, calls `walker_set_swapchain_aspect(aspect)`,
+takes the per-frame CAS lock, and calls `walker_per_frame_tick(dt)`,
+then chains to the original `Present`. Cache + generation counter
+defend against swap-chain recreation between install and Present.
+
+- MinHook is vendored as a submodule at `third_party/minhook/` and
+  built into both `WalkerCore.dll` and `WalkerCoreTestLib` via the
+  `WALKERCORE_HAVE_MINHOOK=1` define. The no-op fallback compiles
+  only when the vendored copy is missing (`include/MinHook.h` absent).
+- Respect wrappers: if a DXGI wrapper is present (MSI Afterburner,
+  RTSS), chain to it instead of the original. The hook walks the
+  vtable to find the topmost non-Microsoft `DllPresent` once per
+  install; the captured swap chain is the one the game holds onto.
+- Uninstall calls `MH_DisableHook` on each individual hook target
+  (`HookedCreateDeviceAndSwapChain`, `HookedPresent`,
+  `HookedResizeBuffers`) — never `MH_ALL_HOOKS` — because the D3D12
+  lander shares this MinHook instance. Disabling all would tear out
+  the D3D12 path's swap-chain patch and blank the screen in D3D12
+  games.
+- After uninstall we release only the `ID3D11DeviceContext` reference
+  we obtained from `GetImmediateContext`. The device and swap chain
+  were returned to the game and the game owns them — releasing them
+  here would corrupt its reference counts.
 
 **Internal symbols used (declared in `PerFrame.h`):**
 `walker_per_frame_tick`, `walker_set_swapchain_aspect`, `walker_camera`,
-`walker_should_override_render`. These are C-linkage functions within
-the same DLL — see the Lander architecture section above.
+`walker_should_override_render`. These are C-linkage functions defined
+in `src/Main.cpp` of the DLL adapter layer. The test build does NOT
+link the DLL adapter layer, so `tests/TestD3DHookStubs.cpp` provides
+no-op versions so the test build can still exercise the real D3D11
+hook code paths.
 
 ### M3 Lander — Real IWorldGeometry
 

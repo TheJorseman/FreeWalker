@@ -378,6 +378,46 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     }
     WALKERCORE_LOG_INFO("Settings: loaded %s", path.c_str());
     current_ = loaded;
+
+    // Auto-migrate the M2 D3D hook gates to safe defaults. The 0c109d1
+    // lander shipped with `d3d11_hook = true` and `d3d12_hook = true`
+    // as defaults; a user who just upgraded to a build with
+    // `d3d11_hook = false` and `d3d12_hook = false` defaults still has
+    // the old values persisted in their INI file from a prior save.
+    // The file overrides the code default, so without this migration
+    // the user would still hit the amtrucks.exe+0x1d5300a `movdqa` #GP
+    // after the upgrade. The fix: if either gate is still `true`
+    // after the file parse, force to `false`, log a one-shot WARNING
+    // that names the path, and save the file back so the next load is
+    // clean. The opt-in path remains `[m2] d3d11_hook = true` for
+    // users on a known-clean stack — they will have to delete the
+    // WalkerCore.ini file (so the code defaults win on a fresh load)
+    // or accept that this auto-migration re-runs every time the file
+    // is loaded. The migration is idempotent and cheap (one boolean
+    // compare + one SaveToPath on the upgrade load only).
+    bool migrated = false;
+    if (current_.m2_d3d11_hook) {
+        WALKERCORE_LOG_WARN(
+            "Settings: [m2] d3d11_hook was true; forcing to false (ATS "
+            "1.61.3.1s + ReShade + OptiScaler + RenoDX mod stack causes "
+            "a downstream `movdqa` #GP at amtrucks.exe+0x1d5300a when the "
+            "MinHook install path is live). Edit the INI and remove the "
+            "auto-fix only on a known-clean stack.");
+        current_.m2_d3d11_hook = false;
+        migrated = true;
+    }
+    if (current_.m2_d3d12_hook) {
+        WALKERCORE_LOG_WARN(
+            "Settings: [m2] d3d12_hook was true; forcing to false (same "
+            "ATS 1.61.3.1s + ReShade + OptiScaler + RenoDX rationale as "
+            "d3d11_hook). Edit the INI to re-enable on a known-clean "
+            "stack.");
+        current_.m2_d3d12_hook = false;
+        migrated = true;
+    }
+    if (migrated) {
+        SaveToPath(path);
+    }
     ApplyAll();
 
     // Prime the mtime cache so the very next CheckFileChanged() call does

@@ -60,23 +60,29 @@ struct WalkerSettings {
     // replace the matrices the SCS state machine writes to the GPU
     // constant buffer.
     bool m2_camera_hijack = false;
-    // M2 lander: D3D11 hook gate. Default `true` to preserve the
-    // original MinHook-install path (the D3D11 hook has been live
-    // since M2 lander landed). Set `[m2] d3d11_hook = false` to
-    // skip the Install() call when the system DLL-search order or
-    // a coexisting mod stack makes the hook unsafe on this build
-    // (e.g. amtrucks.exe 1.61.3.1s + ReShade + OptiScaler + RenoDX
-    // on systems where SYSTEM32 d3d11.dll triggers a downstream
-    // `movdqa` `#GP` at RVA 0x1d5300a in the game's render path).
-    // When disabled, the M11 ImGui overlay (which targets the D3D11
-    // device capture) will surface `supported=false` until D3D12
-    // path is fixed.
-    bool m2_d3d11_hook = true;
+    // M2 lander: D3D11 hook gate. Default `false` — the original
+    // MinHook-install path (D3D11 hook has been live since M2 lander
+    // landed) is opt-in only because on the worst-known ATS mod
+    // stacks (amtrucks.exe 1.61.3.1s + ReShade + OptiScaler + RenoDX)
+    // the SYSTEM32 d3d11.dll MinHook-patch corrupts downstream
+    // 16-byte alignment and triggers a `movdqa` `#GP` at RVA
+    // 0x1d5300a in the game's render path. Shipping with the gate
+    // off by default means the worst-case stack runs out of the
+    // box. Set `[m2] d3d11_hook = true` in the INI to opt back in
+    // when the user's stack is known to be clean. When the gate is
+    // false, the Install() call is a no-op and a single "SKIPPED
+    // (INI gate [m2] d3d11_hook = false)" line is logged. The
+    // PerFrameThread (60 Hz ticker) keeps running regardless, so
+    // the FSM and per-frame sim are unaffected. The M11 ImGui
+    // overlay (which targets the D3D11 device capture) will
+    // surface `supported=false` while the gate is off, until the
+    // D3D12 path is fixed in a later lander.
+    bool m2_d3d11_hook = false;
     // M2 lander (D3D12 path): DXGI factory + Present hook gate.
-    // Default `true` for the same reason as m2_d3d11_hook. Set
-    // `[m2] d3d12_hook = false` to disable when the install path
-    // conflicts with another mod.
-    bool m2_d3d12_hook = true;
+    // Default `false` for the same reason as m2_d3d11_hook above.
+    // Set `[m2] d3d12_hook = true` in the INI to opt back in when
+    // the user's stack is known to be clean.
+    bool m2_d3d12_hook = false;
 
     // M11 ImGui overlay gate. False by default — opt in via
     // `[m11] imgui_overlay = true` in `WalkerCore.ini`. When true,

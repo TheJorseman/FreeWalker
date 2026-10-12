@@ -39,11 +39,14 @@ void TestIniRoundtrip();
 void TestIniHeadTrackerSectionParsed();
 void TestIniHeadTrackerUnknownKeyIgnored();
 // M2 lander INI gates — `[m2] d3d11_hook` + `[m2] d3d12_hook`. Default
-// `true` preserves the original D3D11 + D3D12 install path; users opt
-// out via INI when their mod stack conflicts with the SYSTEM32 d3d11.dll
-// MinHook-patch install path on ATS 1.61.3.1s.
+// `false` ships the worst-known ATS 1.61.3.1s + ReShade + OptiScaler +
+// RenoDX stack as the safe baseline. LoadFromPath auto-migrates a
+// pre-existing INI that still has the OLD default of `true`, so users
+// upgrading from a build that had `true` as the default don't keep
+// hitting the amtrucks.exe+0x1d5300a `movdqa` #GP after the upgrade.
 void TestIniM2D3DHookGatesParseAndDefault();
 void TestIniM2D3DHookGatesUnknownKeyIgnored();
+void TestIniM2D3DHookGatesAutoMigratesOldTrueValues();
 void TestApplyAllPushesEveryFieldToEveryConsumer();
 void TestWalkerFsmInitialState();
 void TestWalkerFsmDrivingToWalking();
@@ -584,13 +587,16 @@ int main() {
     RUN_TEST(walkercore::TestIniHeadTrackerSectionParsed);
     RUN_TEST(walkercore::TestIniHeadTrackerUnknownKeyIgnored);
 
-    // M2 lander INI gates — defaults = true, parse `false`, roundtrip
-    // survives Save+Load, and a typo key (e.g. `d3d_11_hook`) does NOT
-    // silently disable the install path. These are the safety net for
-    // the ATS 1.61.3.1s + ReShade + OptiScaler + RenoDX crash on
-    // amtrucks.exe+0x1d5300a (movdqa).
+    // M2 lander INI gates — defaults = false, parse `true` roundtrips
+    // through Save+Load (then the auto-migration forces to false),
+    // a typo key (e.g. `d3d_11_hook`) does NOT silently flip the
+    // gate, and a pre-existing INI with the OLD `true` default is
+    // auto-migrated to `false` on the next load. These are the
+    // safety net for the ATS 1.61.3.1s + ReShade + OptiScaler +
+    // RenoDX crash on amtrucks.exe+0x1d5300a (movdqa).
     RUN_TEST(walkercore::TestIniM2D3DHookGatesParseAndDefault);
     RUN_TEST(walkercore::TestIniM2D3DHookGatesUnknownKeyIgnored);
+    RUN_TEST(walkercore::TestIniM2D3DHookGatesAutoMigratesOldTrueValues);
 
     // Regression guard for the dump_state_vk / mouse-button round-trip —
     // the user observed "F12 only gives me a screenshot" because the

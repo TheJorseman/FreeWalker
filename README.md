@@ -6,13 +6,15 @@ Plugin DLL de caminata para Euro Truck Simulator 2 y American Truck Simulator (s
 
 Inspirado en walkers comerciales como TMRealWalk; escrito desde cero sobre el SDK público de telemetría de SCS y los headers públicos de PhysX 3.4. Sin ingeniería inversa de productos de terceros.
 
-> **Estado.** Implementación en curso. DLL compilable (`libWalkerCore.dll`, 14 exports,
-> ~2.9 MB); módulo de locomotor (M1/M2 + M4 + M6 + M8 partial) completo, con FSM
-> walker/per-frame/per-frame-conductor exhaustivamente probado en host. Los
-> landers M3 (PhysX), M5 (per-truck door config), M7 (head tracker / flashlight /
-> shadow / door-anim real feed), M9 (trailer attach), M10 (knockout desde PhysX)
-> y M11 (ImGui) están honest-stub con uno-shot warn que se degrada limpiamente
-> cuando falta la dependencia nativa. Ver
+> **Estado.** DLL compilable (`libWalkerCore.dll`, 37 exports, ~3.8 MB). Locomotor
+> (M1 + M2 MVP + M4 mouse-pump + M5 per-truck door + M6 INI) end-to-end. M7
+> opentrack + PolishProviders computan (game-side integration de sun / point
+> light / door skeletal sigue stub). M8 (station prefab) y M9 (SCS trailer
+> attach) parciales — RE-blocked sin live debugging. M10 knockout con
+> velocity-change heuristic + log de colisión (PhysX-derived collision normal
+> pendiente). M11 D3D11 ImGui overlay live con state + 2 botones interactivos
+> + PxScene live status. M3 PhysX catalog + M3.5 addActor hook activos
+> (SphereSweep/Raycast siguen no-hit sin llamada real al PxScene). Ver
 > [`docs/roadmap.md`](docs/roadmap.md) y [`docs/integration.md`](docs/integration.md).
 
 ## Requisitos
@@ -89,6 +91,36 @@ MIT — ver [`LICENSE`](LICENSE).
 
 Algunos antivirus marcan DLLs que enganchan input y D3D11 como falsos positivos.
 Si pasa, excluir `bin\win_x64\plugins\` del juego en el antivirus.
+
+## Controles (key bindings por defecto)
+
+| Tecla | Acción |
+|---|---|
+| **F10** | Toggle walk mode (Driving ↔ Walking). Cuando `[m2] game_free_camera_shim = true` está activo y `g_developer = 1` en el `config.cfg` del juego, sintetiza Numpad-0 para tomar la SCS free camera. |
+| **Ctrl + F10** | Abre / cierra el menú de settings en juego. |
+| **F** | Interact (entrar / salir de cab, fuel, coupling). |
+| **F12** | Dump completo de estado a `game.log.txt` (todos los `walker_dump_*`). |
+| **W A S D** | Caminar (W forward / S backward / A strafe left / D strafe right). |
+| **Shift** | Correr. |
+| **Ctrl** | Agacharse (default; mantener Ctrl + F10 = menu). |
+| **Space** | Saltar. |
+| **E / Q / R** | Ojos arriba / abajo / reset. |
+| **G** | Linterna. |
+| **LMB** | Zoom (mouse button). |
+| **RMB** | Linterna alterna. |
+| **Mouse** | Look (yaw + pitch). El delta se captura vía `WM_INPUT` (M4) y se integra en `FrameLoop::PhaseApplyMouseLook`. |
+| **Wheel** | Velocidad de paso (placeholder; el M4 lander lo lee). |
+
+Todas las teclas son configurables vía `[bindings]` en
+`%APPDATA%\WalkerCore\WalkerCore.ini` (M6 lander). Los defaults
+están en `include/walkercore/InputHook.h:33-50`.
+
+## INI gates
+
+| Sección | Key | Default | Descripción |
+|---|---|---|---|
+| `[m2]` | `game_free_camera_shim` | `false` | OFF por defecto. Cuando `true`, F10 sintetiza Numpad-0 para que el SCS developer free camera (`g_developer 1`) haga el toggle. Auto-detecta `g_developer` en `OneDrive\Documentos\American Truck Simulator\config.cfg` (también es_ES / OneDrive Personal). |
+| `[m11]` | `imgui_overlay` | `false` | OFF por defecto. Cuando `true`, overlay ImGui sobre el swap chain con state en vivo + 2 botones (Dump state / Dump PxScene) + PxScene live status. |
 
 ## Referencias
 

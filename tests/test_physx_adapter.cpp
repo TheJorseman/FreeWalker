@@ -335,4 +335,35 @@ void TestPhysXKnownMethodsSweepIsTheHighestVA() {
     EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[4].name, "sweep") == 0);
 }
 
+// Catalog-VA range: every catalog row must be in the
+// 0x141AD0000..0x141B20000 PhysX translation-unit range, where the
+// known PxScene methods live in amtrucks.exe. A VA outside this range
+// means the LEA-walk landed in the wrong translation unit (or the
+// heuristic was off by orders of magnitude). This is a regression
+// guard against accidentally cataloging a string from a different
+// class.
+
+void TestPhysXKnownMethodsCatalogVAsInPhysXRange() {
+    constexpr uint64_t kPhysXTULow  = 0x141AD0000ULL;
+    constexpr uint64_t kPhysXTUHigh = 0x141B20000ULL;
+    for (int i = 0; i < kPhysXKnownMethodCount; ++i) {
+        EXPECT_TRUE(kPhysXKnownMethods[i].va >= kPhysXTULow);
+        EXPECT_TRUE(kPhysXKnownMethods[i].va <  kPhysXTUHigh);
+    }
+}
+
+// Catalog-name sanity: the names we publish in kPhysXKnownMethods
+// must match the open-source PxScene 4.1 SDK method names that the
+// asserts in .text reference. This catches typos and keeps the
+// resolve-result keys in sync with what the live binary actually
+// calls.
+
+void TestPhysXKnownMethodsCatalogNamesMatchSDK() {
+    EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[0].name, "release") == 0);
+    EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[1].name, "addActor") == 0);
+    EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[2].name, "simulate") == 0);
+    EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[3].name, "shiftOrigin") == 0);
+    EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[4].name, "sweep") == 0);
+}
+
 }  // namespace walkercore

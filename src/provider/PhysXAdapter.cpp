@@ -159,6 +159,32 @@ bool PhysXAdapter::Install() {
         "PhysXAdapter::Install: partial — vtable signature scan ready "
         "(see MemoryScanFromBuffer), slot dispatch pending live PxScene "
         "verification. Queries fall back to no-hit until then.");
+    // Log the catalog so the game.log.txt carries a snapshot of which
+    // VAs the live ResolveKnownMethods will look for. The trailing
+    // [TMRealWalk-style probe] tag matches the M10 collision log so
+    // diagnostic parsers can group M3 + M10 events together.
+    char catalog_buf[512];
+    int written = std::snprintf(
+        catalog_buf, sizeof(catalog_buf),
+        "PhysXAdapter::Install: catalog has %d methods:",
+        kPhysXKnownMethodCount);
+    if (written <= 0) {
+        return true;
+    }
+    size_t off = static_cast<size_t>(written);
+    for (int m = 0; m < kPhysXKnownMethodCount && off < sizeof(catalog_buf); ++m) {
+        const int n = std::snprintf(
+            catalog_buf + off, sizeof(catalog_buf) - off,
+            "%s %s=0x%llX",
+            (m == 0 ? "" : ","),
+            kPhysXKnownMethods[m].name,
+            static_cast<unsigned long long>(kPhysXKnownMethods[m].va));
+        if (n <= 0 || static_cast<size_t>(n) >= sizeof(catalog_buf) - off) {
+            break;
+        }
+        off += static_cast<size_t>(n);
+    }
+    WALKERCORE_LOG_INFO("%s [TMRealWalk-style probe]", catalog_buf);
     return true;
 }
 

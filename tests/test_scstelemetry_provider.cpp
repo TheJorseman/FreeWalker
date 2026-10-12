@@ -66,6 +66,9 @@ void TestScsTelemetryProviderFreshStateAllHasFlagsAreFalse() {
     EXPECT_FALSE(s.has_fuel);
     EXPECT_FALSE(s.has_adblue);
     EXPECT_FALSE(s.has_hook_position);    // M9: configuration event
+    EXPECT_FALSE(s.has_cabin_position);   // M5: configuration event
+    EXPECT_FALSE(s.has_head_position);    // M5: configuration event
+    EXPECT_FALSE(s.has_model_id);         // M5: configuration event
     EXPECT_FALSE(s.has_trailer_placement); // M9: trailer.world.placement
 }
 
@@ -98,6 +101,15 @@ void TestScsTelemetryProviderFreshStateScalarFieldsAreZero() {
     EXPECT_EQ(s.hook_position.x, 0.0);
     EXPECT_EQ(s.hook_position.y, 0.0);
     EXPECT_EQ(s.hook_position.z, 0.0);
+    // M5 hooks: cabin + head anchors stay zeroed; model_id is an
+    // empty C string.
+    EXPECT_EQ(s.cabin_position.x, 0.0);
+    EXPECT_EQ(s.cabin_position.y, 0.0);
+    EXPECT_EQ(s.cabin_position.z, 0.0);
+    EXPECT_EQ(s.head_position.x, 0.0);
+    EXPECT_EQ(s.head_position.y, 0.0);
+    EXPECT_EQ(s.head_position.z, 0.0);
+    EXPECT_EQ(s.model_id[0], '\0');
     EXPECT_EQ(s.trailer_placement.position.x, 0.0);
     EXPECT_EQ(s.trailer_placement.position.y, 0.0);
     EXPECT_EQ(s.trailer_placement.position.z, 0.0);

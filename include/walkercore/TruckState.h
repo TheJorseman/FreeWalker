@@ -75,6 +75,30 @@ struct TruckState {
     bool has_hook_position = false;
     Vec3 hook_position{0.0, 0.0, 0.0};
 
+    // M5 truck configuration: cabin + head anchor positions in
+    // truck-local space. Used by TruckDoorConfig to compute the
+    // per-truck door pivot when the player exits (WalkerFsm
+    // TransitionOut Driving → Walking). Same convention as
+    // hook_position: dvector, truck-local, +X right / +Y up /
+    // +Z rear. Until the configuration event fires, both stay at
+    // zero and the per-truck door is skipped in favour of the
+    // default placeholder.
+    bool has_cabin_position = false;
+    Vec3 cabin_position{0.0, 0.0, 0.0};
+    bool has_head_position = false;
+    Vec3 head_position{0.0, 0.0, 0.0};
+
+    // M5 truck model id (e.g. "vehicle.volvo.vnl_2016" for an ATS
+    // VNL). This is the SCS_TELEMETRY_CONFIG_ATTRIBUTE_id from the
+    // configuration event, kept as a small inline buffer to avoid
+    // a separate std::string allocation in the hot path. The
+    // buffer is always null-terminated; if the SDK reports an id
+    // longer than kModelIdCapacity, we truncate. Empty string
+    // means "no id yet" (configuration event has not fired).
+    static constexpr size_t kModelIdCapacity = 64;
+    char model_id[kModelIdCapacity] = {0};
+    bool has_model_id = false;
+
     // M9 trailer world placement (telemetry.0.world.placement). The
     // trailer's pose in world space, refreshed every frame. Used by
     // the coupling provider to compute the distance from the player
@@ -117,6 +141,12 @@ inline void TruckState_Clear(TruckState &s) {
     s.has_adblue = false;
     s.has_hook_position = false;
     s.hook_position = {0.0, 0.0, 0.0};
+    s.has_cabin_position = false;
+    s.cabin_position = {0.0, 0.0, 0.0};
+    s.has_head_position = false;
+    s.head_position = {0.0, 0.0, 0.0};
+    for (size_t i = 0; i < TruckState::kModelIdCapacity; ++i) s.model_id[i] = '\0';
+    s.has_model_id = false;
     s.has_trailer_placement = false;
     s.trailer_placement = {};
     s.speed_mps = 0.0;

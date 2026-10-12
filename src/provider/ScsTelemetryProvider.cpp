@@ -251,12 +251,58 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
                 s.hook_position.z = attr->value.value_dvector.z;
                 s.has_hook_position = true;
             }
+        } else if (std::strcmp(attr->name,
+                               SCS_TELEMETRY_CONFIG_ATTRIBUTE_cabin_position) == 0) {
+            // M5 Lander partial: cabin anchor in truck-local space.
+            // Used by TruckDoorConfig to position the door pivot
+            // when the FSM transitions Driving → Walking. Until
+            // this event fires, the per-truck door is skipped in
+            // favour of the default placeholder.
+            if (attr->value.type == SCS_VALUE_TYPE_dvector) {
+                s.cabin_position.x = attr->value.value_dvector.x;
+                s.cabin_position.y = attr->value.value_dvector.y;
+                s.cabin_position.z = attr->value.value_dvector.z;
+                s.has_cabin_position = true;
+            }
+        } else if (std::strcmp(attr->name,
+                               SCS_TELEMETRY_CONFIG_ATTRIBUTE_head_position) == 0) {
+            // M5 Lander partial: head anchor in truck-local space.
+            // Used to anchor the player's seated camera. The M5
+            // door pivot reads cabin_position, not head_position;
+            // head_position is the eye-point inside the cabin.
+            if (attr->value.type == SCS_VALUE_TYPE_dvector) {
+                s.head_position.x = attr->value.value_dvector.x;
+                s.head_position.y = attr->value.value_dvector.y;
+                s.head_position.z = attr->value.value_dvector.z;
+                s.has_head_position = true;
+            }
+        } else if (std::strcmp(attr->name,
+                               SCS_TELEMETRY_CONFIG_ATTRIBUTE_id) == 0) {
+            // M5 Lander partial: truck model id (e.g.
+            // "vehicle.volvo.vnl_2016"). The id is a scs_string_t
+            // which is a `const char *`. We copy up to
+            // kModelIdCapacity - 1 bytes and null-terminate, so
+            // long ids are truncated rather than overrunning the
+            // buffer. The M5 TruckModel table can then look up
+            // the per-truck door geometry by id.
+            if (attr->value.type == SCS_VALUE_TYPE_string &&
+                attr->value.value_string.value != nullptr) {
+                const char *src = attr->value.value_string.value;
+                size_t i = 0;
+                for (; i + 1 < TruckState::kModelIdCapacity && src[i] != '\0';
+                     ++i) {
+                    s.model_id[i] = src[i];
+                }
+                s.model_id[i] = '\0';
+                s.has_model_id = (i > 0);
+            }
         }
-        // cabin_position and head_position would be useful for
-        // future M5 (per-truck door geometry) work; we deliberately
-        // do not store them here to keep the TruckState surface
-        // small. When M5 lander lands, this loop is the obvious
-        // place to extract them.
+        // brand_id, brand, fuel_capacity, adblue_capacity, etc.
+        // are exposed by the SDK but not consumed yet. The
+        // remaining attributes (forward_gear_count, rpm_limit,
+        // ...) describe the truck's powertrain and are not needed
+        // for the M5 / M9 / M11 work; the diagnostic dump can be
+        // extended later to surface them.
     }
 }
 

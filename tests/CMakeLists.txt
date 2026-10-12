@@ -86,6 +86,7 @@ add_executable(WalkerCoreTests
     test_scstelemetry_provider.cpp
     test_coupling_provider.cpp
     test_opentrack_receiver.cpp
+    test_truck_door_config_from_state.cpp
     test_time.cpp
     test_per_frame_thread.cpp)
 

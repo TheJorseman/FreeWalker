@@ -96,6 +96,95 @@ inline TruckDoorConfig DefaultTruckDoorConfig() {
     return c;
 }
 
+// M5 Lander partial: build a TruckDoorConfig from the live
+// TruckState when the SCS configuration event has delivered the
+// per-truck cabin + head anchors. The driver_seat_local is
+// sourced from head_position (the eye-point inside the cabin
+// is what the player is anchored to when seated); the
+// driver_door.local_position is computed from cabin_position
+// (door sits just forward of the cabin anchor, on the left
+// side of the truck for LHD markets).
+//
+// When the configuration event has not fired yet, the function
+// returns the default placeholder. Callers MUST check
+// `config.valid` and treat `valid = false` as "fall back to
+// DefaultTruckDoorConfig()".
+//
+// This is a partial M5: a real lander would also have a
+// per-truck table that maps `truck.model_id` (e.g.
+// "vehicle.volvo.vnl_2016") to door geometry that better matches
+// the cabin shape (the SCS cabin_position is the cabin CENTRE,
+// but the door pivot is offset from the centre by a per-truck
+// amount). The real lander table is shipped in a separate data
+// file; this function is the integration point the table feeds.
+inline TruckDoorConfig TruckDoorConfigFromTruckState(const TruckState &t) {
+    if (!t.has_cabin_position || !t.has_head_position) {
+        // Configuration event has not fired (or this is a build
+        // that does not publish these attributes). Return the
+        // default; the caller checks `valid` and applies the
+        // same fallback. We deliberately return the default
+        // here rather than a "valid=false" sentinel so a
+        // per-truck table that is partially populated still
+        // produces a usable config.
+        return DefaultTruckDoorConfig();
+    }
+    TruckDoorConfig c;
+    // Driver door: 0.45 m to the left of the cabin anchor
+    // (driver's side for LHD markets) and 0.4 m forward
+    // (toward the front of the cab). Y=0.55 m is waist
+    // height for a typical driver.
+    c.driver_door.local_position = Vec3{
+        t.cabin_position.x - 0.45,
+        t.cabin_position.y + 0.55,
+        t.cabin_position.z - 0.40};
+    // Enter anchor: 0.5 m further left, ground level.
+    c.driver_door.local_enter_anchor = Vec3{
+        t.cabin_position.x - 0.95,
+        0.0,
+        t.cabin_position.z - 0.40};
+    c.driver_door.enter_yaw_offset_rad = 1.5708f;
+    c.driver_door.is_driver_door = true;
+
+    // Passenger door: mirror the driver door on the right side.
+    c.passenger_door = c.driver_door;
+    c.passenger_door.local_position = Vec3{
+        t.cabin_position.x + 0.45,
+        t.cabin_position.y + 0.55,
+        t.cabin_position.z - 0.40};
+    c.passenger_door.local_enter_anchor = Vec3{
+        t.cabin_position.x + 0.95,
+        0.0,
+        t.cabin_position.z - 0.40};
+    c.passenger_door.enter_yaw_offset_rad = -1.5708f;
+    c.passenger_door.is_driver_door = false;
+    c.has_passenger_door = false;
+
+    // Cabin bounding box: a 2.0 × 1.65 × 1.4 m box centred on
+    // the cabin anchor. This is the same shape as the default
+    // placeholder's box, just translated to the per-truck
+    // cabin anchor. The real lander's per-truck table would
+    // override this for trucks with non-rectangular cabins
+    // (e.g. cab-overs with a flat-front).
+    c.cabin_min = Vec3{
+        t.cabin_position.x - 1.10,
+        t.cabin_position.y,
+        t.cabin_position.z - 1.70};
+    c.cabin_max = Vec3{
+        t.cabin_position.x + 1.10,
+        t.cabin_position.y + 1.65,
+        t.cabin_position.z + 0.40};
+
+    // Driver seat local: derived from the head anchor (the
+    // seated player's eye-point). Y stays as reported by the
+    // SDK; for non-day-cab trucks (e.g. high-cab sleepers)
+    // this is correct; the camera eye-height adjustment
+    // happens in CameraState_AdoptPlayer.
+    c.driver_seat_local = t.head_position;
+
+    c.valid = true;
+    return c;
+}
+
 // Rotate a truck-local point into world space using the truck's heading.
 // Roll/pitch are ignored for door geometry — trucks are nominally level.
 inline Vec3 TruckLocalToWorld(Vec3 local, double heading_radians) {

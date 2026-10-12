@@ -214,6 +214,12 @@ void TestOpentrackReceiverTickWithNullProviderDrainsSocket();
 void TestOpentrackReceiverRoundTripFeedsDeltasIntoProvider();
 void TestOpentrackReceiverShortestArcDeltaOnYawWrap();
 
+// M5 TruckDoorConfigFromTruckState probes.
+void TestTruckDoorConfigFromStateFallsBackWhenAnchorMissing();
+void TestTruckDoorConfigFromStateAnchorsDoorToCabin();
+void TestTruckDoorConfigFromStateDriverSeatFromHeadPosition();
+void TestTruckDoorConfigFromStateOnlyCabinSetFallsBack();
+
 void TestLogCustomSinkReceivesAllLevels();
 void TestLogLevelReachesSink();
 void TestLogShutdownIdempotent();
@@ -685,6 +691,12 @@ int main() {
     RUN_TEST(walkercore::TestOpentrackReceiverTickWithNullProviderDrainsSocket);
     RUN_TEST(walkercore::TestOpentrackReceiverRoundTripFeedsDeltasIntoProvider);
     RUN_TEST(walkercore::TestOpentrackReceiverShortestArcDeltaOnYawWrap);
+
+    // M5 TruckDoorConfigFromTruckState probes.
+    RUN_TEST(walkercore::TestTruckDoorConfigFromStateFallsBackWhenAnchorMissing);
+    RUN_TEST(walkercore::TestTruckDoorConfigFromStateAnchorsDoorToCabin);
+    RUN_TEST(walkercore::TestTruckDoorConfigFromStateDriverSeatFromHeadPosition);
+    RUN_TEST(walkercore::TestTruckDoorConfigFromStateOnlyCabinSetFallsBack);
 
     RUN_TEST(walkercore::TestLogCustomSinkReceivesAllLevels);
     RUN_TEST(walkercore::TestLogLevelReachesSink);

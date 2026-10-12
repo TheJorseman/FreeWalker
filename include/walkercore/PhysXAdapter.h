@@ -88,6 +88,65 @@ struct PhysXVtable {
     int32_t accepted_run = 0;
 };
 
+// Catalog of known PxScene method function addresses (absolute VAs in
+// the live process). Slot offsets are pinned to the open-source PhysX
+// 3.4 SDK header layout (PxScene.h). The runtime MATCH is "vtable slot
+// N's pointer equals this VA" — equivalent to "slot N is `method`".
+//
+// Sources for each VA:
+//   - VA of method reachable by following the LEA ref to the matching
+//     "PxScene::<method>(...) ..." assertion string in .text (the
+//     catalog in scripts/physx-vta-scan/README.md records every step).
+//   - Image base 0x140000000 + RVA = VA.
+//
+// Each entry corresponds to a row of the vtable M3 is trying to map.
+// The slot index is the published PhysX 3.4 SDK slot for that method
+// in the document order (release at 0, then addActor-ish at higher
+// slots). When the slot index is left at -1 we have not yet verified
+// the catalog; when non-negative, M3 has matched a vtable entry's
+// pointer against a known VA, confirming slot -> method.
+struct PhysXKnownMethod {
+    const char *name;
+    uint64_t va;
+    int32_t slot;
+};
+
+constexpr int kPhysXKnownMethodCount = 4;
+
+// The runtime catalog for ATS 1.61.3.1s. RVA computed from the VA using
+// image base 0x140000000:
+//   PxScene::release    VA=0x141AE07B6  RVA=0x1AE07B6  slot=0
+//   PxScene::addActor   VA=0x141AE0B62  RVA=0x1AE0162
+//   PxScene::simulate   VA=0x141AE4D80  RVA=0x1AE4380
+//   PxScene::shiftOrigin VA=0x141AE6C28 RVA=0x1AE6228
+//
+// Source: scripts/physx-vta-scan/README.md § Hallazgos confirmados.
+// See docs/observations/ats-physx-functions.md for the full
+// provenance.
+extern const PhysXKnownMethod kPhysXKnownMethods[kPhysXKnownMethodCount];
+
+// Result of running the known-method matcher against a buffer that
+// holds the candidate vtable. The fields are populated when at least
+// one PhysXKnownMethod was located inside [bytes, bytes+size) at
+// the byte offset (vtable_base + slot * 8). Otherwise each slot field
+// is left at -1.
+//
+// Distinct from PhysXScanResult: this one is the "slot verified"
+// follow-up. PhysXScanResult tells us the *signature* accepts a
+// vtable; this one says "yes, the vtable at vtable_base + slot*8 has
+// a pointer equal to PxScene::release's VA, so slot 0 IS release".
+struct PhysXVtableResolveResult {
+    // Slot index of PxScene::release within the candidate vtable. -1
+    // when the catalog did not match.
+    int32_t release_slot = -1;
+    // Slot index of PxScene::addActor. -1 when no match.
+    int32_t add_actor_slot = -1;
+    // Slot index of PxScene::simulate. -1 when no match.
+    int32_t simulate_slot = -1;
+    // Slot index of PxScene::shiftOrigin. -1 when no match.
+    int32_t shift_origin_slot = -1;
+};
+
 // Result of a memory scan over a module's .rdata. success is true when
 // at least one of {signature run, string probe} confirmed that amtrucks.exe
 // contains a PxScene vtable, leaving only slot-offset verification pending.
@@ -211,6 +270,19 @@ public:
                                     size_t max_entries,
                                     char *out,
                                     size_t out_size);
+
+    // Resolve the candidate vtable at vtable_base by matching each
+    // entry's 8-byte pointer against the catalog of known PxScene
+    // function VAs (kPhysXKnownMethods). When a catalog row's VA
+    // matches entry N at vtable_base + N*8, N is the slot for that
+    // method. The result is populated per-method; -1 means "no
+    // match" (slot not in the candidate). Returns true when at least
+    // one slot was matched.
+    static bool ResolveKnownMethods(const uint8_t *bytes,
+                                    size_t size,
+                                    uint64_t vtable_base,
+                                    int32_t accepted_run,
+                                    PhysXVtableResolveResult *out);
 
 private:
     PhysXAdapterConfig cfg_;

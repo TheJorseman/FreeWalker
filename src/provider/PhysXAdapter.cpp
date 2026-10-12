@@ -301,4 +301,67 @@ size_t PhysXAdapter::DumpVtableEntries(const uint8_t *bytes,
     return written;
 }
 
+// The runtime catalog of known PxScene method VAs. VA = image base +
+// RVA; image base is 0x140000000 for ATS 1.61.3.1s. VAs sourced from
+// scripts/physx-vta-scan/README.md § "Hallazgos confirmados" (each
+// entry has the LEA-ref matching chain documented there).
+//
+// Slot indices: open-source PhysX 3.4 PxScene.h has methods in the
+// documented order. release is the first virtual destructor-style
+// method (slot 0). addActor lives among the scene-graph mutators; the
+// exact slot is build-dependent and is left at -1 here until a
+// matching run resolves it.
+const PhysXKnownMethod kPhysXKnownMethods[kPhysXKnownMethodCount] = {
+    {"release",       0x141AE07B6ULL, -1},
+    {"addActor",      0x141AE0B62ULL, -1},
+    {"simulate",      0x141AE4D80ULL, -1},
+    {"shiftOrigin",   0x141AE6C28ULL, -1},
+};
+
+bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
+                                       size_t size,
+                                       uint64_t vtable_base,
+                                       int32_t accepted_run,
+                                       PhysXVtableResolveResult *out) {
+    if (out == nullptr || bytes == nullptr || size == 0) {
+        return false;
+    }
+    out->release_slot = -1;
+    out->add_actor_slot = -1;
+    out->simulate_slot = -1;
+    out->shift_origin_slot = -1;
+    if (accepted_run <= 0) {
+        return false;
+    }
+    // Bounds-check the candidate vtable slice against `size`. We
+    // don't apply a separate upper bound beyond accepted_run, so we
+    // are safe against the test that synthesises a 200-entry vtable.
+    const uint64_t vtable_bytes =
+        static_cast<uint64_t>(accepted_run) * 8ULL;
+    if (vtable_base >= size || vtable_bytes > size - vtable_base) {
+        return false;
+    }
+    int matched = 0;
+    for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
+        const uint64_t target = kPhysXKnownMethods[m].va;
+        for (int32_t slot = 0; slot < accepted_run; ++slot) {
+            const size_t off = vtable_base + static_cast<size_t>(slot) * 8;
+            uint64_t val = 0;
+            std::memcpy(&val, bytes + off, 8);
+            if (val == target) {
+                switch (m) {
+                    case 0: out->release_slot = slot; break;
+                    case 1: out->add_actor_slot = slot; break;
+                    case 2: out->simulate_slot = slot; break;
+                    case 3: out->shift_origin_slot = slot; break;
+                    default: break;
+                }
+                matched += 1;
+                break;
+            }
+        }
+    }
+    return matched > 0;
+}
+
 }  // namespace walkercore

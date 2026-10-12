@@ -225,4 +225,91 @@ void TestPhysXDumpVtableEntriesRejectsNullBuffer() {
     EXPECT_EQ(n, 0u);
 }
 
+// ResolveKnownMethods: synthesises a vtable whose entry at slot 0 is
+// equal to kPhysXKnownMethods[0].va (release). The matcher must
+// resolve slot 0 for release and skip the others (whose VAs are not
+// in the synthetic buffer).
+
+void TestPhysXResolveKnownMethodsFindsReleaseAtSlotZero() {
+    constexpr int kRun = 8;
+    std::vector<uint8_t> buf(kRun * 8, 0);
+    // Place kPhysXKnownMethods[0].va at slot 0.
+    {
+        const uint64_t v = walkercore::kPhysXKnownMethods[0].va;
+        std::memcpy(buf.data(), &v, 8);
+    }
+    // Slot 1 leaves a different value so it would not match anything.
+    // Slots 2..7 stay zero.
+    PhysXVtableResolveResult out{};
+    const bool ok = PhysXAdapter::ResolveKnownMethods(
+        buf.data(), buf.size(), 0, kRun, &out);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(out.release_slot, 0);
+    EXPECT_EQ(out.add_actor_slot, -1);
+    EXPECT_EQ(out.simulate_slot, -1);
+    EXPECT_EQ(out.shift_origin_slot, -1);
+}
+
+void TestPhysXResolveKnownMethodsAllFourSlotsInOrder() {
+    constexpr int kRun = 8;
+    std::vector<uint8_t> buf(kRun * 8, 0);
+    // Embed four known VAs at slots 0..3 in their catalog order.
+    for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
+        const uint64_t v = walkercore::kPhysXKnownMethods[m].va;
+        std::memcpy(buf.data() + m * 8, &v, 8);
+    }
+    PhysXVtableResolveResult out{};
+    const bool ok = PhysXAdapter::ResolveKnownMethods(
+        buf.data(), buf.size(), 0, kRun, &out);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(out.release_slot, 0);
+    EXPECT_EQ(out.add_actor_slot, 1);
+    EXPECT_EQ(out.simulate_slot, 2);
+    EXPECT_EQ(out.shift_origin_slot, 3);
+}
+
+void TestPhysXResolveKnownMethodsNoMatchReturnsFalse() {
+    constexpr int kRun = 4;
+    std::vector<uint8_t> buf(kRun * 8, 0);
+    // All zeros — none of the catalog VAs is zero, so no match.
+    PhysXVtableResolveResult out{};
+    const bool ok = PhysXAdapter::ResolveKnownMethods(
+        buf.data(), buf.size(), 0, kRun, &out);
+    EXPECT_FALSE(ok);
+    EXPECT_EQ(out.release_slot, -1);
+    EXPECT_EQ(out.add_actor_slot, -1);
+    EXPECT_EQ(out.simulate_slot, -1);
+    EXPECT_EQ(out.shift_origin_slot, -1);
+}
+
+void TestPhysXResolveKnownMethodsRespectsBounds() {
+    // Buffer too short for the claimed `accepted_run` — must return
+    // false safely without reading out of bounds.
+    constexpr int kActual = 2;
+    constexpr int kClaimed = 1000;
+    std::vector<uint8_t> buf(kActual * 8, 0);
+    PhysXVtableResolveResult out{};
+    const bool ok = PhysXAdapter::ResolveKnownMethods(
+        buf.data(), buf.size(), 0, kClaimed, &out);
+    EXPECT_FALSE(ok);
+}
+
+void TestPhysXKnownMethodsCatalogIsComplete() {
+    // The catalog must list the four methods we ship. Adding a method
+    // to the .cpp catalog without bumping kPhysXKnownMethodCount would
+    // mis-list the count; this test is a regression guard.
+    EXPECT_EQ(kPhysXKnownMethodCount, 4);
+    EXPECT_TRUE(kPhysXKnownMethods[0].name != nullptr);
+    EXPECT_TRUE(kPhysXKnownMethods[1].name != nullptr);
+    EXPECT_TRUE(kPhysXKnownMethods[2].name != nullptr);
+    EXPECT_TRUE(kPhysXKnownMethods[3].name != nullptr);
+    // All four VAs must be non-zero and differ from each other (we
+    // have to make sure the catalog isn't accidentally all the same
+    // address).
+    EXPECT_TRUE(kPhysXKnownMethods[0].va != 0ULL);
+    for (int i = 1; i < kPhysXKnownMethodCount; ++i) {
+        EXPECT_TRUE(kPhysXKnownMethods[i].va != kPhysXKnownMethods[0].va);
+    }
+}
+
 }  // namespace walkercore

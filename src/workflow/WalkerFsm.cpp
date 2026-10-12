@@ -212,6 +212,18 @@ void WalkerFsm::UpdateFromPointers(const TruckState *truck,
     if (out_camera_target == nullptr) {
         return;
     }
+    // Defensive null guards on the truck/player pointers. The conductor
+    // always passes non-null today (a file-static kEmptyTruckState
+    // fallback when telemetry is null), but PlacePlayerAtDoor /
+    // PlacePlayerExited / ComputeTransitionTarget dereference *truck
+    // without checking — a null here would crash the per-frame loop.
+    // The early return leaves out_camera_target->valid=false (set below)
+    // so the renderer falls back to the previous camera; this matches
+    // the behaviour when out_camera_target itself is null.
+    if (truck == nullptr || player == nullptr) {
+        out_camera_target->valid = false;
+        return;
+    }
 
     // Defaults — most states don't override the camera; the render layer
     // uses ShouldRenderOverride() to decide.

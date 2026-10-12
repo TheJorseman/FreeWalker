@@ -22,6 +22,7 @@
 #include "walkercore/FrameLoop.h"
 #include "walkercore/Log.h"
 #include "walkercore/PerFrame.h"
+#include "walkercore/PerFrameThread.h"
 #include "walkercore/Time.h"
 
 #if defined(WALKERCORE_HAVE_MINHOOK)
@@ -200,7 +201,19 @@ HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain *self,
         walker_set_swapchain_aspect(g_cached_aspect);
     }
 
-    walker_per_frame_tick(dt);
+    // Per-frame simulation tick.
+    //
+    // The CAS lock coordinates with the background PerFrameThread ticker.
+    // Whoever claims the slot first runs the tick; the other skips this
+    // frame. When the game's swap chain was created BEFORE our DLL
+    // loaded (the SCS loader runs plugins AFTER graphics init, so this
+    // is the normal case for ATS 1.61.x), `HookedPresent` never fires
+    // and the background ticker carries the whole frame loop. Either
+    // way, only one tick runs per frame.
+    if (walker_try_enter_per_frame_tick() != 0) {
+        walker_per_frame_tick(dt);
+        walker_exit_per_frame_tick();
+    }
 
     if (g_original_d3d12_present != nullptr) {
         return g_original_d3d12_present(self, sync_interval, present_flags);

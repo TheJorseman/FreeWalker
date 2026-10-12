@@ -37,6 +37,7 @@
 #include "walkercore/Knockout.h"
 #include "walkercore/Log.h"
 #include "walkercore/PerFrame.h"
+#include "walkercore/PerFrameThread.h"
 #include "walkercore/PhysXAdapter.h"
 #include "walkercore/PlayerState.h"
 #include "walkercore/PolishProviders.h"
@@ -118,6 +119,17 @@ walkercore::D3D11Hook *g_d3d11_hook = nullptr;
 // owner. Both hooks write to the same g_frame_loop, so there is no
 // double-tick risk: only one will successfully capture a swap chain.
 walkercore::D3D12Hook *g_d3d12_hook = nullptr;
+
+// M2 fallback lander: background per-frame ticker. Activated when the
+// game's DXGI/D3D swap chain was created BEFORE WalkerCore was loaded
+// (which is the normal case: SCS plugins load AFTER the game's graphics
+// subsystem has already initialized, so neither D3D11 nor D3D12 Present
+// hooks fire). The background ticker drives walker_per_frame_tick at
+// ~60 Hz and shares the per-frame lock with the D3D Present hooks via
+// walker_try_enter_per_frame_tick / walker_exit_per_frame_tick —
+// whichever tick site acquires the lock first runs the tick; the other
+// skips this frame.
+walkercore::PerFrameThread *g_per_frame_thread = nullptr;
 
 // M8: FuelProvider owns the local fill-rate math + station availability.
 // ScsTelemetryProvider gives us truck.fuel / truck.adblue amounts; we
@@ -740,6 +752,36 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
     g_d3d12_hook = nullptr;
   }
 
+  // M2 fallback lander: start the background per-frame ticker.
+  //
+  // This is the always-on path for games where the D3D Present hooks
+  // never fire (the SCS loader runs plugins AFTER the game's graphics
+  // subsystem already initialized the swap chain). The ticker drives
+  // walker_per_frame_tick at ~60 Hz and cooperates with the D3D
+  // Present hooks via the per-frame lock — so when (and if) a Present
+  // path does fire later (resolution change → swap chain
+  // re-creation), the background ticker silently defers to the
+  // render-thread tick. There is no separate "is the render path
+  // active?" flag to keep in sync; the lock is the only source of
+  // truth.
+  //
+  // We start it AFTER every provider has been wired (above) AND AFTER
+  // the D3D hooks' Install() — Install() does not touch the swap
+  // chain yet (it hooks CreateDXGIFactory1 / D3D11CreateDeviceAnd
+  // SwapChain, which only fire on FUTURE factory creations), so the
+  // order between Install() and ticker Start() doesn't matter for
+  // correctness; we keep them together for readability.
+  g_per_frame_thread = new walkercore::PerFrameThread();
+  if (!g_per_frame_thread->Start()) {
+    // Should be impossible (just constructed), but defensive — a
+    // second Start() call from the same instance is the only failure
+    // mode. Don't tear down on this; the game still runs without a
+    // per-frame tick driver and the user gets a useful log line.
+    WALKERCORE_LOG_WARN(
+        "PerFrameThread::Start returned false (ticker already running?) — "
+        "frame loop will not tick");
+  }
+
   return SCS_RESULT_ok;
 }
 
@@ -777,6 +819,17 @@ extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
   if (g_fsm != nullptr) {
     delete g_fsm;
     g_fsm = nullptr;
+  }
+
+  // M2: tear down the per-frame ticker first so no new
+  // walker_per_frame_tick call lands while we destroy the providers
+  // it depends on. The background thread's last tick is past the join
+  // point; any in-flight Present hook also tries the lock first and
+  // skips if we are already mid-teardown.
+  if (g_per_frame_thread != nullptr) {
+    g_per_frame_thread->Stop();
+    delete g_per_frame_thread;
+    g_per_frame_thread = nullptr;
   }
 
   // M2: tear down the frame loop first so any in-flight Present hook

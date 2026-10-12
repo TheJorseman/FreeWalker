@@ -95,6 +95,7 @@ add_library(WalkerCore SHARED
     src/provider/FuelPump.cpp
     src/provider/InputHook.cpp
     src/provider/Knockout.cpp
+    src/provider/PerFrameThread.cpp
     src/provider/PhysXAdapter.cpp
     src/provider/PolishProviders.cpp
     src/provider/ScsTelemetryProvider.cpp

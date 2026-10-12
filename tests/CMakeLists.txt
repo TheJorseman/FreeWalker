@@ -22,6 +22,7 @@ add_library(WalkerCoreTestLib STATIC
     ${CMAKE_SOURCE_DIR}/src/provider/FuelPump.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/InputHook.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/Knockout.cpp
+    ${CMAKE_SOURCE_DIR}/src/provider/PerFrameThread.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/PhysXAdapter.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/PolishProviders.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/ScsTelemetryProvider.cpp
@@ -82,19 +83,25 @@ add_executable(WalkerCoreTests
     test_d3d11_hook.cpp
     test_d3d12_hook.cpp
     test_scstelemetry_provider.cpp
-    test_time.cpp)
+    test_time.cpp
+    test_per_frame_thread.cpp)
 
 target_link_libraries(WalkerCoreTests PRIVATE WalkerCoreTestLib)
 
 # We don't need the SCS SDK at runtime for the domain tests; the SDK is
 # only consulted in the SDK callback path which we don't exercise. Stub
-# the symbols out so we don't link them in for tests.
+# the symbols out so we don't link them in for tests. Same goes for
+# the per-frame tick (walker_per_frame_tick lives in the DLL adapter
+# layer, which is not part of the test static library); the ticker
+# exercises the lock + cadence in tests, not the full conductor.
 if (MSVC)
     target_compile_definitions(WalkerCoreTestLib PRIVATE
-        WALKERCORE_TEST_NO_SDK=1)
+        WALKERCORE_TEST_NO_SDK=1
+        WALKERCORE_TEST_NO_PER_FRAME_TICK=1)
 else()
     target_compile_definitions(WalkerCoreTestLib PRIVATE
-        WALKERCORE_TEST_NO_SDK=1)
+        WALKERCORE_TEST_NO_SDK=1
+        WALKERCORE_TEST_NO_PER_FRAME_TICK=1)
 endif()
 
 # Register with CTest. Each RUN_TEST macro is a sub-check; we register the

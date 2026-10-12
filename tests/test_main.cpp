@@ -330,6 +330,18 @@ void TestD3D11AndD3D12GenerationCountersAreIndependent();
 void TestD3D12HookInstallStateSurvivesSecondUninstall();
 void TestD3D11AndD3D12ShareProcessWideMinHook();
 
+// PerFrameThread fallback lander — the background ticker that drives
+// walker_per_frame_tick at ~60 Hz when the D3D Present hooks cannot
+// (because the game's swap chain was created before WalkerCore loaded).
+// These probes pin the lifecycle (Start/Stop idempotency), the
+// tick-rate order of magnitude, the per-frame lock serialization
+// against a synthetic second caller, and the live counter contract
+// that the diagnostic layer will surface when the F12 dump runs.
+void TestPerFrameThreadStartStopIsIdempotent();
+void TestPerFrameThreadTicksAdvanceOverWindow();
+void TestPerFrameTickLockSerializesTwoCallers();
+void TestPerFrameThreadSurvivesManyStartStopCycles();
+
 // Time.h contract probes — NowMicros monotonicity / defensive
 // fallback / realistic delta, plus DeltaSeconds positive / zero /
 // clamped / microsecond-precision. The Time module had only
@@ -804,6 +816,14 @@ int main() {
     RUN_TEST(walkercore::TestD3D11AndD3D12GenerationCountersAreIndependent);
     RUN_TEST(walkercore::TestD3D12HookInstallStateSurvivesSecondUninstall);
     RUN_TEST(walkercore::TestD3D11AndD3D12ShareProcessWideMinHook);
+
+    // PerFrameThread background ticker — fallback lander for the
+    // case where the D3D Present hooks never fire (SCS plugins
+    // load AFTER the game's swap chain is already up).
+    RUN_TEST(walkercore::TestPerFrameThreadStartStopIsIdempotent);
+    RUN_TEST(walkercore::TestPerFrameThreadTicksAdvanceOverWindow);
+    RUN_TEST(walkercore::TestPerFrameTickLockSerializesTwoCallers);
+    RUN_TEST(walkercore::TestPerFrameThreadSurvivesManyStartStopCycles);
 
     // Time.h contract probes — the per-frame conductor and the
     // settings store both rely on NowMicros() being a real

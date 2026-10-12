@@ -329,6 +329,12 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
             bool bv = false;
             if (lkey == "game_free_camera_shim" && TryParseBool(value, &bv)) {
                 loaded.m2_game_free_camera_shim = bv;
+            } else if (lkey == "camera_hijack" && TryParseBool(value, &bv)) {
+                // M2 long-term: MinHook the camera state dispatcher at
+                // RVA 0xC22F40 and replace the matrices the SCS state
+                // machine writes to the GPU constant buffer. Default 0;
+                // opt in explicitly.
+                loaded.m2_camera_hijack = bv;
             } else {
                 unknown_count++;
             }
@@ -451,6 +457,7 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "# `uset g_developer \"1\"` in the game's config.cfg). Default 0\n";
     f << "# so out-of-the-box behaviour stays unchanged.\n";
     f << "game_free_camera_shim = " << (current_.m2_game_free_camera_shim ? "true" : "false") << "\n";
+    f << "camera_hijack = " << (current_.m2_camera_hijack ? "true" : "false") << "\n";
     f.close();
     WALKERCORE_LOG_INFO("Settings: saved %s", path.c_str());
     return true;

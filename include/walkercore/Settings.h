@@ -51,6 +51,15 @@ struct WalkerSettings {
     // behaviour stays unchanged. The M11 settings menu can flip it
     // at runtime via the exported ABI.
     bool m2_game_free_camera_shim = false;
+    // M2 long-term camera hijack gate. False by default — opt in via
+    // `[m2] camera_hijack = 1`. When enabled, WalkerCore captures
+    // amtrucks.exe's image base via GetModuleHandleA and MinHooks the
+    // camera state dispatcher at RVA 0xC22F40 (function
+    // 0x140C22F40, identified by REA/scripts/tmrealwalk-re/
+    // find_camera_function.py + find_vtable_slot16.py). v2 will
+    // replace the matrices the SCS state machine writes to the GPU
+    // constant buffer.
+    bool m2_camera_hijack = false;
 
     // M11 ImGui overlay gate. False by default — opt in via
     // `[m11] imgui_overlay = true` in `WalkerCore.ini`. When true,

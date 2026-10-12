@@ -32,6 +32,7 @@
 #include "walkercore/FrameLoop.h"
 #include "walkercore/FuelPump.h"
 #include "walkercore/GameFreeCameraShim.h"
+#include "walkercore/CameraHijack.h"
 #include "walkercore/PxSceneHook.h"
 #include "walkercore/ImGuiOverlay.h"
 #include "walkercore/GameVersion.h"
@@ -171,6 +172,13 @@ walkercore::SettingsMenu *g_settings_menu = nullptr;
 // movement in the world. Disabled by default; flip the INI gate to
 // opt in.
 walkercore::GameFreeCameraShim *g_game_free_camera_shim = nullptr;
+
+// M2 long-term camera hijack. MinHooks the camera state dispatcher
+// at RVA 0xC22F40 (function 0x140C22F40 in amtrucks.exe) so the
+// per-frame camera update goes through our trampoline. Disabled by
+// default — opt in via `[m2] camera_hijack = 1`. v1 hooks + logs;
+// v2 will replace the matrices with `walker_camera()` output.
+walkercore::CameraHijack *g_camera_hijack = nullptr;
 
 // M3.5 PxScene runtime hook. Installs MinHook on PxScene::addActor
 // (VA 0x141AE0B62 in amtrucks.exe) at startup so the first call
@@ -532,6 +540,22 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
             "M11 overlay: enabled=%d (after INI reload)",
             g_imgui_overlay->isEnabled() ? 1 : 0);
       }
+      // M2 long-term camera hijack — same pattern. If the user
+      // closed the gate, the hook stays installed (we never
+      // unhook mid-session); we just stop counting dispatcher
+      // calls. Opening the gate installs the hook lazily.
+      if (g_camera_hijack != nullptr) {
+        const bool prev = g_camera_hijack->isEnabled();
+        g_camera_hijack->SetEnabled(
+            g_settings->current().m2_camera_hijack);
+        if (!prev && g_camera_hijack->isEnabled()) {
+          g_camera_hijack->Install();
+        }
+        WALKERCORE_LOG_INFO(
+            "M2 hijack: enabled=%d installed=%d (after INI reload)",
+            g_camera_hijack->isEnabled() ? 1 : 0,
+            g_camera_hijack->IsInstalled() ? 1 : 0);
+      }
     }
   }
 
@@ -882,6 +906,24 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   walkercore::diagnostic_internal::SetGameFreeCameraShim(
       g_game_free_camera_shim);
 
+  // M2 long-term camera hijack. Always allocate the object — even
+  // when the gate is closed, walker_dump_camera_hijack() must surface
+  // "(not initialized — gate closed)" instead of crashing. The
+  // Install() call (which actually MinHooks the dispatcher) only
+  // runs when the INI gate is open AND amtrucks.exe is loaded into
+  // this process. Both are required: the gate keeps the hook
+  // opt-in (no surprise behaviour), and the game-process check
+  // keeps unit-test runs safe.
+  g_camera_hijack = new walkercore::CameraHijack();
+  g_camera_hijack->SetEnabled(
+      g_settings != nullptr && g_settings->current().m2_camera_hijack);
+  if (g_camera_hijack->isEnabled()) {
+    // Best-effort install. Logs success or install_error into
+    // game.log.txt; never aborts the SDK init.
+    g_camera_hijack->Install();
+  }
+  walkercore::diagnostic_internal::SetCameraHijack(g_camera_hijack);
+
   // M3.5 PxScene runtime hook. Always install (when MinHook is
   // vendored) — the hook is read-only and never blocks other
   // landers. When amtrucks.exe is not in this process (unit tests,
@@ -1164,6 +1206,11 @@ extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
   if (g_game_free_camera_shim != nullptr) {
     delete g_game_free_camera_shim;
     g_game_free_camera_shim = nullptr;
+  }
+  walkercore::diagnostic_internal::SetCameraHijack(nullptr);
+  if (g_camera_hijack != nullptr) {
+    delete g_camera_hijack;
+    g_camera_hijack = nullptr;
   }
 
   // M3.5 PxScene runtime hook. Mirror cleared first so any

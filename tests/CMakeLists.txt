@@ -17,6 +17,7 @@ add_library(WalkerCoreTestLib STATIC
     ${CMAKE_SOURCE_DIR}/src/domain/CameraState.cpp
     ${CMAKE_SOURCE_DIR}/src/domain/GameVersion.cpp
     ${CMAKE_SOURCE_DIR}/src/domain/VersionTable.cpp
+    ${CMAKE_SOURCE_DIR}/src/provider/CameraHijack.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/D3D11Hook.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/D3D12Hook.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/FuelPump.cpp
@@ -68,6 +69,7 @@ add_executable(WalkerCoreTests
     test_walker_fsm.cpp
     test_frame_loop.cpp
     test_knockout.cpp
+    test_camera_hijack.cpp
     test_door_anim.cpp
     test_door_anim_wiring.cpp
     test_input_hook.cpp
@@ -187,7 +189,8 @@ if (WALKERCORE_HAVE_IMGUI)
     target_include_directories(WalkerCoreTestLib PRIVATE
         "${WALKERCORE_IMGUI_DIR}")
     target_include_directories(WalkerCoreTests PRIVATE
-        "${WALKERCORE_IMGUI_DIR}")
+        "${WALKERCORE_IMGUI_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(WalkerCoreTestLib PUBLIC imgui_vendor_test)
     if (WIN32)
         target_link_libraries(WalkerCoreTests PRIVATE d3dcompiler dwmapi)

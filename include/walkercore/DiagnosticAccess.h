@@ -33,6 +33,7 @@ class ShadowProvider;
 class PhysXAdapter;
 struct TruckDoorConfig;
 class CouplingProvider;
+class CameraHijack;
 class GameFreeCameraShim;
 class PxSceneHook;
 class ImGuiOverlay;
@@ -151,6 +152,12 @@ void SetCoupling(const CouplingProvider *p);
 // toggles_dispatched counter, last_dispatch_ms, supported flag, and
 // enabled flag. Pass nullptr when the shim is destroyed.
 void SetGameFreeCameraShim(const GameFreeCameraShim *g);
+
+// Wire the M2 long-term camera hijack so walker_dump_camera_hijack()
+// can report the install_attempts / dispatch_calls / install_error
+// fields and the captured image_base + dispatcher VA. Pass nullptr
+// when the hijack is destroyed.
+void SetCameraHijack(const CameraHijack *h);
 
 // Wire the M3.5 PxScene runtime hook so walker_dump_pxscene() can
 // report the supported flag, captured instance pointer, and the

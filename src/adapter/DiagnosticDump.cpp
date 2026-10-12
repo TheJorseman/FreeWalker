@@ -28,6 +28,7 @@
 #include "walkercore/GameVersion.h"
 #include "walkercore/FuelPump.h"
 #include "walkercore/GameFreeCameraShim.h"
+#include "walkercore/CameraHijack.h"
 #include "walkercore/PxSceneHook.h"
 #include "walkercore/ImGuiOverlay.h"
 #include "walkercore/InputHook.h"
@@ -95,6 +96,14 @@ const CouplingProvider *g_coupling = nullptr;
 // supported / enabled flags so a deploy-side analyst can confirm the
 // shim fired on F10.
 GameFreeCameraShim *g_game_free_camera_shim = nullptr;
+// M2 long-term camera hijack (dispatcher MinHook). Wired by
+// PluginEntry at scs_telemetry_init time when the [m2] camera_hijack
+// gate is enabled; null until then. Read by walker_dump_camera_hijack()
+// to surface the captured image_base + dispatcher VA, install attempt
+// + dispatcher call counters, and any install_error captured during
+// the MinHook install so a deploy-side analyst can confirm the hook
+// actually fired.
+CameraHijack *g_camera_hijack = nullptr;
 // M3.5 PxScene runtime hook mirror. Wired by PluginEntry at
 // scs_telemetry_init time; null until then. Read by
 // walker_dump_pxscene() to surface the supported flag, captured
@@ -215,6 +224,9 @@ void SetPhysX(const PhysXAdapter *p) { g_physx = p; }
 void SetCoupling(const CouplingProvider *p) { g_coupling = p; }
 void SetGameFreeCameraShim(const GameFreeCameraShim *g) {
     g_game_free_camera_shim = const_cast<GameFreeCameraShim *>(g);
+}
+void SetCameraHijack(const CameraHijack *h) {
+    g_camera_hijack = const_cast<CameraHijack *>(h);
 }
 void SetPxSceneHook(const PxSceneHook *h) {
     g_px_scene_hook = const_cast<PxSceneHook *>(h);
@@ -1219,6 +1231,57 @@ extern "C" __declspec(dllexport) void walker_dump_game_free_camera_shim(void) {
     WALKERCORE_LOG_INFO("--- end game-free-camera shim ---");
 }
 
+extern "C" __declspec(dllexport) void walker_dump_camera_hijack(void) {
+    using namespace walkercore;
+
+    auto bool_str = [](bool b) -> const char * { return b ? "true" : "false"; };
+
+    WALKERCORE_LOG_INFO("--- WalkerCore camera hijack (M2 long-term) ---");
+    if (g_camera_hijack == nullptr) {
+        WALKERCORE_LOG_INFO("camera_hijack       : (not initialized — gate closed)");
+        WALKERCORE_LOG_INFO("--- end camera hijack ---");
+        return;
+    }
+    const CameraHijack *h = g_camera_hijack;
+    WALKERCORE_LOG_INFO("enabled             : %s", bool_str(h->isEnabled()));
+    WALKERCORE_LOG_INFO("installed           : %s", bool_str(h->IsInstalled()));
+    WALKERCORE_LOG_INFO("install_attempts    : %d", h->install_attempts());
+    WALKERCORE_LOG_INFO("dispatch_calls      : %d", h->dispatch_calls());
+    WALKERCORE_LOG_INFO("last_dispatch_ms    : %d", h->last_dispatch_ms());
+    WALKERCORE_LOG_INFO("image_base (hex)    : 0x%llX",
+                        static_cast<unsigned long long>(h->image_base()));
+    WALKERCORE_LOG_INFO("dispatcher_va (hex) : 0x%llX",
+                        static_cast<unsigned long long>(h->dispatcher_va()));
+    if (h->install_error()) {
+        WALKERCORE_LOG_INFO("install_error       : %s", h->install_error_msg());
+    }
+    WALKERCORE_LOG_INFO("--- end camera hijack ---");
+}
+
+extern "C" __declspec(dllexport) int walker_camera_hijack_set_enabled(int enabled) {
+    using namespace walkercore;
+    if (g_camera_hijack == nullptr) return 0;
+    g_camera_hijack->SetEnabled(enabled != 0);
+    return 1;
+}
+
+extern "C" __declspec(dllexport) int walker_camera_hijack_supported(void) {
+    using namespace walkercore;
+    return g_camera_hijack != nullptr && g_camera_hijack->IsInstalled() ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) int walker_camera_hijack_install(void) {
+    using namespace walkercore;
+    if (g_camera_hijack == nullptr) return 0;
+    return g_camera_hijack->Install() ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) void walker_camera_hijack_uninstall(void) {
+    using namespace walkercore;
+    if (g_camera_hijack == nullptr) return;
+    g_camera_hijack->Uninstall();
+}
+
 extern "C" __declspec(dllexport) int
 walker_game_free_camera_shim_supported(void) {
     using namespace walkercore;
@@ -1406,7 +1469,10 @@ extern "C" __declspec(dllexport) void walker_dump_build_info(void) {
         "walker_imgui_overlay_version", "walker_imgui_overlay_frames_rendered",
         "walker_shutdown_imgui_overlay", "walker_on_d3d11_device_captured",
         "walker_on_d3d11_device_lost", "walker_render_imgui_frame_if_enabled",
-        "walker_dump_build_info"};
+        "walker_dump_build_info",
+        "walker_dump_camera_hijack", "walker_camera_hijack_set_enabled",
+        "walker_camera_hijack_supported", "walker_camera_hijack_install",
+        "walker_camera_hijack_uninstall"};
     constexpr size_t kExportCount =
         sizeof(kExportedNames) / sizeof(kExportedNames[0]);
 

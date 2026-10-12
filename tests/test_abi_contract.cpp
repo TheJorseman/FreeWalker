@@ -222,6 +222,11 @@ void TestAbiContractDllLoads() {
         {"walker_on_d3d11_device_lost"},
         {"walker_render_imgui_frame_if_enabled"},
         {"walker_dump_build_info"},
+        {"walker_dump_camera_hijack"},
+        {"walker_camera_hijack_set_enabled"},
+        {"walker_camera_hijack_supported"},
+        {"walker_camera_hijack_install"},
+        {"walker_camera_hijack_uninstall"},
     };
     const size_t kCount = sizeof(kExports) / sizeof(kExports[0]);
 

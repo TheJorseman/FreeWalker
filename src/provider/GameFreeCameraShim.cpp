@@ -63,42 +63,45 @@ long long NowMs() {
 #endif
 }
 
-// Best-effort path to the game's `config.cfg`. Reading from
-// `Documents\<game>\config.cfg` is the standard SCS location. We
-// probe both ATS and ETS2 stems so the same DLL works on either
-// (the M2 lander does not pick one).
-std::string ProbeConfigPath() {
-#if defined(_WIN32)
-    char buf[MAX_PATH] = {};
-    if (SUCCEEDED(::SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr,
-                                      SHGFP_TYPE_CURRENT, buf))) {
-        // Try ATS first, then ETS2. Both live in
-        // <Documents>\<game stem>\config.cfg.
-        const char *candidates[] = {
-            "\\My Documents\\American Truck Simulator\\config.cfg",
-            "\\Documents\\American Truck Simulator\\config.cfg",
-            "\\My Documents\\Euro Truck Simulator 2\\config.cfg",
-            "\\Documents\\Euro Truck Simulator 2\\config.cfg",
-        };
-        for (const char *c : candidates) {
-            std::string p = std::string(buf) + c;
-            FILE *f = std::fopen(p.c_str(), "rb");
-            if (f) {
-                std::fclose(f);
-                return p;
-            }
+}  // namespace
+
+// Pure helper: candidate `Documents` sub-folders relative to the
+// user's profile. We try the canonical English "Documents" first,
+// then Windows-XP "My Documents", then the OneDrive variants for
+// both English ("Documents") and Spanish ("Documentos") locales —
+// the latter is needed for this developer's host (es_es + OneDrive
+// folder backup with the original Spanish name). We also enumerate
+// `OneDrive - Personal\*` for multi-account OneDrive installs.
+std::vector<std::string> GameFreeCameraShim::ProbeConfigCandidatesForTesting(
+    const std::string &profile) {
+    static const char *stems[] = {
+        "American Truck Simulator",
+        "Euro Truck Simulator 2",
+    };
+    static const char *subs[] = {
+        "Documents",
+        "My Documents",
+        "OneDrive\\Documents",
+        "OneDrive\\Documentos",
+        "OneDrive - Personal\\Documents",
+        "OneDrive - Personal\\Documentos",
+    };
+    std::vector<std::string> out;
+    out.reserve(12);
+    for (const char *sub : subs) {
+        for (const char *stem : stems) {
+            std::string p = profile + "\\" + sub + "\\" + stem +
+                            "\\config.cfg";
+            out.push_back(std::move(p));
         }
     }
-#else
-    (void)0;
-#endif
-    return std::string();
+    return out;
 }
 
-// Read the first `uset g_developer "X"` line in the file and return
-// the value as a string ("0", "1", "2", ...). Empty string if not
-// found.
-std::string ReadGDeveloperValue(const std::string &path) {
+// Pure helper: parse the first `uset g_developer "X"` line and
+// return the value as a string. Empty on miss.
+std::string GameFreeCameraShim::ReadGDeveloperValueForTesting(
+    const std::string &path) {
     if (path.empty()) {
         return std::string();
     }
@@ -132,6 +135,60 @@ std::string ReadGDeveloperValue(const std::string &path) {
     return line.substr(q1 + 1, q2 - q1 - 1);
 }
 
+namespace {
+
+// Best-effort path to the game's `config.cfg`. We try:
+//
+//   1. The shell-resolved `Documents` folder (CSIDL_MYDOCUMENTS).
+//      Windows already follows the OneDrive Documents redirect for
+//      us when it is active, so this single call covers the most
+//      common OneDrive layout.
+//   2. The USERPROFILE-based enumeration (covers non-redirected
+//      Documents, XP-era My Documents, OneDrive with the English
+//      folder name kept, OneDrive with the Spanish folder name
+//      kept, and multi-account OneDrive `OneDrive - <org>\`).
+//
+// Both ATS and ETS2 stems are tried in each step so the same DLL
+// works on either game.
+std::string ProbeConfigPath() {
+#if defined(_WIN32)
+    char mydocs[MAX_PATH] = {};
+    if (SUCCEEDED(::SHGetFolderPathA(nullptr, CSIDL_MYDOCUMENTS, nullptr,
+                                      SHGFP_TYPE_CURRENT, mydocs))) {
+        static const char *stems[] = {
+            "American Truck Simulator",
+            "Euro Truck Simulator 2",
+        };
+        for (const char *stem : stems) {
+            std::string p = std::string(mydocs) + "\\" + stem +
+                            "\\config.cfg";
+            FILE *f = std::fopen(p.c_str(), "rb");
+            if (f) {
+                std::fclose(f);
+                return p;
+            }
+        }
+    }
+    char profile[MAX_PATH] = {};
+    if (SUCCEEDED(::SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr,
+                                      SHGFP_TYPE_CURRENT, profile))) {
+        const auto candidates =
+            GameFreeCameraShim::ProbeConfigCandidatesForTesting(
+                std::string(profile));
+        for (const auto &c : candidates) {
+            FILE *f = std::fopen(c.c_str(), "rb");
+            if (f) {
+                std::fclose(f);
+                return c;
+            }
+        }
+    }
+#else
+    (void)0;
+#endif
+    return std::string();
+}
+
 }  // namespace
 
 GameFreeCameraShim::GameFreeCameraShim() = default;
@@ -145,7 +202,7 @@ void GameFreeCameraShim::SetExitPressVk(unsigned int vk) {
 
 void GameFreeCameraShim::ProbeGDeveloperFromConfig() {
     const std::string path = ProbeConfigPath();
-    const std::string value = ReadGDeveloperValue(path);
+    const std::string value = ReadGDeveloperValueForTesting(path);
     const bool ok = (!path.empty()) && (value == "1" || value == "2");
     supported_ = ok;
     WALKERCORE_LOG_INFO(

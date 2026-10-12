@@ -43,6 +43,9 @@
 #ifndef WALKERCORE_GAME_FREE_CAMERA_SHIM_H
 #define WALKERCORE_GAME_FREE_CAMERA_SHIM_H
 
+#include <string>
+#include <vector>
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -93,6 +96,24 @@ public:
     // via SendInput, the OS will deliver it back to our WH_KEYBOARD_LL
     // hook. We mark it as "echo" so the walker does not loop on it.
     bool ConsumeEchoKey(unsigned int vk);
+
+    // -- Test seams ---------------------------------------------------------
+    // Pure helpers exposed for the unit-test suite. They are not part
+    // of the runtime ABI and clients should never call them. The naming
+    // suffix `_ForTesting` makes the intent explicit.
+    //
+    // `ProbeConfigCandidatesForTesting(profile)` returns the candidate
+    // `Documents` sub-folders (relative to the supplied USERPROFILE
+    // path) that the runtime probe tries in order. Used by tests to
+    // pin the OneDrive-aware candidate list.
+    static std::vector<std::string> ProbeConfigCandidatesForTesting(
+        const std::string &profile);
+
+    // `ReadGDeveloperValueForTesting(path)` parses the first
+    // `uset g_developer "X"` line in the file at `path` and returns
+    // the value (without quotes). Empty string on miss. Used by tests
+    // to pin the cvar-line scanner.
+    static std::string ReadGDeveloperValueForTesting(const std::string &path);
 
 private:
     bool enabled_ = false;

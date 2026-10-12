@@ -169,6 +169,28 @@ advisory instead of synthesising keys. ABI:
 `_on_enter_walking`, `_on_exit_walking`, `_toggle_now`,
 `walker_dump_game_free_camera_shim`.
 
+The `g_developer` probe is OneDrive- and locale-aware. It first asks
+the shell for `CSIDL_MYDOCUMENTS` (which transparently follows the
+OneDrive Documents redirect when it is active), and on miss it
+enumerates six candidate sub-folders relative to `CSIDL_PROFILE`:
+`Documents` (canonical English), `My Documents` (XP-era),
+`OneDrive\Documents` / `OneDrive\Documentos` (Spanish OneDrive),
+`OneDrive - Personal\Documents` / `OneDrive - Personal\Documentos`
+(multi-account OneDrive). Both `American Truck Simulator` and
+`Euro Truck Simulator 2` stems are tried in each step so the same
+DLL works on either game. The candidate list and the
+`uset g_developer "X"` line scanner are exposed as
+`GameFreeCameraShim::ProbeConfigCandidatesForTesting` and
+`GameFreeCameraShim::ReadGDeveloperValueForTesting` and pinned by
+the test suite (`test_game_free_camera_shim.cpp`).
+
+A live `walker_dump_game_free_camera_shim` shows the resolved
+path and value. If the probe still reports `supported=0` after
+deploy, the path most likely points at an unsupported layout
+(no config.cfg, redirected to a non-OneDrive Documents folder,
+or a custom install); open the dump and adjust the probe
+accordingly.
+
 The reason we use the SCS free camera for the MVP — and the rendering
 work the present hook will pick up in lander 2 below — comes from
 the working reference: TM_Real_Walk_v1.0.0-beta4.5

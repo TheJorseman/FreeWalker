@@ -265,6 +265,14 @@ void TestGameFreeCameraShimOnEnterWalkingSupportedFalseIsAdvisory();
 void TestGameFreeCameraShimTriggerToggleRespectsDisabled();
 void TestGameFreeCameraShimEchoSuppressionAfterTrigger();
 void TestGameFreeCameraShimOnExitWalkingLeavesCountersIntact();
+void TestGameFreeCameraShimProbeConfigCandidatesCoversOneDrive();
+void TestGameFreeCameraShimProbeConfigCandidatesATSFirst();
+void TestGameFreeCameraShimReadGDeveloperValueEmptyOnEmptyPath();
+void TestGameFreeCameraShimReadGDeveloperValueParsesOne();
+void TestGameFreeCameraShimReadGDeveloperValueParsesZero();
+void TestGameFreeCameraShimReadGDeveloperValueEmptyOnMissingKey();
+void TestGameFreeCameraShimReadGDeveloperValueMalformedNoQuotes();
+void TestGameFreeCameraShimReadGDeveloperValueStopsAtFirstLine();
 void TestApplyOverrideCabinBoxPatch();
 void TestTruckDoorConfigAppliesOverride();
 
@@ -780,6 +788,14 @@ int main() {
     RUN_TEST(walkercore::TestGameFreeCameraShimTriggerToggleRespectsDisabled);
     RUN_TEST(walkercore::TestGameFreeCameraShimEchoSuppressionAfterTrigger);
     RUN_TEST(walkercore::TestGameFreeCameraShimOnExitWalkingLeavesCountersIntact);
+    RUN_TEST(walkercore::TestGameFreeCameraShimProbeConfigCandidatesCoversOneDrive);
+    RUN_TEST(walkercore::TestGameFreeCameraShimProbeConfigCandidatesATSFirst);
+    RUN_TEST(walkercore::TestGameFreeCameraShimReadGDeveloperValueEmptyOnEmptyPath);
+    RUN_TEST(walkercore::TestGameFreeCameraShimReadGDeveloperValueParsesOne);
+    RUN_TEST(walkercore::TestGameFreeCameraShimReadGDeveloperValueParsesZero);
+    RUN_TEST(walkercore::TestGameFreeCameraShimReadGDeveloperValueEmptyOnMissingKey);
+    RUN_TEST(walkercore::TestGameFreeCameraShimReadGDeveloperValueMalformedNoQuotes);
+    RUN_TEST(walkercore::TestGameFreeCameraShimReadGDeveloperValueStopsAtFirstLine);
 
     // M9 SCS configuration event + CouplingProvider real-hook probes.
     RUN_TEST(walkercore::TestScsTelemetryProviderRegisterEventsNullIsSafe);

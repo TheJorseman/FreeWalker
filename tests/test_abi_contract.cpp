@@ -205,6 +205,9 @@ void TestAbiContractDllLoads() {
         {"walker_game_free_camera_shim_on_exit_walking"},
         {"walker_game_free_camera_shim_toggle_now"},
         {"walker_game_free_camera_shim_set_enabled"},
+        {"walker_pxscene_supported"},
+        {"walker_pxscene_instance"},
+        {"walker_dump_pxscene"},
     };
     const size_t kCount = sizeof(kExports) / sizeof(kExports[0]);
 

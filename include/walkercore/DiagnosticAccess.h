@@ -34,6 +34,7 @@ class PhysXAdapter;
 struct TruckDoorConfig;
 class CouplingProvider;
 class GameFreeCameraShim;
+class PxSceneHook;
 
 // Forward-declared so EncodeFsmLabel / FsmLabelNeedsReencode can take it
 // by value without forcing every consumer of DiagnosticAccess.h to pull
@@ -149,6 +150,11 @@ void SetCoupling(const CouplingProvider *p);
 // toggles_dispatched counter, last_dispatch_ms, supported flag, and
 // enabled flag. Pass nullptr when the shim is destroyed.
 void SetGameFreeCameraShim(const GameFreeCameraShim *g);
+
+// Wire the M3.5 PxScene runtime hook so walker_dump_pxscene() can
+// report the supported flag, captured instance pointer, and the
+// addActor call count. Pass nullptr when the hook is destroyed.
+void SetPxSceneHook(const PxSceneHook *h);
 
 }  // namespace diagnostic_internal
 }  // namespace walkercore

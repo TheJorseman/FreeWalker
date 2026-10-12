@@ -234,6 +234,68 @@ camera later.
 **Public API:** `PhysXAdapter::Raycast`, `SphereSweep`, `groundY` (the
 `IWorldGeometry` interface).
 
+### M3.5 Lander — PxScene runtime hook (capture the live instance)
+
+**File:** `src/provider/PxSceneHook.cpp`.
+
+The M3 lander documents the vtable catalog (8 entries at VA 0x141AE0A0+
+slots; full list in `include/walkercore/PhysXAdapter.h`) and runs an
+on-disk signature scan + the catalog matcher at install time. What it
+**cannot** do is locate the live `PxScene` instance itself: the
+on-disk scan over `.rdata` / `.data` / `.bss` returns zero
+candidates for the vtable pointer `0x1425020A0`
+(see `REA/scripts/physx-vta-scan/find_pxscene_instances.py`).
+The instance is allocated at runtime by `PxScene::create(...)` and
+held in a register / local variable inside the game.
+
+M3.5 closes the gap with the smallest viable runtime hook:
+install MinHook on the `PxScene::addActor` function body at VA
+`0x141AE0B62` (catalog slot 11, the entry the catalog confirmed
+exists). When the game calls `addActor`, the x64 calling
+convention places `this` (the PxScene instance) in `RCX`; the
+trampoline captures RCX into a process-global atomic and forwards
+the call to the original via MinHook's trampoline. The first
+non-zero capture wins (subsequent calls only bump the call
+counter, never overwrite) so downstream M3 work can ask "where
+is the live PxScene?" without further RE.
+
+**Why slot 11 specifically.** PxScene::addActor is the only
+catalog method we can be confident is called by the game with a
+stable `this` (PxScene*) in RCX. Other catalog methods may have
+chained calls where `this` is a child object, not the scene.
+`REA/scripts/physx-vta-scan/find_addactor_callers.py` confirms
+this: 174 slot-11 callsites exist, but only a small subset are
+true `PxScene::addActor` (the rest are `PxActor::slot11` and
+similar). The hook at the function body dodges this entirely —
+we read the parameter the compiler already set up for us.
+
+**ABI:**
+
+- `int walker_pxscene_supported(void)` — 1 when the hook installed
+  AND the target VA is reachable inside this process
+  (`amtrucks.exe` is loaded at the right image base), 0 otherwise.
+- `uint64_t walker_pxscene_instance(void)` — the captured
+  PxScene instance pointer; 0 until the first addActor call.
+- `void walker_dump_pxscene(void)` — focused dump: supported flag,
+  target VA + RVA, captured instance, addActor call count.
+
+**Test seams:**
+`PxSceneHook::ObserveAddActorForTesting` simulates the hook
+entry (used by `tests/test_px_scene_hook.cpp`), and
+`PxSceneHook::ResetForTesting` clears the captured pointer +
+call count between tests.
+
+**ABI contract impact:** 3 new exports (15 -> 18 total).
+
+When the game is not running (unit tests, debug runs without
+the game), the hook is a no-op: `Install()` returns true but
+`target_reachable()` stays false, the captured pointer stays 0,
+and the ABI surface is still callable so
+`walker_dump_pxscene` reports "target reachable: false" instead
+of crashing.
+
+### M5 Lander — Per-truck door geometry
+
 ### M5 Lander — Per-truck door geometry
 
 **File to implement:** none — replace `TruckDoorConfig::DefaultTruckDoorConfig()`

@@ -273,6 +273,14 @@ void TestGameFreeCameraShimReadGDeveloperValueParsesZero();
 void TestGameFreeCameraShimReadGDeveloperValueEmptyOnMissingKey();
 void TestGameFreeCameraShimReadGDeveloperValueMalformedNoQuotes();
 void TestGameFreeCameraShimReadGDeveloperValueStopsAtFirstLine();
+void TestPxSceneHookCatalogConstantsMatchAmtrucksLayout();
+void TestPxSceneHookFreshInstanceIsZero();
+void TestPxSceneHookObserveStoresFirstCapture();
+void TestPxSceneHookObserveKeepsFirstCaptureOnLaterNonZeroCalls();
+void TestPxSceneHookObserveIgnoresZero();
+void TestPxSceneHookResetForTestingClearsState();
+void TestPxSceneHookInstallWithoutAmtrucksLeavesTargetUnreachable();
+void TestPxSceneHookInstallUninstallRoundtripIsIdempotent();
 void TestApplyOverrideCabinBoxPatch();
 void TestTruckDoorConfigAppliesOverride();
 
@@ -796,6 +804,14 @@ int main() {
     RUN_TEST(walkercore::TestGameFreeCameraShimReadGDeveloperValueEmptyOnMissingKey);
     RUN_TEST(walkercore::TestGameFreeCameraShimReadGDeveloperValueMalformedNoQuotes);
     RUN_TEST(walkercore::TestGameFreeCameraShimReadGDeveloperValueStopsAtFirstLine);
+    RUN_TEST(walkercore::TestPxSceneHookCatalogConstantsMatchAmtrucksLayout);
+    RUN_TEST(walkercore::TestPxSceneHookFreshInstanceIsZero);
+    RUN_TEST(walkercore::TestPxSceneHookObserveStoresFirstCapture);
+    RUN_TEST(walkercore::TestPxSceneHookObserveKeepsFirstCaptureOnLaterNonZeroCalls);
+    RUN_TEST(walkercore::TestPxSceneHookObserveIgnoresZero);
+    RUN_TEST(walkercore::TestPxSceneHookResetForTestingClearsState);
+    RUN_TEST(walkercore::TestPxSceneHookInstallWithoutAmtrucksLeavesTargetUnreachable);
+    RUN_TEST(walkercore::TestPxSceneHookInstallUninstallRoundtripIsIdempotent);
 
     // M9 SCS configuration event + CouplingProvider real-hook probes.
     RUN_TEST(walkercore::TestScsTelemetryProviderRegisterEventsNullIsSafe);

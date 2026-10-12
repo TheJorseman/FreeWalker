@@ -27,6 +27,7 @@
 #include "walkercore/GameVersion.h"
 #include "walkercore/FuelPump.h"
 #include "walkercore/GameFreeCameraShim.h"
+#include "walkercore/PxSceneHook.h"
 #include "walkercore/InputHook.h"
 #include "walkercore/InputState.h"
 #include "walkercore/Knockout.h"
@@ -92,6 +93,12 @@ const CouplingProvider *g_coupling = nullptr;
 // supported / enabled flags so a deploy-side analyst can confirm the
 // shim fired on F10.
 GameFreeCameraShim *g_game_free_camera_shim = nullptr;
+// M3.5 PxScene runtime hook mirror. Wired by PluginEntry at
+// scs_telemetry_init time; null until then. Read by
+// walker_dump_pxscene() to surface the supported flag, captured
+// instance pointer, and addActor call count so a deploy-side
+// analyst can confirm the runtime hook fired.
+PxSceneHook *g_px_scene_hook = nullptr;
 // M5 per-truck door config mirror. The model_id and resolved
 // TruckDoorConfig are pushed from PluginEntry alongside the FSM
 // SetDoorConfig call. The mirror defaults to "(no config yet)" until
@@ -201,6 +208,9 @@ void SetPhysX(const PhysXAdapter *p) { g_physx = p; }
 void SetCoupling(const CouplingProvider *p) { g_coupling = p; }
 void SetGameFreeCameraShim(const GameFreeCameraShim *g) {
     g_game_free_camera_shim = const_cast<GameFreeCameraShim *>(g);
+}
+void SetPxSceneHook(const PxSceneHook *h) {
+    g_px_scene_hook = const_cast<PxSceneHook *>(h);
 }
 void SetPerTruckDoor(const char *model_id, size_t model_id_len,
                      const TruckDoorConfig *cfg) {
@@ -1215,4 +1225,48 @@ walker_game_free_camera_shim_set_enabled(int enabled) {
     using namespace walkercore;
     if (g_game_free_camera_shim == nullptr) return;
     g_game_free_camera_shim->SetEnabled(enabled != 0);
+}
+
+// --- M3.5 PxScene runtime hook ----------------------------------------
+
+extern "C" __declspec(dllexport) int walker_pxscene_supported(void) {
+    using namespace walkercore;
+    if (g_px_scene_hook == nullptr) {
+        return 0;
+    }
+    return g_px_scene_hook->target_reachable() ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) uint64_t walker_pxscene_instance(void) {
+    using namespace walkercore;
+    if (g_px_scene_hook == nullptr) {
+        return 0;
+    }
+    return g_px_scene_hook->captured_instance();
+}
+
+extern "C" __declspec(dllexport) void walker_dump_pxscene(void) {
+    using namespace walkercore;
+
+    WALKERCORE_LOG_INFO("--- WalkerCore PxScene hook ---");
+    if (g_px_scene_hook == nullptr) {
+        WALKERCORE_LOG_INFO("hook                : (not initialized)");
+        WALKERCORE_LOG_INFO("--- end PxScene hook ---");
+        return;
+    }
+    const PxSceneHook *h = g_px_scene_hook;
+    WALKERCORE_LOG_INFO("installed           : %s",
+                        h->isInstalled() ? "true" : "false");
+    WALKERCORE_LOG_INFO("target reachable    : %s",
+                        h->target_reachable() ? "true" : "false");
+    WALKERCORE_LOG_INFO(
+        "target VA           : 0x%llX (RVA 0x%llX)",
+        static_cast<unsigned long long>(PxSceneHook::kAddActorVa),
+        static_cast<unsigned long long>(
+            PxSceneHook::kAddActorVa - PxSceneHook::kAmtrucksImageBase));
+    WALKERCORE_LOG_INFO(
+        "captured instance   : 0x%llX",
+        static_cast<unsigned long long>(h->captured_instance()));
+    WALKERCORE_LOG_INFO("addActor calls      : %d", h->add_actor_calls());
+    WALKERCORE_LOG_INFO("--- end PxScene hook ---");
 }

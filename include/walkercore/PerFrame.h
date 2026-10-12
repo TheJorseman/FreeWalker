@@ -223,6 +223,28 @@ int walker_game_free_camera_shim_toggle_now(void);
 // disable. Default state off.
 void walker_game_free_camera_shim_set_enabled(int enabled);
 
+// M3.5 PxScene runtime hook. Returns 1 when the hook is installed
+// AND the target VA (PxScene::addActor at 0x141AE0B62) is reachable
+// inside this process (i.e., amtrucks.exe is loaded). 0 when the
+// game is not running or the hook install failed. The captured
+// pointer may still be 0 even when supported=1 (the game has not
+// yet called addActor); see walker_pxscene_instance for that.
+int walker_pxscene_supported(void);
+
+// M3.5 PxScene runtime hook. Returns the captured PxScene instance
+// pointer (this on the first addActor call the hook observed), 0 if
+// none has been observed yet. Updates on every addActor call after
+// the first capture.
+uint64_t walker_pxscene_instance(void);
+
+// M3.5 PxScene runtime hook — focused dump: supported flag, target
+// VA + RVA, captured instance pointer (or 0), addActor call count.
+// Use this when investigating "did the runtime hook fire?" or
+// "what address did the game load into RCX?". Safe to call at any
+// time; reports "(not initialized)" when no PxSceneHook has been
+// wired yet.
+void walker_dump_pxscene(void);
+
 // M3 lander wire-up point. The real adapter calls this once when its
 // PxScene / public PhysX SDK link succeeds. Until then, the stub returns
 // "no hit" with one warning.

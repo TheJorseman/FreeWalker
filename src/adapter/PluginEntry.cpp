@@ -32,6 +32,7 @@
 #include "walkercore/FrameLoop.h"
 #include "walkercore/FuelPump.h"
 #include "walkercore/GameFreeCameraShim.h"
+#include "walkercore/PxSceneHook.h"
 #include "walkercore/GameVersion.h"
 #include "walkercore/InputHook.h"
 #include "walkercore/InputState.h"
@@ -169,6 +170,17 @@ walkercore::SettingsMenu *g_settings_menu = nullptr;
 // movement in the world. Disabled by default; flip the INI gate to
 // opt in.
 walkercore::GameFreeCameraShim *g_game_free_camera_shim = nullptr;
+
+// M3.5 PxScene runtime hook. Installs MinHook on PxScene::addActor
+// (VA 0x141AE0B62 in amtrucks.exe) at startup so the first call
+// from the game populates the captured instance pointer; the
+// pointer is then readable through walker_pxscene_instance() and
+// walker_dump_pxscene(). Disabled by default — the captured value
+// is informational only and never gates other landers. When the
+// game is not running (unit tests, debug runs), `target_reachable`
+// stays false and `isInstalled` returns true so the ABI surface
+// remains available.
+walkercore::PxSceneHook *g_px_scene_hook = nullptr;
 
 // M7: FlashlightProvider tracks on/off state. Toggle is wired to the G
 // key and the right mouse button rising edges while the FSM is in
@@ -848,6 +860,16 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   walkercore::diagnostic_internal::SetGameFreeCameraShim(
       g_game_free_camera_shim);
 
+  // M3.5 PxScene runtime hook. Always install (when MinHook is
+  // vendored) — the hook is read-only and never blocks other
+  // landers. When amtrucks.exe is not in this process (unit tests,
+  // debug runs without a game), the Install path logs "amtrucks.exe
+  // not loaded" and returns false; we still keep the object alive
+  // so the ABI surface + walker_dump_physx remain stable.
+  g_px_scene_hook = new walkercore::PxSceneHook();
+  g_px_scene_hook->Install();
+  walkercore::diagnostic_internal::SetPxSceneHook(g_px_scene_hook);
+
   // M7: door animator. Tweens the driver's door swing angle when the
   // FSM transitions between Driving and Walking (door opens on exit,
   // closes on entry). Tick is wired in walker_per_frame_tick; we only
@@ -1101,6 +1123,16 @@ extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
   if (g_game_free_camera_shim != nullptr) {
     delete g_game_free_camera_shim;
     g_game_free_camera_shim = nullptr;
+  }
+
+  // M3.5 PxScene runtime hook. Mirror cleared first so any
+  // in-flight walker_dump_pxscene() reads null instead of freed
+  // memory; then Uninstall() disables the MinHook trampoline.
+  walkercore::diagnostic_internal::SetPxSceneHook(nullptr);
+  if (g_px_scene_hook != nullptr) {
+    g_px_scene_hook->Uninstall();
+    delete g_px_scene_hook;
+    g_px_scene_hook = nullptr;
   }
 
   // M11: tear down the settings menu. Closing it first ensures any

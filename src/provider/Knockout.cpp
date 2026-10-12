@@ -3,6 +3,7 @@
 #include "walkercore/Knockout.h"
 
 #include <math.h>
+#include <cmath>
 
 #include "walkercore/Log.h"
 
@@ -207,6 +208,34 @@ void KnockoutProvider::Tick(PlayerState &player, double dt) {
             velocity, dist, dx, dy, dz, dt,
             cfg_.velocity_change_threshold_mps,
             cfg_.velocity_change_threshold_mps * dt);
+
+        // M10 partial: TMRealWalk-style per-angle collision normal log.
+        // Mirrors the "[physx]   angle %3.0f: %s%.2f%c normal=(...)" line
+        // in TMRealWalk.dll (see docs/observations/tmrealwalk-findings.md
+        // § "Collision world"). We log a single combined pair because the
+        // stub has no real multi-probe raycast — the format stays
+        // greppable and the next session with a live PxScene slot
+        // dispatch can replace this with N probes without changing
+        // log tooling.
+        //
+        // Convention:
+        //   - angle is the horizontal yaw (in degrees, 0=+x, 90=+z
+        //     following SCS convention) the impact came FROM, computed
+        //     from the negated impact_direction.
+        //   - normal is the full 3-D surface normal (the impact_direction
+        //     we already stored).
+        //   - magnitude is the impact velocity in m/s; signed direction
+        //     matches the surface that pushed the player the most.
+        const double nx = -dx / dist;
+        const double ny = -dy / dist;
+        const double nz = -dz / dist;
+        const double yaw_rad = std::atan2(nz, nx);
+        const double yaw_deg = yaw_rad * 57.29577951308232;
+        WALKERCORE_LOG_WARN(
+            "KnockoutProvider: collision direction (angle=%+.0f deg, "
+            "normal=(%+.2f,%+.2f,%+.2f), |v|=%.1f m/s) "
+            "[TMRealWalk-style probe]",
+            yaw_deg, nx, ny, nz, velocity);
     }
     last_position_ = player.feet_position;
 }

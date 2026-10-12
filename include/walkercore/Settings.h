@@ -44,6 +44,13 @@ struct WalkerSettings {
     float horizontal_fov_radians = 1.4f;  // ~80°
     float near_z = 0.1f;
     float far_z = 4000.0f;
+    // M2 Game-Free-Camera shim gate. When `true`, F10 also synthesises
+    // the configured key sequence on Driving → Walking so the SCS
+    // developer free camera takes over (assuming `g_developer` is "1"
+    // in the game's config.cfg). Default `false` so out-of-the-box
+    // behaviour stays unchanged. The M11 settings menu can flip it
+    // at runtime via the exported ABI.
+    bool m2_game_free_camera_shim = false;
 
     // Returns the same values as the inline defaults in MovementConfig +
     // KeyBindings + HeadTrackerConfig. Centralised so Save() produces a

@@ -146,6 +146,52 @@ link the DLL adapter layer, so `tests/TestD3DHookStubs.cpp` provides
 no-op versions so the test build can still exercise the real D3D11
 hook code paths.
 
+### M2 GPU render push — split into MVP + long-term
+
+**Status: MVP via the `GameFreeCameraShim` (see `include/walkercore/GameFreeCameraShim.h`,
+`src/provider/GameFreeCameraShim.cpp`) — usable end-to-end. Long-term
+renderer hijack still pending.**
+
+Phase A of the M2 lander owns the D3D11 swap-chain hook (above). Phase
+B — actually moving the in-game camera when F10 transitions
+Driving → Walking — splits into two paths:
+
+**MVP path (use today): `GameFreeCameraShim`.** Disabled by default; flip
+the INI gate (`%APPDATA%\WalkerCore\WalkerCore.ini`, write under
+`[m2]`): `game_free_camera_shim = true`. On every Driving → Walking
+transition the shim synthesises a `VK_NUMPAD0` press+release so the
+SCS developer free camera takes over (assuming `g_developer "1"` is
+already in the game's `config.cfg` — which it is on this host, see
+`game.log.txt:350`). The shim's `g_developer` probe auto-reads the
+game's config and only fires keys when detected; otherwise it logs an
+advisory instead of synthesising keys. ABI:
+`walker_game_free_camera_shim_set_enabled`, `_supported`,
+`_on_enter_walking`, `_on_exit_walking`, `_toggle_now`,
+`walker_dump_game_free_camera_shim`.
+
+The reason we use the SCS free camera for the MVP — and the rendering
+work the present hook will pick up in lander 2 below — comes from
+the working reference: TM_Real_Walk_v1.0.0-beta4.5
+`TMRealWalk.dll` (see `REA/scripts/tmrealwalk-re/analysis.md`). Its
+authors explicitly rely on `g_developer` for the walking camera and
+render *overlay geometry only* (shadow, prompts, hands) through
+their Present hook. Their HLSL shaders are embedded in the DLL and
+visible when their import directory is walked with the right
+fuzziness. Our CopyData approach mirrors that.
+
+**Long-term path: SCS camera-update hijack.** Replace SCS's
+view+projection constant buffer write with our own matrices from
+`walker_camera()`. Requires deeper engine RE
+(see `REA/scripts/ats_1_61_3_1s.physx.functions.md`): locate the SCS
+camera-update function in `amtrucks.exe`, identify the constant
+buffer slot + register indices it writes, and either patch the
+function's prologue to call a hook or write our matrices after it
+runs. Blocked in the sandbox without live debugging. When the
+present-hook overlay renderer lands (M11 lander, Dear ImGui via
+single-header vendor), it overlays shadows + `[F]` prompts over
+whatever camera is active — the SCS free camera for now, our
+camera later.
+
 ### M3 Lander — Real IWorldGeometry
 
 **File to implement:** `src/provider/PhysXAdapter.cpp` (currently a stub).

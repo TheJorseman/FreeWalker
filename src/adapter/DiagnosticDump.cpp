@@ -26,6 +26,7 @@
 #include "walkercore/FrameLoop.h"
 #include "walkercore/GameVersion.h"
 #include "walkercore/FuelPump.h"
+#include "walkercore/GameFreeCameraShim.h"
 #include "walkercore/InputHook.h"
 #include "walkercore/InputState.h"
 #include "walkercore/Knockout.h"
@@ -84,6 +85,13 @@ const HeadTrackerProvider *g_head_tracker = nullptr;
 const ShadowProvider *g_shadow = nullptr;
 const PhysXAdapter *g_physx = nullptr;
 const CouplingProvider *g_coupling = nullptr;
+// M2 Game-Free-Camera shim (MVP for the GPU render push). Wired by
+// PluginEntry at scs_telemetry_init time; null until then. Read by
+// walker_dump_game_free_camera_shim() to surface the configured
+// toggle / exit VKs, walks_entered / toggles_dispatched counters,
+// supported / enabled flags so a deploy-side analyst can confirm the
+// shim fired on F10.
+GameFreeCameraShim *g_game_free_camera_shim = nullptr;
 // M5 per-truck door config mirror. The model_id and resolved
 // TruckDoorConfig are pushed from PluginEntry alongside the FSM
 // SetDoorConfig call. The mirror defaults to "(no config yet)" until
@@ -191,6 +199,9 @@ void SetHeadTracker(const HeadTrackerProvider *h) { g_head_tracker = h; }
 void SetShadow(const ShadowProvider *s) { g_shadow = s; }
 void SetPhysX(const PhysXAdapter *p) { g_physx = p; }
 void SetCoupling(const CouplingProvider *p) { g_coupling = p; }
+void SetGameFreeCameraShim(const GameFreeCameraShim *g) {
+    g_game_free_camera_shim = const_cast<GameFreeCameraShim *>(g);
+}
 void SetPerTruckDoor(const char *model_id, size_t model_id_len,
                      const TruckDoorConfig *cfg) {
     g_per_truck_model_id[0] = '\0';
@@ -1140,4 +1151,68 @@ extern "C" __declspec(dllexport) void walker_dump_coupling(void) {
                         static_cast<double>(st.waypoint_radius_m));
 
     WALKERCORE_LOG_INFO("--- end coupling ---");
+}
+
+extern "C" __declspec(dllexport) void walker_dump_game_free_camera_shim(void) {
+    using namespace walkercore;
+
+    auto bool_str = [](bool b) -> const char * { return b ? "true" : "false"; };
+
+    WALKERCORE_LOG_INFO("--- WalkerCore game-free-camera shim ---");
+    if (g_game_free_camera_shim == nullptr) {
+        WALKERCORE_LOG_INFO("shim                : (not initialized)");
+        WALKERCORE_LOG_INFO("--- end game-free-camera shim ---");
+        return;
+    }
+    const GameFreeCameraShim *s = g_game_free_camera_shim;
+    WALKERCORE_LOG_INFO("enabled             : %s",
+                        bool_str(s->isEnabled()));
+    WALKERCORE_LOG_INFO("supported           : %s",
+                        bool_str(s->isSupported()));
+    WALKERCORE_LOG_INFO("walks_entered       : %d",
+                        s->walks_entered());
+    WALKERCORE_LOG_INFO("toggles_dispatched  : %d",
+                        s->toggles_dispatched());
+    WALKERCORE_LOG_INFO("last_dispatch_ms    : %d",
+                        s->last_dispatch_ms());
+    WALKERCORE_LOG_INFO("toggle_vk (hex)     : 0x%X",
+                        s->toggle_vk());
+    WALKERCORE_LOG_INFO("exit_press_vk (hex) : 0x%X",
+                        s->exit_press_vk());
+    WALKERCORE_LOG_INFO("--- end game-free-camera shim ---");
+}
+
+extern "C" __declspec(dllexport) int
+walker_game_free_camera_shim_supported(void) {
+    using namespace walkercore;
+    return g_game_free_camera_shim != nullptr &&
+           g_game_free_camera_shim->isSupported() ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) void
+walker_game_free_camera_shim_on_enter_walking(void) {
+    using namespace walkercore;
+    if (g_game_free_camera_shim == nullptr) return;
+    g_game_free_camera_shim->OnEnterWalking();
+}
+
+extern "C" __declspec(dllexport) void
+walker_game_free_camera_shim_on_exit_walking(void) {
+    using namespace walkercore;
+    if (g_game_free_camera_shim == nullptr) return;
+    g_game_free_camera_shim->OnExitWalking();
+}
+
+extern "C" __declspec(dllexport) int
+walker_game_free_camera_shim_toggle_now(void) {
+    using namespace walkercore;
+    if (g_game_free_camera_shim == nullptr) return 0;
+    return g_game_free_camera_shim->TriggerToggle();
+}
+
+extern "C" __declspec(dllexport) void
+walker_game_free_camera_shim_set_enabled(int enabled) {
+    using namespace walkercore;
+    if (g_game_free_camera_shim == nullptr) return;
+    g_game_free_camera_shim->SetEnabled(enabled != 0);
 }

@@ -31,6 +31,7 @@
 #include "walkercore/DiagnosticAccess.h"
 #include "walkercore/FrameLoop.h"
 #include "walkercore/FuelPump.h"
+#include "walkercore/GameFreeCameraShim.h"
 #include "walkercore/GameVersion.h"
 #include "walkercore/InputHook.h"
 #include "walkercore/InputState.h"
@@ -159,6 +160,15 @@ walkercore::CouplingProvider *g_coupling = nullptr;
 // SetKeyBinding) and the dirty-flag flow are real. Open() / Close() /
 // Toggle() are wired to the Ctrl+F10 rising edge from the input hook.
 walkercore::SettingsMenu *g_settings_menu = nullptr;
+
+// M2 Game-Free-Camera shim (MVP for the GPU render push). When
+// enabled by `[m2] game_free_camera_shim = 1` and `g_developer`
+// is detected as "1" in the game's config.cfg, the shim
+// synthesises Numpad-0 (the SCS developer free camera toggle) on
+// every Driving → Walking transition so F10 produces visible
+// movement in the world. Disabled by default; flip the INI gate to
+// opt in.
+walkercore::GameFreeCameraShim *g_game_free_camera_shim = nullptr;
 
 // M7: FlashlightProvider tracks on/off state. Toggle is wired to the G
 // key and the right mouse button rising edges while the FSM is in
@@ -431,6 +441,15 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
             static_cast<double>(cam.aspect),
             static_cast<int>(cam.valid));
       }
+      // M2 Game-Free-Camera shim hook. The shim may synthesise a
+      // Numpad-0 press to toggle the SCS developer free camera
+      // when enabled and g_developer is detected as "1". No-op
+      // when the shim is disabled (the default). Always safe —
+      // the FSM-only guard above already filters out any
+      // tick where we are not transitioning into Walking.
+      if (g_game_free_camera_shim != nullptr) {
+        g_game_free_camera_shim->OnEnterWalking();
+      }
     }
     prev_fsm_for_knockout_prime = fsm_state;
   }
@@ -469,7 +488,17 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
 
   // Phase D: poll the settings file for live edits (cheap).
   if (g_settings != nullptr) {
-    g_settings->CheckFileChanged();
+    if (g_settings->CheckFileChanged() &&
+        g_game_free_camera_shim != nullptr) {
+      // ApplyAll() inside LoadFromPath pushed the new frame loop /
+      // input / fsm / head tracker settings, but the shim is not a
+      // bound consumer — push its gate by hand when the file changed.
+      g_game_free_camera_shim->SetEnabled(
+          g_settings->current().m2_game_free_camera_shim);
+      WALKERCORE_LOG_INFO(
+          "M2 shim: enabled=%d (after INI reload)",
+          g_game_free_camera_shim->isEnabled() ? 1 : 0);
+    }
   }
 
   // Phase E: M8 fuel pump. The provider syncs from telemetry, decides if
@@ -804,6 +833,21 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   // the active step + progress + waypoint on F12.
   walkercore::diagnostic_internal::SetCoupling(g_coupling);
 
+  // M2 Game-Free-Camera shim (MVP for the GPU render push). Reads
+  // the INI gate `[m2] game_free_camera_shim` (default 0). When
+  // enabled, also probes the game's config.cfg for `uset
+  // g_developer "1"`; if not detected, the shim logs an advisory on
+  // every F10 instead of synthesising keys. The whole thing is a
+  // no-op until both the gate and the cvar are true.
+  g_game_free_camera_shim = new walkercore::GameFreeCameraShim();
+  // Honour the INI gate (default 0). The M11 settings menu can flip
+  // this live via walker_game_free_camera_shim_set_enabled().
+  g_game_free_camera_shim->SetEnabled(
+      g_settings != nullptr && g_settings->current().m2_game_free_camera_shim);
+  g_game_free_camera_shim->ProbeGDeveloperFromConfig();
+  walkercore::diagnostic_internal::SetGameFreeCameraShim(
+      g_game_free_camera_shim);
+
   // M7: door animator. Tweens the driver's door swing angle when the
   // FSM transitions between Driving and Walking (door opens on exit,
   // closes on entry). Tick is wired in walker_per_frame_tick; we only
@@ -1046,6 +1090,17 @@ extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
   if (g_coupling != nullptr) {
     delete g_coupling;
     g_coupling = nullptr;
+  }
+
+  // M2 Game-Free-Camera shim (MVP for the GPU render push). The
+  // shim owns no other resources — no log sink hook, no timer —
+  // so destruction is a plain delete. Mirror cleared first so any
+  // in-flight walker_dump_game_free_camera_shim() reads null
+  // instead of freed memory.
+  walkercore::diagnostic_internal::SetGameFreeCameraShim(nullptr);
+  if (g_game_free_camera_shim != nullptr) {
+    delete g_game_free_camera_shim;
+    g_game_free_camera_shim = nullptr;
   }
 
   // M11: tear down the settings menu. Closing it first ensures any

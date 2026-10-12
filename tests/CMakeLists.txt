@@ -20,6 +20,7 @@ add_library(WalkerCoreTestLib STATIC
     ${CMAKE_SOURCE_DIR}/src/provider/D3D11Hook.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/D3D12Hook.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/FuelPump.cpp
+    ${CMAKE_SOURCE_DIR}/src/provider/GameFreeCameraShim.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/InputHook.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/Knockout.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/PerFrameThread.cpp
@@ -91,7 +92,8 @@ add_executable(WalkerCoreTests
     test_time.cpp
     test_per_frame_thread.cpp
     test_physx_adapter.cpp
-    test_per_truck_door_table.cpp)
+    test_per_truck_door_table.cpp
+    test_game_free_camera_shim.cpp)
 
 target_link_libraries(WalkerCoreTests PRIVATE WalkerCoreTestLib)
 if (WIN32)
@@ -121,11 +123,13 @@ endif()
 if (MSVC)
     target_compile_definitions(WalkerCoreTestLib PRIVATE
         WALKERCORE_TEST_NO_SDK=1
-        WALKERCORE_TEST_NO_PER_FRAME_TICK=1)
+        WALKERCORE_TEST_NO_PER_FRAME_TICK=1
+        WALKERCORE_GAME_FREE_CAMERA_SHIM_DISABLED=1)
 else()
     target_compile_definitions(WalkerCoreTestLib PRIVATE
         WALKERCORE_TEST_NO_SDK=1
-        WALKERCORE_TEST_NO_PER_FRAME_TICK=1)
+        WALKERCORE_TEST_NO_PER_FRAME_TICK=1
+        WALKERCORE_GAME_FREE_CAMERA_SHIM_DISABLED=1)
 endif()
 
 # Mirror the root CMakeLists.txt: when WALKERCORE_HAVE_MINHOOK is set,

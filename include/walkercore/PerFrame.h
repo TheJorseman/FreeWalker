@@ -189,6 +189,40 @@ void walker_dump_per_truck_door(void);
 // initialized)" when no CouplingProvider has been wired yet.
 void walker_dump_coupling(void);
 
+// Diagnostics — focused dump of the M2 game-free-camera shim:
+// enabled / supported flags, walks_entered / toggles_dispatched
+// counters, last_dispatch_ms timestamp, configured toggle VK and
+// exit-press VK (Win32 VK_* codes). Use this when investigating
+// "did F10 actually fire the camera toggle?" or "is g_developer
+// detected as active?". Safe to call at any time; reports "(not
+// initialized)" when no GameFreeCameraShim has been wired yet.
+void walker_dump_game_free_camera_shim(void);
+
+// M2 game-free-camera shim (MVP for the GPU render push). Returns
+// 1 when the shim is initialised AND g_developer was detected as
+// "1" in the game's config.cfg at probe time, 0 otherwise. Used by
+// the user-facing check script to decide whether F10 will actually
+// toggle the game's free camera without manual config editing.
+int walker_game_free_camera_shim_supported(void);
+
+// M2 game-free-camera shim — FSM facing entry points. Called from
+// walker_per_frame_tick on the Driving → Walking transition (and
+// from Walking → Driving on exit). When enabled, the shim
+// synthesises a configurable sequence of Win32 keystrokes (default
+// is Numpad-0 which toggles the SCS developer free camera in
+// ATS 1.61.x when `g_developer` is 1 in the game's config.cfg).
+void walker_game_free_camera_shim_on_enter_walking(void);
+void walker_game_free_camera_shim_on_exit_walking(void);
+
+// M2 game-free-camera shim — manual trigger. Returns the number of
+// Win32 key events actually synthesised (0..4). Useful for the
+// settings menu or tests; the FSM path is automatic.
+int walker_game_free_camera_shim_toggle_now(void);
+
+// M2 game-free-camera shim — INI gate. Pass 1 to enable, 0 to
+// disable. Default state off.
+void walker_game_free_camera_shim_set_enabled(int enabled);
+
 // M3 lander wire-up point. The real adapter calls this once when its
 // PxScene / public PhysX SDK link succeeds. Until then, the stub returns
 // "no hit" with one warning.

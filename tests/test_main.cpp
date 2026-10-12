@@ -255,6 +255,16 @@ void TestPerTruckDoorTableBuiltInHasMultipleAtsRows();
 void TestPerTruckDoorTableNewRowsAreFindable();
 void TestApplyOverrideNullIsNoOp();
 void TestApplyOverrideDoorPatchIsSentinelAware();
+
+// M2 Game-Free-Camera shim (MVP for the GPU render push).
+void TestGameFreeCameraShimDefaultStateIsDisabled();
+void TestGameFreeCameraShimSetEnabledRoundTrip();
+void TestGameFreeCameraShimVkCustomisation();
+void TestGameFreeCameraShimOnEnterWalkingDisabledIsAdvisory();
+void TestGameFreeCameraShimOnEnterWalkingSupportedFalseIsAdvisory();
+void TestGameFreeCameraShimTriggerToggleRespectsDisabled();
+void TestGameFreeCameraShimEchoSuppressionAfterTrigger();
+void TestGameFreeCameraShimOnExitWalkingLeavesCountersIntact();
 void TestApplyOverrideCabinBoxPatch();
 void TestTruckDoorConfigAppliesOverride();
 
@@ -757,6 +767,19 @@ int main() {
     RUN_TEST(walkercore::TestApplyOverrideDoorPatchIsSentinelAware);
     RUN_TEST(walkercore::TestApplyOverrideCabinBoxPatch);
     RUN_TEST(walkercore::TestTruckDoorConfigAppliesOverride);
+
+    // M2 Game-Free-Camera shim probes — send-disabled by the test
+    // build (WALKERCORE_GAME_FREE_CAMERA_SHIM_DISABLED=1), so no
+    // real keystrokes fire; the tests only inspect the shim's
+    // counters and supported / enabled flags.
+    RUN_TEST(walkercore::TestGameFreeCameraShimDefaultStateIsDisabled);
+    RUN_TEST(walkercore::TestGameFreeCameraShimSetEnabledRoundTrip);
+    RUN_TEST(walkercore::TestGameFreeCameraShimVkCustomisation);
+    RUN_TEST(walkercore::TestGameFreeCameraShimOnEnterWalkingDisabledIsAdvisory);
+    RUN_TEST(walkercore::TestGameFreeCameraShimOnEnterWalkingSupportedFalseIsAdvisory);
+    RUN_TEST(walkercore::TestGameFreeCameraShimTriggerToggleRespectsDisabled);
+    RUN_TEST(walkercore::TestGameFreeCameraShimEchoSuppressionAfterTrigger);
+    RUN_TEST(walkercore::TestGameFreeCameraShimOnExitWalkingLeavesCountersIntact);
 
     // M9 SCS configuration event + CouplingProvider real-hook probes.
     RUN_TEST(walkercore::TestScsTelemetryProviderRegisterEventsNullIsSafe);

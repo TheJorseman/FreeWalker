@@ -33,6 +33,7 @@ class ShadowProvider;
 class PhysXAdapter;
 struct TruckDoorConfig;
 class CouplingProvider;
+class GameFreeCameraShim;
 
 // Forward-declared so EncodeFsmLabel / FsmLabelNeedsReencode can take it
 // by value without forcing every consumer of DiagnosticAccess.h to pull
@@ -142,6 +143,12 @@ void SetPerTruckDoor(const char *model_id, size_t model_id_len,
 // can report the active step + progress + waypoint. Pass nullptr
 // when the provider is destroyed.
 void SetCoupling(const CouplingProvider *p);
+
+// Wire the M2 Game-Free-Camera shim so walker_dump_game_free_camera_shim()
+// can report the configured toggle/exit VKs, walks_entered counter,
+// toggles_dispatched counter, last_dispatch_ms, supported flag, and
+// enabled flag. Pass nullptr when the shim is destroyed.
+void SetGameFreeCameraShim(const GameFreeCameraShim *g);
 
 }  // namespace diagnostic_internal
 }  // namespace walkercore

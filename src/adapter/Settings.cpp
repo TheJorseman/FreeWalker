@@ -321,6 +321,17 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                 loaded.head_tracker.smoothing_factor = fv;
             else
                 unknown_count++;
+        } else if (section == "m2") {
+            // M2 render-push configuration. Currently the only knob is
+            // `game_free_camera_shim`, a 0/1 boolean that turns on the
+            // SendInput-based fallback that toggles the SCS developer
+            // free camera when F10 transitions Driving → Walking.
+            bool bv = false;
+            if (lkey == "game_free_camera_shim" && TryParseBool(value, &bv)) {
+                loaded.m2_game_free_camera_shim = bv;
+            } else {
+                unknown_count++;
+            }
         } else {
             unknown_count++;
         }
@@ -416,6 +427,14 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "trackir_sensitivity_rad_per_unit = " << current_.head_tracker.trackir_sensitivity_rad_per_unit << "\n";
     f << "opentrack_sensitivity_rad_per_unit = " << current_.head_tracker.opentrack_sensitivity_rad_per_unit << "\n";
     f << "smoothing_factor = " << current_.head_tracker.smoothing_factor << "\n";
+    f << "\n";
+    f << "[m2]\n";
+    f << "# Game-Free-Camera shim (MVP for the M2 GPU render push). When 1,\n";
+    f << "# F10 (Driving -> Walking transition) also synthesises a Numpad-0\n";
+    f << "# press so the SCS developer free camera takes over (requires\n";
+    f << "# `uset g_developer \"1\"` in the game's config.cfg). Default 0\n";
+    f << "# so out-of-the-box behaviour stays unchanged.\n";
+    f << "game_free_camera_shim = " << (current_.m2_game_free_camera_shim ? "true" : "false") << "\n";
     f.close();
     WALKERCORE_LOG_INFO("Settings: saved %s", path.c_str());
     return true;

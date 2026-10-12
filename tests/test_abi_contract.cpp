@@ -199,6 +199,12 @@ void TestAbiContractDllLoads() {
         {"walker_dump_knockout"},
         {"walker_dump_per_truck_door"},
         {"walker_dump_coupling"},
+        {"walker_dump_game_free_camera_shim"},
+        {"walker_game_free_camera_shim_supported"},
+        {"walker_game_free_camera_shim_on_enter_walking"},
+        {"walker_game_free_camera_shim_on_exit_walking"},
+        {"walker_game_free_camera_shim_toggle_now"},
+        {"walker_game_free_camera_shim_set_enabled"},
     };
     const size_t kCount = sizeof(kExports) / sizeof(kExports[0]);
 

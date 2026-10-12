@@ -95,25 +95,32 @@ constexpr VersionEntry kEntries[] = {
         // in-game).
         //
         // M3 SCAN: amtrucks.exe SHA 5D3B4E343154DE6B25DD366B6048C5BC5C452A4DAA50BC38B33FD2E571D54257.
-        // Signature scan identifies the PxScene vtable at RVA 0x2500918
-        // (image-base + 0x2500918 = 0x142501B18) with 436 accepted
-        // entries. Strategy = "signature". Slot offsets for
-        // raycast / overlap / sweep remain unverified — see
+        // Signature scan identifies the PxScene vtable candidate at
+        // RVA 0x2500918 (image-base + 0x2500918 = 0x142501B18); the
+        // smaller PxScene vtable that the catalog (release, addActor,
+        // simulate, shiftOrigin, sweep) maps to is at RVA 0x2500EA0
+        // (118 slots, 0x1425020A0). Strategy = "signature + strings
+        // + hybrid" — see PhysXAdapter.cpp for the multi-strategy
+        // detection pipeline. Slot offsets for raycast / overlap
+        // remain unverified; sweep is cataloged at slot 4 of a 5-slot
+        // vtable at RVA 0x2507C08. See
+        // docs/observations/ats_1_61_3_1s.physx.functions.md and
         // scripts/physx-vta-scan/README.md in the rea repo for the
-        // offline RE that produced this entry. The slot table is filled
-        // after a live PxScene instance confirms each slot.
+        // offline RE that produced this entry. The slot table is
+        // filled after a live PxScene instance confirms each slot.
         "ats",
         kVersion(1, 7),
         kVersion(1, 7),
         "ATS 1.61.3.1s (Steam)",
         // CameraPresentHook (M2) + CameraManager (M2) + PhysXScene
-        // (M3, RVA 0x2500918, signature-scan verified) + LightSourceClass
-        // (M7) — see PhysXAdapter.cpp header for the RE evidence and
-        // scripts/physx-vta-scan/README.md in the rea repo for the
-        // offline scan that produced the M3 RVA. Slot dispatch for
-        // PxScene::raycast/overlap/sweep remains pending a live PxScene
-        // instance; until then the M3 (collision) bit stays OFF.
-        { {}, {}, {0x2500918u, true, "signature"}, {} },
+        // (M3, RVA 0x2500918, signature+strings+hybrid verified) +
+        // LightSourceClass (M7) — see PhysXAdapter.cpp header for the
+        // RE evidence and scripts/physx-vta-scan/README.md in the rea
+        // repo for the offline scan that produced the M3 RVA. Slot
+        // dispatch for PxScene::raycast/overlap remains pending a
+        // live PxScene instance; until then the M3 (collision) bit
+        // stays OFF.
+        { {}, {}, {0x2500918u, true, "signature+strings+hybrid"}, {} },
         // Features the offline RE pipeline has confirmed are reachable
         // on this build. Camera hooking (FeatureFreeCamera) and the
         // M4 walking state are already shipping; FeatureConfigReload

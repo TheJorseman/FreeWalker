@@ -44,6 +44,41 @@ void KnockoutProvider::SetConfig(const KnockoutConfig &cfg) {
     cfg_ = cfg;
 }
 
+void KnockoutProvider::Prime(const Vec3 &position) {
+    // Force-reset the per-frame tracking baseline. Used by the per-frame
+    // conductor on a Driving→Walking or TransitionIn→Walking FSM
+    // transition so the very next Knockout tick compares against the
+    // post-transition (door-anchor or in-cabin) coordinate instead of
+    // the pre-transition coordinate. Without this explicit reset, the
+    // first tick after a Walking re-entry can land a `dist` that's
+    // larger than the M11-cap-derived 10.79 m/s upper bound should
+    // allow, because:
+    //   - RunOnce bails during Driving / TransitionIn / TransitionOut,
+    //     so vertical_velocity_ (and therefore player.feet_position.y
+    //     integration) stays at its prior Walking-session value across
+    //     the entire cabin trip.
+    //   - PlacePlayerAtDoor / PlacePlayerAtSeat snap feet_position to
+    //     a new anchor in a single Tick, but the teleport_reprime check
+    //     catches the snap mid-tween — there are roughly 36 frames of
+    //     TransitionOut where RunOnce bails AND no snap happens, so the
+    //     player sits at the door-anchor from the snap onward.
+    //   - When Walking re-enters, the first FrameLoop RunOnce applies
+    //     gravity to whatever vertical_velocity_ was preserved from the
+    //     prior session. If that value was -X m/s with X > 9.81, the
+    //     cap clamps to -9.81 in the *next* frame, but the first
+    //     frame's gravity step + integration can still produce a dy
+    //     that, combined with horizontal vx/vz from the door anchor's
+    //     transition pre-position, lands above the velocity threshold.
+    //
+    // The conductor calls Prime() with the current player.feet_position
+    // at the moment we recognise the FSM transitioning INTO Walking.
+    // The next Tick then sees `tracking_` re-armed via this write so
+    // the very first delta computed is from "now" onwards, not from
+    // some stale Pre-Pre-Walking coordinate.
+    last_position_ = position;
+    tracking_ = true;
+}
+
 void KnockoutProvider::Tick(PlayerState &player, double dt) {
     WarnStub();
 
@@ -129,9 +164,23 @@ void KnockoutProvider::Tick(PlayerState &player, double dt) {
         state_.time_remaining_s = cfg_.recovery_seconds;
         state_.impact_direction = Vec3{-dx / dist, -dy / dist, -dz / dist};
         player.mode = PlayerMode::KnockedOut;
+        // Diagnostic-heavy log. The M11 velocity cap bounds per-frame
+        // |dy| to MovementConfig::vertical_velocity_max_mps × dt
+        // ≤ 0.164 m plus horizontal ≤ 0.075 m, so a healthy trigger
+        // reports `velocity` ≤ ~10.79 m/s. Values substantially higher
+        // than that mean either (a) the cap is bypassed by a code path
+        // the FrameLoop's PhaseIntegrateMovement doesn't cover, or
+        // (b) dt is much larger than 16.67 ms (per-frame thread
+        // stall). The remaining fields (dx, dy, dz, dist, dt) give
+        // the next session enough to localise the source without
+        // re-deploying with a different logging path.
         WALKERCORE_LOG_WARN(
-            "KnockoutProvider: knock-out triggered (impact velocity %.1f m/s)",
-            velocity);
+            "KnockoutProvider: knock-out triggered (impact velocity %.1f m/s, "
+            "dist=%.3f m, dx=%.3f dy=%.3f dz=%.3f, dt=%.4f s, "
+            "threshold=%.1f m/s, vmax-derived=%.3f m)",
+            velocity, dist, dx, dy, dz, dt,
+            cfg_.velocity_change_threshold_mps,
+            cfg_.velocity_change_threshold_mps * dt);
     }
     last_position_ = player.feet_position;
 }

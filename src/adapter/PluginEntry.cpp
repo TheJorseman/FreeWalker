@@ -317,6 +317,55 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
     fsm_state = g_fsm->state();
     transition_t = g_fsm->transitionProgress();
   }
+
+  // Phase B' (M11 follow-up): KnockoutProvider baseline re-prime on FSM
+  // entry into Walking. The M11 velocity cap (MovementConfig::
+  // vertical_velocity_max_mps = 9.81 m/s, applied in FrameLoop::
+  // PhaseIntegrateMovement) bounds per-frame vertical motion to ≤ 0.164
+  // m and combined motion to ≤ 10.79 m/s — well below the Knockout
+  // threshold (now 25 m/s after the M11 tuning). Yet the in-game DLL
+  // at build 3fbc149 still showed spurious 12-38 m/s KO triggers
+  // within 30-575 ms of every Walking re-entry on ATS 1.61.3.1s (see
+  // commit c90916a's game.log.txt evidence in the comments). The cap
+  // bounds the integrated motion the FrameLoop produces; what's not
+  // covered is the elapsed-time delta the KnockoutProvider's per-
+  // frame `last_position_` baseline has accumulated since the last
+  // Walking tick — the baseline references a coordinate from the prior
+  // session, the cap-driven motion in frame 0 of the new session is
+  // tiny, but the FOOTPRINT of the simulated ground (where vy was
+  // preserved at large magnitude, then re-primed against a door
+  // anchor via the teleport_reprime branch) means the very first
+  // velocity check on the new last_position_ baseline covers a 0.6 s
+  // TransitionOut tween plus the snap — a window where the FrameLoop
+  // is bailing and the player's position is held at the door anchor
+  // while the KnockoutProvider's internal baseline hasn't moved.
+  //
+  // We re-prime explicitly here so the next Tick starts a fresh
+  // baseline at the post-transition coordinate. The previous FSM
+  // state is tracked locally (file-local statics would also work but
+  // we don't want to risk contamination across reload).
+  {
+    static walkercore::WalkerFsmState prev_fsm_for_knockout_prime =
+        walkercore::WalkerFsmState::Driving;
+    if (g_knockout != nullptr &&
+        fsm_state == walkercore::WalkerFsmState::Walking &&
+        prev_fsm_for_knockout_prime != walkercore::WalkerFsmState::Walking) {
+      // We just entered Walking from any other state. Reset the
+      // KnockoutProvider's per-frame tracking baseline to wherever the
+      // player currently is — that's the post-transition (door-anchor
+      // or in-cabin) coordinate, with the FrameLoop cap now active
+      // and ready to bound motion.
+      g_knockout->Prime(player_ptr->feet_position);
+      WALKERCORE_LOG_INFO(
+          "KnockoutProvider: baseline re-primed on Walking entry "
+          "(pos=(%.2f, %.2f, %.2f), prev_state=%s)",
+          player_ptr->feet_position.x,
+          player_ptr->feet_position.y,
+          player_ptr->feet_position.z,
+          walkercore::WalkerFsmStateName(prev_fsm_for_knockout_prime));
+    }
+    prev_fsm_for_knockout_prime = fsm_state;
+  }
   // Steady-state skip: in Driving or Walking, the label is the same
   // string every frame, so re-running EncodeFsmLabel + SetFsmLabel
   // every frame is wasted work (snprintf + strncpy each frame at

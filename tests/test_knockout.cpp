@@ -606,4 +606,107 @@ void TestKnockoutRecoveryResetsLastPositionBaseline() {
     }
 }
 
+// KnockoutProvider::Prime(position) is the conductor's hook for the
+// M11 follow-up: when the FSM transitions into Walking, the conductor
+// calls Prime with the player's current feet_position so the next
+// Knockout::Tick computes its delta from the post-transition
+// coordinate, not from the prior session's stale baseline. Without
+// this re-prime, the very first Tick after a Driving→Walking trip
+// can land a delta larger than the M11-cap-derived 10.79 m/s upper
+// bound (the FrameLoop bails during Driving / TransitionIn /
+// TransitionOut, so vertical_velocity_ is preserved across the cabin
+// trip, while the baseline references a coordinate from the prior
+// Walking session that may have been further away). We saw 12-38 m/s
+// spurious triggers on ATS 1.61.3.1s at build 3fbc149 with this
+// Baseline mismatch in place — commit 79be7b6 raised the threshold
+// but kept the baseline stale. This commit's Prime contract fixes
+// that by construction.
+//
+// Contract under test:
+//
+//   1. Prime(position) replaces last_position_ with position and arms
+//      tracking_=true. The next Tick therefore uses `position` as the
+//      delta baseline.
+//   2. The next Tick on a small (sub-threshold) delta stays not-
+//      knocked-out.
+//   3. A subsequent Tick that DOES produce a supra-threshold delta
+//      fires normally — Prime resets the baseline, not the heuristic.
+// -----------------------------------------------------------------------------
+void TestKnockoutPrimeResetsTrackingBaseline() {
+    ResetKnockoutStubWarnForTesting();
+
+    // Disable the teleport re-prime gate so the velocity branch fires
+    // for any sub-threshold jump — we want to pin the baseline reset,
+    // not the snap handling.
+    KnockoutProvider provider;
+    KnockoutConfig cfg = provider.config();
+    cfg.teleport_reprime_distance_m = 100.0;  // disable teleport gate
+    cfg.velocity_change_threshold_mps = 10.0; // 10 m/s threshold for this test
+    provider.SetConfig(cfg);
+
+    PlayerState player;
+    PlayerState_Reset(player);
+    player.has_feet = true;
+
+    // Step 1: primes via the !tracking_ branch (first Tick ever).
+    player.feet_position = Vec3{0.0, 0.0, 0.0};
+    provider.Tick(player, 0.016);
+    EXPECT_FALSE(provider.isKnockedOut());
+
+    // Step 2: simulate "FSM entered Walking — call Prime(B)" by moving
+    // the player to B and then calling Prime(B) explicitly. (The
+    // production code path is a DoorSnap via the conductor; the
+    // teleport re-prime branch handles that path, this test focuses
+    // on the explicit-Prime path used on a state transition.)
+    player.feet_position = Vec3{5.0, 0.0, 0.0};
+    provider.Prime(player.feet_position);
+
+    // Step 3: small motion at the new baseline. dist = 0.1 m, velocity
+    // = 0.1 / 0.016 = 6.25 m/s, below the 10 m/s threshold. Stays not-
+    // knocked-out. The fact that this passes proves the baseline IS
+    // the post-Prime coordinate (5, 0, 0), not the pre-Prime (0, 0, 0)
+    // which would have produced a 5 m / 0.016 s = 312 m/s trigger.
+    player.feet_position = Vec3{5.1, 0.0, 0.0};
+    provider.Tick(player, 0.016);
+    EXPECT_FALSE(provider.isKnockedOut());
+
+    // Step 4: a real impact from the new baseline. 0.5 m / 0.016 s =
+    // 31.25 m/s, above the 10 m/s threshold — triggers normally. Prime
+    // resets the baseline, not the heuristic.
+    player.feet_position = Vec3{5.6, 0.0, 0.0};
+    provider.Tick(player, 0.016);
+    EXPECT_TRUE(provider.isKnockedOut());
+
+    // Step 5: advance the recovery timer past recovery_seconds so we
+    // can probe the post-recovery behavior. KnockoutConfig default
+    // recovery_seconds is 1.5 (post-M11 tuning) — pass dt = 2.0 so
+    // time_remaining_s crosses zero in a single Tick. The recovery
+    // path also resets tracking_ = false; Prime() in Step 6 re-arms
+    // it explicitly with a fresh baseline so Step 7 doesn't compute
+    // its delta against the post-recovery-pre-Prime coordinate.
+    provider.Tick(player, 2.0);
+    EXPECT_FALSE(provider.isKnockedOut());
+    provider.Prime(Vec3{100.0, 0.0, 0.0});
+
+    // Step 6: a 0.4 m motion from the freshly-primed (100, 0, 0)
+    // coordinate = 25 m/s, above the 10 m/s threshold — triggers.
+    player.feet_position = Vec3{100.4, 0.0, 0.0};
+    provider.Tick(player, 0.016);
+    EXPECT_TRUE(provider.isKnockedOut());
+}
+
+// KnockoutConfig default value pins — the M11 follow-up bumped the
+// stub's velocity_change_threshold_mps 12 → 25 and recovery_seconds
+// 8 → 1.5 to silence the post-cap, pre-re-prime spurious triggers on
+// ATS 1.61.3.1s with the build 3fbc149 DLL. These defaults must stay
+// in sync with the rationale in Knockout.h, otherwise the heuristic
+// reverts to false-positive spamming.
+void TestKnockoutConfigDefaultValues() {
+    KnockoutConfig cfg;
+    EXPECT_NEAR(cfg.velocity_change_threshold_mps, 25.0, 1e-6);
+    EXPECT_NEAR(cfg.recovery_seconds, 1.5, 1e-6);
+    EXPECT_NEAR(cfg.teleport_reprime_distance_m, 1.0, 1e-6);
+    EXPECT_NEAR(cfg.fall_height_threshold_m, 4.0, 1e-6);
+}
+
 }  // namespace walkercore

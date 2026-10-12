@@ -84,6 +84,8 @@ void TestKnockoutFastImpactTriggers();
 void TestKnockoutProviderStateCycleAndEveryField();
 void TestKnockoutTeleportReprime();
 void TestKnockoutRecoveryResetsLastPositionBaseline();
+void TestKnockoutPrimeResetsTrackingBaseline();
+void TestKnockoutConfigDefaultValues();
 void TestDoorAnimEasing();
 void TestDoorAnimProviderEveryFieldHasObservableEffect();
 void TestDoorAnimWiringInitialStateNotAnimating();
@@ -528,6 +530,8 @@ int main() {
     RUN_TEST(walkercore::TestKnockoutProviderStateCycleAndEveryField);
     RUN_TEST(walkercore::TestKnockoutTeleportReprime);
     RUN_TEST(walkercore::TestKnockoutRecoveryResetsLastPositionBaseline);
+    RUN_TEST(walkercore::TestKnockoutPrimeResetsTrackingBaseline);
+    RUN_TEST(walkercore::TestKnockoutConfigDefaultValues);
     RUN_TEST(walkercore::TestDoorAnimEasing);
     RUN_TEST(walkercore::TestDoorAnimProviderEveryFieldHasObservableEffect);
     RUN_TEST(walkercore::TestDoorAnimWiringInitialStateNotAnimating);

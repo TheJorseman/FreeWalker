@@ -212,13 +212,14 @@ void TestPhysXDumpVtableEntriesNoMatchReturnsZero();
 void TestPhysXDumpVtableEntriesRejectsNullBuffer();
 void TestPhysXDumpVtableEntriesAnnotatedLabelsCatalogMatches();
 void TestPhysXResolveKnownMethodsFindsReleaseAtSlotZero();
-void TestPhysXResolveKnownMethodsAllFiveSlotsInOrder();
+void TestPhysXResolveKnownMethodsAllSevenSlotsInOrder();
 void TestPhysXResolveKnownMethodsNoMatchReturnsFalse();
 void TestPhysXResolveKnownMethodsRespectsBounds();
 void TestPhysXKnownMethodsCatalogIsComplete();
 void TestPhysXKnownMethodsSweepIsTheHighestVA();
 void TestPhysXKnownMethodsCatalogVAsInPhysXRange();
 void TestPhysXKnownMethodsCatalogNamesMatchSDK();
+void TestPhysXKnownMethodsCatalogOrderIsStable();
 
 // M9 SCS configuration event + CouplingProvider real-hook probes.
 void TestScsTelemetryProviderRegisterEventsNullIsSafe();
@@ -720,13 +721,14 @@ int main() {
     RUN_TEST(walkercore::TestPhysXDumpVtableEntriesRejectsNullBuffer);
     RUN_TEST(walkercore::TestPhysXDumpVtableEntriesAnnotatedLabelsCatalogMatches);
     RUN_TEST(walkercore::TestPhysXResolveKnownMethodsFindsReleaseAtSlotZero);
-    RUN_TEST(walkercore::TestPhysXResolveKnownMethodsAllFiveSlotsInOrder);
+    RUN_TEST(walkercore::TestPhysXResolveKnownMethodsAllSevenSlotsInOrder);
     RUN_TEST(walkercore::TestPhysXResolveKnownMethodsNoMatchReturnsFalse);
     RUN_TEST(walkercore::TestPhysXResolveKnownMethodsRespectsBounds);
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogIsComplete);
     RUN_TEST(walkercore::TestPhysXKnownMethodsSweepIsTheHighestVA);
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogVAsInPhysXRange);
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogNamesMatchSDK);
+    RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogOrderIsStable);
 
     // M5 PerTruckDoorTable probes — per model_id door geometry overrides.
     RUN_TEST(walkercore::TestPerTruckDoorTableBuiltInFindsKnownRow);

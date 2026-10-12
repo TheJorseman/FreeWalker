@@ -111,29 +111,35 @@ struct PhysXKnownMethod {
     int32_t slot;
 };
 
-constexpr int kPhysXKnownMethodCount = 5;
+constexpr int kPhysXKnownMethodCount = 7;
 
 // The runtime catalog for ATS 1.61.3.1s. RVA computed from the VA using
-// image base 0x140000000. The four "stable" entries (release,
-// addActor, simulate, shiftOrigin) were located by walking back from
-// the LEA r64, [rip+disp32] that loads the matching
+// image base 0x140000000. The five "stable" entries (release,
+// addActor, simulate, shiftOrigin, sweep) were located by walking
+// back from the LEA r64, [rip+disp32] that loads the matching
 // "PxScene::<method>(...) ..." assertion string in .text. The
-// PxScene::sweep entry was added in a follow-up pass via the
-// "PxScene::sweep(): first geometry object" assertion string
-// (PhysX 3.4 SDK). All VAs are cross-checked against the
-// vtable at RVA 0x2500EA0 (PxScene vtable, 118 slots) by
-// ResolveKnownMethods; simulate is an exact slot match, the other
-// three are within 8 bytes of the slot VA (small offsets come from
-// the walk-back heuristic landing on a non-prologue instruction).
+// PxScene::raycast and PxScene::overlap entries were identified by
+// disassembling the vtable at RVA 0x25020A0 (PxScene vtable, 118
+// slots) and matching each slot's function prologue to the expected
+// public-API signature: raycast has a 0x490-byte stack frame and a
+// 64-slot hit buffer; overlap has a 0x2c0-byte stack frame and an
+// 8-slot hit buffer. Both functions are exact-match at the file
+// offset, with no walk-back heuristic drift.
 //
-//   PxScene::release    VA=0x141AE07B6  RVA=0x1AE07B6
-//   PxScene::addActor   VA=0x141AE0B62  RVA=0x1AE0162
-//   PxScene::simulate   VA=0x141AE4D80  RVA=0x1AE4380
-//   PxScene::shiftOrigin VA=0x141AE6C28 RVA=0x1AE6228
-//   PxScene::sweep      VA=0x141B06F10 RVA=0x1B06F10
+//   PxScene::release      VA=0x141AE07B6  RVA=0x1AE07B6
+//   PxScene::addActor     VA=0x141AE0B62  RVA=0x1AE0162
+//   PxScene::simulate     VA=0x141AE4D80  RVA=0x1AE4380
+//   PxScene::shiftOrigin  VA=0x141AE6C28  RVA=0x1AE6228
+//   PxScene::sweep        VA=0x141B06F10  RVA=0x1B06F10
+//   PxScene::raycast      VA=0x141AE1610  RVA=0x1AE1310
+//   PxScene::overlap      VA=0x141AE0F70  RVA=0x1AE0C70
 //
-// Source: scripts/physx-vta-scan/README.md § "Hallazgos confirmados".
-// See docs/observations/ats-physx-functions.md for the full
+// ResolveKnownMethods cross-checks all 7 VAs against the vtable at
+// RVA 0x25020A0 (118 slots): release->2, addActor->11,
+// simulate->57, shiftOrigin->117, sweep->NOT IN THIS VTABLE
+// (sweep's slot lives in a separate 5-slot run at RVA 0x2507C08),
+// raycast->15, overlap->13. See
+// docs/observations/ats_1_61_3_1s.physx.functions.md for the full
 // provenance.
 extern const PhysXKnownMethod kPhysXKnownMethods[kPhysXKnownMethodCount];
 
@@ -162,10 +168,25 @@ struct PhysXVtableResolveResult {
     // sweep-specific assertion string
     // ("PxScene::sweep(): first geometry object ...") instead of
     // the generic LEA-walk-back heuristic. The catalog has it at
-    // VA 0x141B06F10 (RVA 0x1B06F10); the matching slot in the
-    // PxScene vtable at RVA 0x2500EA0 is the next slot to verify
-    // against a live PxScene instance.
+    // VA 0x141B06F10 (RVA 0x1B06F10); on ATS 1.61.3.1s sweep is
+    // NOT in the 0x25020A0 PxScene vtable (it lives in a separate
+    // 5-slot run at RVA 0x2507C08) so this field stays at -1 when
+    // ResolveKnownMethods runs against the main vtable.
     int32_t sweep_slot = -1;
+    // Slot index of PxScene::raycast. Located by disassembling the
+    // 0x25020A0 vtable: slot 15's pointer
+    // (VA 0x141AE1610) points at a function whose prologue is
+    // `mov rax, rsp; ... sub rsp, 0x490` followed by the
+    // `nbMaxTouches = 0x40 = 64` hit-buffer init pattern. -1
+    // when the catalog did not match.
+    int32_t raycast_slot = -1;
+    // Slot index of PxScene::overlap. Located by disassembling the
+    // 0x25020A0 vtable: slot 13's pointer (VA 0x141AE0F70) is
+    // `xor r9d, r9d; jmp 0x141AE0FD0`, where 0x141AE0FD0 is a
+    // function with `sub rsp, 0x2c0` and `nbMaxTouches = 0x8 = 8`
+    // hit-buffer init (overlap's default buffer is smaller than
+    // raycast's). -1 when the catalog did not match.
+    int32_t overlap_slot = -1;
 };
 
 // Result of a memory scan over a module's .rdata. success is true when

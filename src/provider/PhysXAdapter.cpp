@@ -412,6 +412,15 @@ const PhysXKnownMethod kPhysXKnownMethods[kPhysXKnownMethodCount] = {
     {"simulate",      0x141AE4D80ULL, -1},
     {"shiftOrigin",   0x141AE6C28ULL, -1},
     {"sweep",         0x141B06F10ULL, -1},
+    // raycast: full implementation with 0x490-byte stack frame and
+    // 64-slot hit buffer init at VA 0x141AE1610. Located as slot
+    // 15 in the PxScene vtable @ RVA 0x25020A0.
+    {"raycast",       0x141AE1610ULL, -1},
+    // overlap: thin dispatcher at 0x141AE0F70 that sets r9=0 and
+    // tail-jumps to 0x141AE0FD0, where the actual function has a
+    // 0x2c0-byte stack frame and 8-slot hit buffer init.
+    // Located as slot 13 in the PxScene vtable @ RVA 0x25020A0.
+    {"overlap",       0x141AE0F70ULL, -1},
 };
 
 bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
@@ -427,6 +436,8 @@ bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
     out->simulate_slot = -1;
     out->shift_origin_slot = -1;
     out->sweep_slot = -1;
+    out->raycast_slot = -1;
+    out->overlap_slot = -1;
     if (accepted_run <= 0) {
         return false;
     }
@@ -452,6 +463,8 @@ bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
                     case 2: out->simulate_slot = slot; break;
                     case 3: out->shift_origin_slot = slot; break;
                     case 4: out->sweep_slot = slot; break;
+                    case 5: out->raycast_slot = slot; break;
+                    case 6: out->overlap_slot = slot; break;
                     default: break;
                 }
                 matched += 1;

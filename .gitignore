@@ -30,3 +30,10 @@ desktop.ini
 
 # mavis-trash working files
 .mavis-trash/
+
+# Local game memory dumps (analysis artifacts — never commit, may contain
+# credentials / chat history / personal data from the running game)
+*.dmp
+dumps/
+*.dump
+gamedumps/

@@ -112,6 +112,32 @@ void KnockoutProvider::Tick(PlayerState &player, double dt) {
         return;
     }
 
+    // Defence-in-depth dt guard. PerFrameThread::Run already skips
+    // pathological dt windows at the source (sub-ms from Windows
+    // scheduler preemption of sleep_until; >250 ms from post-suspend
+    // resume), but any other call path — D3D Present hook, manual
+    // external driver, future tick source — can reach Tick() with an
+    // arbitrary dt. The arithmetic in this function divides by dt
+    // (the velocity computation at the bottom: `velocity = dist /
+    // dt`) so an unreasonable dt MUST NOT reach it. The 1 ms lower
+    // bound matches PerFrameThread's source-side guard; the 250 ms
+    // upper bound absorbs a 4-frame @60 Hz stall without resetting
+    // the baseline on every normal hitch (a normal hitch is below
+    // this and the next valid dt naturally absorbs the difference).
+    //
+    // Both branches re-prime last_position_ so the next valid Tick
+    // computes against the post-disturbance coordinate instead of
+    // the pre-disturbance reference. tracking_ is preserved (set to
+    // whatever it was); the next valid dt will either hit the
+    // !tracking_ first-frame path (if it was false) or compute
+    // velocity from "now" against the just-set last_position_ (if
+    // it was true). Either way, the baseline is fresh and a spurious
+    // trigger is impossible.
+    if (dt < 0.001 || dt > 0.250) {
+        last_position_ = player.feet_position;
+        return;
+    }
+
     // First tracking frame: just latch the position and return. We
     // don't have a previous position to compare against, so any
     // velocity derived from the priming frame would be meaningless.

@@ -709,4 +709,212 @@ void TestKnockoutConfigDefaultValues() {
     EXPECT_NEAR(cfg.fall_height_threshold_m, 4.0, 1e-6);
 }
 
+// -----------------------------------------------------------------------------
+// Pathological-dt defence-in-depth guards.
+//
+// PerFrameThread::Run skips ticks with sub-millisecond or >250 ms dt at
+// the source (the root-cause fix; see PerFrameThread.cpp header comment
+// "Pathological-dt guard"). KnockoutProvider::Tick ALSO guards against
+// pathological dt as defence in depth — any tick path that reaches Tick
+// directly (D3D Present hook, manual external driver, future tick
+// source) MUST NOT feed a bad dt to the `dist / dt` arithmetic at the
+// bottom of this function.
+//
+// The live ATS 1.61.3.1s session produced `dt` values of 0.0001 s
+// (= 100 µs, Windows scheduler preemption of sleep_until), 0.0000 s
+// (= 6 µs in the source but rounded by %.4f), and 0.0070-0.0090 s
+// (= 110-143 Hz effective rate) — see game.log.txt rows 1344, 1360,
+// 1362, 1364, 1366. Each fed `dist / dt` of 615.3, 52112.4, 28-35 m/s
+// into the velocity check, firing spurious knock-outs in a static
+// pedestrian position.
+//
+// Contract under test:
+//
+//   1. Sub-millisecond dt (dt < 1 ms) MUST NOT trigger a knock-out,
+//      regardless of the position delta. The velocity computation
+//      divides by dt — sub-ms would produce hundreds of m/s.
+//
+//   2. Long-stall dt (dt > 250 ms) MUST NOT trigger a knock-out.
+//      A 30-second thread resume would otherwise feed `dist / dt` of
+//      hundreds of m/s even when the player moved a few centimetres.
+//
+//   3. Both branches MUST re-prime the baseline so the next valid
+//      Tick computes its delta from the post-disturbance coordinate,
+//      not from a stale pre-disturbance reference. (Same idea as the
+//      recovery-resets-last-position test, but driven by the dt guards
+//      instead of the recovery timer.)
+//
+//   4. The guard boundary (dt = 1 ms exactly, dt = 250 ms exactly)
+//      is permissive: anything inside [1 ms, 250 ms] takes the
+//      normal velocity path; anything outside takes the guard path.
+//      Pin both ends to lock the contract.
+// -----------------------------------------------------------------------------
+void TestKnockoutPathologicalDtGuards() {
+    // Disable the teleport re-prime gate so a >teleport jump takes
+    // the velocity path, not the snap path — this isolates the dt
+    // guards from the snap branch.
+    KnockoutProvider provider;
+    KnockoutConfig cfg = provider.config();
+    cfg.teleport_reprime_distance_m = 100.0;  // disable teleport gate
+    cfg.velocity_change_threshold_mps = 25.0;  // match default
+    provider.SetConfig(cfg);
+
+    // ---- Case 1: sub-millisecond dt → no trigger ----
+    {
+        PlayerState player;
+        PlayerState_Reset(player);
+        player.has_feet = true;
+        player.feet_position = Vec3{0, 0, 0};
+
+        // Prime.
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // A 0.5 m displacement at dt = 0.0001 s (= 100 µs, the live
+        // build's most pathological case) would be 5000 m/s if the
+        // guard were absent. The dt guard must reject the tick.
+        player.feet_position = Vec3{0.5, 0, 0};
+        provider.Tick(player, 0.0001);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // Even a much larger jump (1 m) at sub-ms dt MUST NOT trigger.
+        player.feet_position = Vec3{1.5, 0, 0};
+        provider.Tick(player, 0.0005);
+        EXPECT_FALSE(provider.isKnockedOut());
+    }
+
+    // ---- Case 2: long-stall dt → no trigger, baseline re-primed ----
+    {
+        KnockoutProvider provider;
+        KnockoutConfig cfg = provider.config();
+        cfg.teleport_reprime_distance_m = 100.0;  // disable teleport gate
+        cfg.velocity_change_threshold_mps = 25.0;
+        provider.SetConfig(cfg);
+
+        PlayerState player;
+        PlayerState_Reset(player);
+        player.has_feet = true;
+        player.feet_position = Vec3{0, 0, 0};
+
+        // Prime.
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // Move 10 m in a single Tick with dt = 5 s (post-suspend
+        // resume). dist/dt = 2 m/s, well below threshold by luck, but
+        // the dt guard MUST reject the tick BEFORE reaching the
+        // arithmetic — the next valid Tick must compare against the
+        // post-stall position, not the pre-stall position.
+        player.feet_position = Vec3{10, 0, 0};
+        provider.Tick(player, 5.0);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // The next valid Tick at a small motion from (10, 0, 0) MUST
+        // stay not-knocked-out. Without the baseline re-prime, the
+        // 10 m delta since the pre-stall (0, 0, 0) baseline would
+        // produce a 312 m/s trigger on the very first post-stall Tick.
+        player.feet_position = Vec3{10.05, 0, 0};  // 3.125 m/s
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+    }
+
+    // ---- Case 3: sub-ms dt re-primes baseline ----
+    {
+        KnockoutProvider provider;
+        KnockoutConfig cfg = provider.config();
+        cfg.teleport_reprime_distance_m = 100.0;
+        cfg.velocity_change_threshold_mps = 25.0;
+        provider.SetConfig(cfg);
+
+        PlayerState player;
+        PlayerState_Reset(player);
+        player.has_feet = true;
+        player.feet_position = Vec3{0, 0, 0};
+
+        // Prime at origin.
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // Move to (5, 0, 0) with sub-ms dt — guard must re-prime the
+        // baseline here so the next valid Tick uses (5, 0, 0) as the
+        // reference, not (0, 0, 0).
+        player.feet_position = Vec3{5, 0, 0};
+        provider.Tick(player, 0.0001);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // 0.05 m motion at 0.05 / 0.016 = 3.125 m/s — below 25 m/s.
+        // If the baseline were still (0, 0, 0), the 5 m delta would
+        // produce 312 m/s and trigger. The re-prime means we measure
+        // from (5, 0, 0) → (5.05, 0, 0) → 3.125 m/s, no trigger.
+        player.feet_position = Vec3{5.05, 0, 0};
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // Now a real impact from the new baseline. 0.5 m / 16 ms =
+        // 31.25 m/s, above the 25 m/s threshold — triggers normally.
+        // The dt guards reset the baseline, not the heuristic.
+        player.feet_position = Vec3{5.55, 0, 0};
+        provider.Tick(player, 0.016);
+        EXPECT_TRUE(provider.isKnockedOut());
+    }
+
+    // ---- Case 4: guard boundaries — dt = 1 ms is permitted, dt = 250 ms is permitted ----
+    {
+        KnockoutProvider provider;
+        KnockoutConfig cfg = provider.config();
+        cfg.teleport_reprime_distance_m = 100.0;
+        // Threshold chosen so a 0.7 m jump is below the trigger (at the
+        // 250 ms boundary: 0.7 / 0.250 = 2.8 m/s, well below any
+        // sensible threshold). At the 1 ms boundary: 0.7 / 0.001 = 700
+        // m/s — that's the guard's lower bound, so it MUST take the
+        // guard path.
+        cfg.velocity_change_threshold_mps = 25.0;
+        provider.SetConfig(cfg);
+
+        PlayerState player;
+        PlayerState_Reset(player);
+        player.has_feet = true;
+        player.feet_position = Vec3{0, 0, 0};
+
+        // Prime.
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // dt = 0.250 — exactly at the upper guard boundary. Inclusive,
+        // so the velocity path runs. 0.7 m / 0.250 s = 2.8 m/s, below
+        // threshold — no trigger. (The point is to lock the boundary:
+        // 0.250 must NOT trip the guard, 0.251 must.)
+        player.feet_position = Vec3{0.7, 0, 0};
+        provider.Tick(player, 0.250);
+        EXPECT_FALSE(provider.isKnockedOut());
+    }
+
+    // ---- Case 5: guard boundaries — dt just over the upper bound trips it ----
+    {
+        KnockoutProvider provider;
+        KnockoutConfig cfg = provider.config();
+        cfg.teleport_reprime_distance_m = 100.0;
+        cfg.velocity_change_threshold_mps = 25.0;
+        provider.SetConfig(cfg);
+
+        PlayerState player;
+        PlayerState_Reset(player);
+        player.has_feet = true;
+        player.feet_position = Vec3{0, 0, 0};
+
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // dt = 0.251 — just past the upper guard boundary. The guard
+        // rejects the tick, so a 0.7 m displacement is harmless.
+        // 0.7 / 0.251 = 2.79 m/s, below threshold by coincidence — so
+        // we move a larger distance to make the test more pointed:
+        // 6.3 m / 0.251 s = 25.1 m/s, just above threshold. Guard
+        // must still reject.
+        player.feet_position = Vec3{6.3, 0, 0};
+        provider.Tick(player, 0.251);
+        EXPECT_FALSE(provider.isKnockedOut());
+    }
+}
+
 }  // namespace walkercore

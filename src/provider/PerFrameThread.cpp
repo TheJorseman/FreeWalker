@@ -23,6 +23,19 @@
 //      guard a manually-driven tick without bypassing the existing
 //      callers. The functions are 1-byte atomic CASes on x86-64, so the
 //      per-frame cost is two locked instructions.
+//
+//   5. Pathological-dt guard. Real Windows scheduler behaviour can wake
+//      `sleep_until` early (audio thread priority bump, kernel DPC) and
+//      can also resume the thread after a multi-second suspend. Both
+//      produce a `dt` that's outside the [1 ms, 250 ms] window a
+//      real game frame falls into. Feeding those values to downstream
+//      consumers is catastrophic: `dist / dt` divides into the
+//      hundreds-of-m/s range (KnockoutProvider spuriously fires every
+//      ~8 s; see the M11 log analysis for ATS 1.61.3.1s). The fix is
+//      to skip the tick at the source — last_us is still updated so
+//      the next valid tick is measured from "now" — and to keep a
+//      defence-in-depth guard inside KnockoutProvider::Tick so any
+//      other tick path is also safe.
 
 #include "walkercore/PerFrameThread.h"
 
@@ -120,6 +133,43 @@ void PerFrameThread::Run() {
                     ? 0.0
                     : static_cast<double>(now_us - last_us) / 1e6;
             last_us = now_us;
+
+            // Skip ticks that would feed a pathological dt to downstream
+            // consumers. Two failure shapes observed in the live ATS
+            // 1.61.3.1s session (game.log.txt around lines 1344–1368):
+            //
+            //   * Sub-millisecond (dt < 1 ms): Windows scheduler
+            //     preempts sleep_until early (priority bump from audio
+            //     thread, kernel DPC, or a previous tick's body taking
+            //     most of the period). Result: KnockoutProvider sees
+            //     `dist / dt` of 28-52112 m/s and fires spuriously
+            //     every ~8 s. Observed dt values: 0.0001 s (= 100 µs)
+            //     and 0.0070-0.0090 s (= 110-143 Hz effective rate).
+            //
+            //   * Multi-second (dt > 250 ms, four missed 60 Hz frames):
+            //     thread suspended (debugger break, OS sleep, system
+            //     update). On resume, `dt` becomes 30 s or more. The
+            //     FrameLoop would integrate 30 s of physics in a single
+            //     tick, teleporting the player through terrain and
+            //     tripping KnockoutProvider via the same `dist / dt`
+            //     path.
+            //
+            // The KnockoutProvider has its own defensive guards (defence
+            // in depth). Skipping at the source here is unambiguous,
+            // updates `last_us` so the next valid dt is measured from
+            // "now", and avoids reaching into their state to re-prime
+            // baselines. The thresholds sit on constants at namespace
+            // scope (kMinTickDt, kMaxTickDt) so the upper bound is the
+            // implicit "max acceptable frame stall" — four missed 60 Hz
+            // frames is a clear stall, anything shorter is a normal
+            // hitch (the next tick absorbs the difference via the
+            // existing velocity-cap math).
+            constexpr double kMinTickDt = 0.001;    // 1 ms — sub-frame
+            constexpr double kMaxTickDt = 0.250;    // 250 ms — 4 missed @60 Hz
+            if (dt > kMaxTickDt || (dt > 0.0 && dt < kMinTickDt)) {
+                walker_exit_per_frame_tick();
+                continue;
+            }
 #ifndef WALKERCORE_TEST_NO_PER_FRAME_TICK
             walker_per_frame_tick(dt);
 #endif

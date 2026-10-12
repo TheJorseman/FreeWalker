@@ -39,7 +39,11 @@
 #include <cstdio>
 #include <string>
 
+#include "walkercore/CameraState.h"
+#include "walkercore/FrameLoop.h"
 #include "walkercore/Log.h"
+#include "walkercore/PlayerState.h"
+#include "walkercore/WalkerFsm.h"
 
 #if defined(WALKERCORE_HAVE_IMGUI)
 #include "imgui.h"
@@ -75,7 +79,14 @@ ImGuiOverlay::~ImGuiOverlay() {
         // Best-effort teardown so a delete from the adapter
         // (e.g. PluginEntry's scs_telemetry_shutdown) does not
         // leak the ImGui context. Failures are silent — the
-        // caller is about to drop the DLL.
+        // caller is about to drop the DLL. The bound
+        // FrameLoop / WalkerFsm pointers are cleared first so
+        // a late RenderFrameIfEnabled (between the bound
+        // provider's destruction and the overlay's destruction)
+        // skips the live state section rather than
+        // dereferencing freed memory.
+        frame_loop_ = nullptr;
+        fsm_ = nullptr;
         Shutdown();
         g_overlay = nullptr;
     }
@@ -214,15 +225,64 @@ bool ImGuiOverlay::RenderFrameIfEnabled() {
 
     // Status window — auto-resize to content, no title bar, no
     // resize grip, no background, semi-transparent. The text
-    // contents are deliberately small (a single line) because
-    // most users just want a "is it working?" confirmation on
-    // top of the game, not a full HUD.
+    // contents are deliberately small because most users just
+    // want a "is it working?" confirmation on top of the game,
+    // not a full HUD. The live state section is only drawn when
+    // the bound FrameLoop / WalkerFsm are non-null — the
+    // overlay without bindings shows just the version + counters
+    // (the scaffolding state).
     ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.35f);
     ImGui::Begin("WalkerCore", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
     ImGui::Text("WalkerCore v0.0.1 (imgui %s)", ImGuiVersionString());
+    if (frame_loop_ != nullptr) {
+        // Camera eye + yaw / pitch + FOV. The eye position flips
+        // during transitions and only settles when the FSM enters
+        // Walking; the FOV is constant unless the user changes the
+        // INI at runtime. Operators confirm "F10 produced visible
+        // movement" by reading the eye position across two
+        // consecutive frames.
+        const CameraState &cam = frame_loop_->camera();
+        ImGui::Text("cam: (%.1f, %.1f, %.1f) y=%.2f p=%.2f fov=%.1f",
+                    static_cast<double>(cam.eye_position.x),
+                    static_cast<double>(cam.eye_position.y),
+                    static_cast<double>(cam.eye_position.z),
+                    static_cast<double>(cam.yaw_radians),
+                    static_cast<double>(cam.pitch_radians),
+                    static_cast<double>(cam.horizontal_fov_radians));
+        // Player feet + mode. has_feet is false in Driving mode
+        // (the player is in the cabin, the camera eye is anchored
+        // to the seat), true in Walking. The mode field
+        // distinguishes Standing / Walking / Crouching / Running
+        // when the user is on foot.
+        const PlayerState &p = frame_loop_->player();
+        if (p.has_feet) {
+            ImGui::Text("feet: (%.1f, %.1f, %.1f) h=%.2f %s",
+                        static_cast<double>(p.feet_position.x),
+                        static_cast<double>(p.feet_position.y),
+                        static_cast<double>(p.feet_position.z),
+                        static_cast<double>(p.eye_height),
+                        PlayerModeName(p.mode));
+        } else {
+            ImGui::Text("feet: (driver) %s", PlayerModeName(p.mode));
+        }
+    }
+    if (fsm_ != nullptr) {
+        // FSM state + tween progress. The transition t value
+        // ticks from 0 to 1 over `transition_seconds` (default
+        // 0.6s) and is the cleanest signal "is the toggle
+        // tween running right now?".
+        const float t = fsm_->transitionProgress();
+        if (t > 0.0f && t < 1.0f) {
+            ImGui::Text("fsm: %s (t=%.2f)",
+                        WalkerFsmStateName(fsm_->state()),
+                        static_cast<double>(t));
+        } else {
+            ImGui::Text("fsm: %s", WalkerFsmStateName(fsm_->state()));
+        }
+    }
     ImGui::Text("walks: %d in / %d out   frames: %d",
                 walks_entered_, walks_exited_, frames_rendered_ + 1);
     ImGui::End();
@@ -267,6 +327,8 @@ void ImGuiOverlay::ResetForTesting() {
         g_overlay->frames_rendered_ = 0;
         g_overlay->enabled_ = false;
         g_overlay->supported_ = false;
+        g_overlay->frame_loop_ = nullptr;
+        g_overlay->fsm_ = nullptr;
     }
 }
 

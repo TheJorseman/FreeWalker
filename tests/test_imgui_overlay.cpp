@@ -183,4 +183,51 @@ void TestImGuiOverlayOnDeviceLostIsSafeWhenUninitialized() {
 
 #endif  // WALKERCORE_HAVE_IMGUI
 
+// (c) FrameLoop + WalkerFsm binding — always run (the binding
+// is a plain pointer store, no ImGui involvement). The
+// accessors report the bound state and the unbind path
+// clears both pointers. We use int* instead of FrameLoop* /
+// WalkerFsm* to avoid pulling FrameLoop.h / WalkerFsm.h into
+// the test build (they drag in lots of STL containers). The
+// ImGuiOverlay class is templated on the pointer value, not
+// the type, so an int* cast is well-defined behaviour for the
+// purposes of the binding flag.
+void TestImGuiOverlayBindFrameLoopRoundTrip() {
+    auto o = MakeOverlay();
+    EXPECT_FALSE(o->frame_loop_bound());
+    EXPECT_FALSE(o->fsm_bound());
+    // Use reinterpret_cast to avoid the <FrameLoop> forward
+    // declaration in the test build. The bound flag only
+    // checks pointer null-ness, so the actual type is not
+    // dereferenced.
+    int sentinel = 0;
+    o->BindFrameLoop(reinterpret_cast<FrameLoop *>(&sentinel));
+    EXPECT_TRUE(o->frame_loop_bound());
+    EXPECT_FALSE(o->fsm_bound());
+    o->BindFrameLoop(nullptr);
+    EXPECT_FALSE(o->frame_loop_bound());
+}
+
+void TestImGuiOverlayBindFsmRoundTrip() {
+    auto o = MakeOverlay();
+    EXPECT_FALSE(o->fsm_bound());
+    int sentinel = 0;
+    o->BindFsm(reinterpret_cast<WalkerFsm *>(&sentinel));
+    EXPECT_TRUE(o->fsm_bound());
+    o->BindFsm(nullptr);
+    EXPECT_FALSE(o->fsm_bound());
+}
+
+void TestImGuiOverlayResetForTestingClearsBindings() {
+    auto o = MakeOverlay();
+    int sentinel = 0;
+    o->BindFrameLoop(reinterpret_cast<FrameLoop *>(&sentinel));
+    o->BindFsm(reinterpret_cast<WalkerFsm *>(&sentinel));
+    EXPECT_TRUE(o->frame_loop_bound());
+    EXPECT_TRUE(o->fsm_bound());
+    ImGuiOverlay::ResetForTesting();
+    EXPECT_FALSE(o->frame_loop_bound());
+    EXPECT_FALSE(o->fsm_bound());
+}
+
 }  // namespace walkercore

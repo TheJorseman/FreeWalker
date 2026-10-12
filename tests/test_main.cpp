@@ -293,6 +293,9 @@ void TestImGuiOverlayInitializeIsIdempotent();
 void TestImGuiOverlayRenderNoOpWhenDisabled();
 void TestImGuiOverlayRenderNoOpWhenSupportedFalse();
 void TestImGuiOverlayOnDeviceLostIsSafeWhenUninitialized();
+void TestImGuiOverlayBindFrameLoopRoundTrip();
+void TestImGuiOverlayBindFsmRoundTrip();
+void TestImGuiOverlayResetForTestingClearsBindings();
 void TestApplyOverrideCabinBoxPatch();
 void TestTruckDoorConfigAppliesOverride();
 
@@ -836,6 +839,9 @@ int main() {
     RUN_TEST(walkercore::TestImGuiOverlayRenderNoOpWhenDisabled);
     RUN_TEST(walkercore::TestImGuiOverlayRenderNoOpWhenSupportedFalse);
     RUN_TEST(walkercore::TestImGuiOverlayOnDeviceLostIsSafeWhenUninitialized);
+    RUN_TEST(walkercore::TestImGuiOverlayBindFrameLoopRoundTrip);
+    RUN_TEST(walkercore::TestImGuiOverlayBindFsmRoundTrip);
+    RUN_TEST(walkercore::TestImGuiOverlayResetForTestingClearsBindings);
 
     // M9 SCS configuration event + CouplingProvider real-hook probes.
     RUN_TEST(walkercore::TestScsTelemetryProviderRegisterEventsNullIsSafe);

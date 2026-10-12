@@ -117,11 +117,28 @@ public:
     // produced output (ImGui::NewFrame → draw → Render →
     // ImGui_ImplDX11_RenderDrawData). When the overlay is disabled
     // or the device is not captured, returns false without
-    // touching the render target.
+    // touching the render target. The render pulls the live
+    // walker state from the bound FrameLoop + WalkerFsm pointers
+    // (see BindFrameLoop / BindFsm) so a deploy-side analyst can
+    // confirm "yes, F10 actually toggled Walking" by reading the
+    // overlay on screen.
     bool RenderFrameIfEnabled();
     // Tear down the ImGui context + the D3D11 + Win32 backends.
     // Safe to call from DllMain / scs_telemetry_shutdown.
     void Shutdown();
+
+    // -- Walker state binding ----------------------------------------------
+    // Wire the live FrameLoop + WalkerFsm so the render can surface
+    // the current camera eye, player feet, and FSM state. PluginEntry
+    // calls both at scs_telemetry_init time (after the FrameLoop and
+    // WalkerFsm are constructed). Pointers are borrowed — the overlay
+    // does not own them and the diagnostics mirror in DiagnosticDump
+    // is the canonical source. The render skips the corresponding
+    // section when the bound pointer is null.
+    void BindFrameLoop(class FrameLoop *loop) { frame_loop_ = loop; }
+    void BindFsm(class WalkerFsm *fsm) { fsm_ = fsm; }
+    bool frame_loop_bound() const { return frame_loop_ != nullptr; }
+    bool fsm_bound() const { return fsm_ != nullptr; }
 
     // -- Test seams --------------------------------------------------------
     // Pure helpers exposed for the unit-test suite. Not part of
@@ -145,6 +162,13 @@ private:
     // pointer. The D3D11 hook is not allowed to call into us after
     // the device is gone; the counter is informational only.
     int init_generation_ = 0;
+
+    // Borrowed pointers to the walker pipeline. The render reads
+    // camera + player + FSM state from these to populate the
+    // overlay's live state section. Not owned; the lifetime is
+    // managed by PluginEntry.
+    class FrameLoop *frame_loop_ = nullptr;
+    class WalkerFsm *fsm_ = nullptr;
 };
 
 }  // namespace walkercore

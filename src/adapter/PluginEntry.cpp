@@ -898,6 +898,14 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   g_imgui_overlay = new walkercore::ImGuiOverlay();
   g_imgui_overlay->SetEnabled(
       g_settings != nullptr && g_settings->current().m11_imgui_overlay);
+  // Wire the live walker state to the overlay so the D3D11
+  // Present hook's RenderFrameIfEnabled can pull the camera
+  // eye + player feet + FSM state. Borrowed pointers; the
+  // overlay does not own the FrameLoop / WalkerFsm, and the
+  // scs_telemetry_shutdown path unbinds before delete to
+  // avoid a stale dereference.
+  g_imgui_overlay->BindFrameLoop(g_frame_loop);
+  g_imgui_overlay->BindFsm(g_fsm);
   walkercore::diagnostic_internal::SetImGuiOverlay(g_imgui_overlay);
 
   // M7: door animator. Tweens the driver's door swing angle when the
@@ -1167,11 +1175,14 @@ extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
 
   // M11 ImGui overlay. Mirror cleared first so any in-flight
   // walker_dump_imgui_overlay() reads null instead of freed
-  // memory; then plain delete (no Uninit path because the ImGui
-  // context init is gated behind WALKERCORE_HAVE_IMGUI which is
-  // off in this commit's build).
+  // memory; the bound FrameLoop / WalkerFsm are unbound next so
+  // the destructor does not dereference them after they are
+  // freed (the FrameLoop + WalkerFsm are deleted later in this
+  // function). Then plain delete.
   walkercore::diagnostic_internal::SetImGuiOverlay(nullptr);
   if (g_imgui_overlay != nullptr) {
+    g_imgui_overlay->BindFrameLoop(nullptr);
+    g_imgui_overlay->BindFsm(nullptr);
     delete g_imgui_overlay;
     g_imgui_overlay = nullptr;
   }

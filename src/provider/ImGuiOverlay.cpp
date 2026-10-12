@@ -313,6 +313,28 @@ bool ImGuiOverlay::RenderFrameIfEnabled() {
     ImGui::Text("walks: %d in / %d out   frames: %d",
                 walks_entered_, walks_exited_, frames_rendered_ + 1);
 
+    // M11.5b — PxScene live status. The PxSceneHook (M3.5, commit
+    // d353efb) captures the live PxScene instance in RCX on the
+    // first PxScene::addActor call the game makes. Showing the
+    // captured address + supported flag in the overlay gives the
+    // deploy-side analyst immediate visual feedback on whether
+    // M3.5 is wired correctly: the instance goes from 0 (no
+    // addActor seen yet) to a non-zero address within the first
+    // few seconds of driving (every actor the game spawns fires
+    // addActor). The "supported" flag is the hook's own check that
+    // the target VA is reachable inside this process; it goes 0→1
+    // once the MinHook trampoline installs. Both functions are
+    // already in the ABI surface (walker_pxscene_supported /
+    // walker_pxscene_instance) so no new export is required.
+    const int pxs_supported = walker_pxscene_supported();
+    const uint64_t pxs_instance = walker_pxscene_instance();
+    if (pxs_supported != 0) {
+        ImGui::Text("pxs: supported inst=0x%llx",
+                    static_cast<unsigned long long>(pxs_instance));
+    } else {
+        ImGui::Text("pxs: not supported (target VA unreachable)");
+    }
+
     // M11.5 — first interactive widgets. Now that M11.4 (commit
     // 61ebc23) installed the WndProc subclass, the ImGui Win32
     // backend receives real mouse input from the game's WndProc

@@ -15,6 +15,7 @@
 
 #include "walkercore/PerFrame.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -953,4 +954,55 @@ extern "C" __declspec(dllexport) void walker_dump_physx(void) {
         kMinPhysXVtableRun);
 
     WALKERCORE_LOG_INFO("--- end physx ---");
+}
+
+extern "C" __declspec(dllexport) void walker_dump_knockout(void) {
+    using namespace walkercore;
+
+    auto bool_str = [](bool b) -> const char * { return b ? "true" : "false"; };
+
+    WALKERCORE_LOG_INFO("--- WalkerCore knockout ---");
+    if (g_knockout == nullptr) {
+        WALKERCORE_LOG_INFO("knockout            : (not initialized)");
+        WALKERCORE_LOG_INFO("--- end knockout ---");
+        return;
+    }
+
+    // Live config + state. The config fields are knobs the user can
+    // change via M6 INI; the state fields are what the heuristic
+    // actually computed this frame. Listing both side by side lets
+    // analysts answer "did the INI edit take effect?" and "is the
+    // current knock-out real or spurious?" without scrolling through
+    // walker_dump_state().
+    const KnockoutConfig &cfg = g_knockout->config();
+    const KnockoutState &st = g_knockout->state();
+    WALKERCORE_LOG_INFO("knocked_out          : %s",
+                        bool_str(st.knocked_out));
+    WALKERCORE_LOG_INFO("time_remaining_s     : %.2f",
+                        st.time_remaining_s);
+    WALKERCORE_LOG_INFO("impact_direction     : (%.3f, %.3f, %.3f)",
+                        st.impact_direction.x, st.impact_direction.y,
+                        st.impact_direction.z);
+    WALKERCORE_LOG_INFO("config vel_change_mps: %.1f",
+                        static_cast<double>(cfg.velocity_change_threshold_mps));
+    WALKERCORE_LOG_INFO("config snap_reprime_m : %.2f",
+                        static_cast<double>(cfg.teleport_reprime_distance_m));
+    WALKERCORE_LOG_INFO("config recovery_s    : %.2f",
+                        static_cast<double>(cfg.recovery_seconds));
+    WALKERCORE_LOG_INFO("config fall_height_m : %.2f",
+                        static_cast<double>(cfg.fall_height_threshold_m));
+
+    // Useful derived diagnostic: |impact_direction|. A normalised
+    // normal has |v| ≈ 1.0; anything wildly off (e.g. 0 because the
+    // heuristic fired without normalising, or > 1 because the code
+    // forgot to divide by |dist|) is suspicious. We surface this so
+    // the F12 dump can spot a sloppy heuristic without rerunning it.
+    const double mag = std::sqrt(
+        st.impact_direction.x * st.impact_direction.x +
+        st.impact_direction.y * st.impact_direction.y +
+        st.impact_direction.z * st.impact_direction.z);
+    WALKERCORE_LOG_INFO("impact_direction_mag : %.3f (expect ≈ 1.0 when normalised)",
+                        mag);
+
+    WALKERCORE_LOG_INFO("--- end knockout ---");
 }

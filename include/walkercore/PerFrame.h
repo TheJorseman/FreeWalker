@@ -161,6 +161,15 @@ void walker_dump_input(void);
 // resolved, slot columns stay at "-1" (the no-hit fallback path).
 void walker_dump_physx(void);
 
+// Diagnostics — focused dump of the M10 knock-out state: out flag,
+// recovery timer, impact direction (3-D normal), config thresholds
+// (velocity-change threshold, snap re-prime distance, recovery
+// seconds, fall-height threshold). Use this when investigating "did
+// the KO spurious trigger?" or "what direction was the impact?". Safe
+// to call at any time; reports "(not initialized)" when no
+// KnockoutProvider has been wired yet.
+void walker_dump_knockout(void);
+
 // M3 lander wire-up point. The real adapter calls this once when its
 // PxScene / public PhysX SDK link succeeds. Until then, the stub returns
 // "no hit" with one warning.

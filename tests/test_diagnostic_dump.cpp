@@ -1543,4 +1543,59 @@ void TestFsmLabelCacheDecisionDrivesEncodeCalls() {
     EXPECT_TRUE(strstr(diagnostic_internal::GetFsmLabel(), "TransitionIn") != nullptr);
 }
 
+void TestDumpKnockoutHandlesUninitialized() {
+    // No KnockoutProvider wired. walker_dump_knockout must still
+    // emit a banner + the (not initialized) marker without crashing.
+    walkercore_log_shutdown();
+    walkercore_log_init(&DiagnosticDumpCaptureSink);
+    diagnostic_internal::SetKnockout(nullptr);
+    walker_dump_knockout();
+    walkercore_log_shutdown();
+    EXPECT_TRUE(ContainsCapture("--- WalkerCore knockout ---"));
+    EXPECT_TRUE(ContainsCapture("--- end knockout ---"));
+    EXPECT_TRUE(ContainsCapture("knockout            : (not initialized)"));
+}
+
+void TestDumpKnockoutReportsStateAndConfig() {
+    // Wire a real KnockoutProvider with a non-default state and
+    // config so the dump carries the expected fields. We don't tick
+    // it — only read state() + config() — so the dump reads
+    // exactly what the constructor left, plus whatever the test
+    // writes via `state` (which is private; we mutate it via Tick
+    // once with a teleport-sized move to confirm the dump reflects
+    // the post-tick values).
+    KnockoutProvider ko;
+    KnockoutConfig cfg;
+    cfg.velocity_change_threshold_mps = 30.0;
+    cfg.recovery_seconds = 2.0;
+    cfg.fall_height_threshold_m = 5.0;
+    ko.SetConfig(cfg);
+
+    PlayerState p;
+    p.feet_position = Vec3{0, 0, 0};
+    p.has_feet = true;
+    ko.Tick(p, 0.016);  // prime tracking_ without firing KO
+    p.feet_position = Vec3{0.6, 0, 0};
+    // 0.6 m in 16 ms = 37.5 m/s — above the 30 m/s velocity
+    // threshold (dist_threshold = 30 * 0.016 = 0.48 m so 0.6 > 0.48)
+    // but below the 1.0 m snap-re-prime distance, so the heuristic
+    // fires the KO instead of re-priming the baseline.
+    ko.Tick(p, 0.016);
+    EXPECT_TRUE(ko.isKnockedOut());  // confirm we triggered KO
+
+    walkercore_log_shutdown();
+    walkercore_log_init(&DiagnosticDumpCaptureSink);
+    diagnostic_internal::SetKnockout(&ko);
+    walker_dump_knockout();
+    walkercore_log_shutdown();
+    EXPECT_TRUE(ContainsCapture("--- WalkerCore knockout ---"));
+    EXPECT_TRUE(ContainsCapture("knocked_out          : true"));
+    EXPECT_TRUE(ContainsCapture("time_remaining_s     : 2.00"));
+    EXPECT_TRUE(ContainsCapture("config vel_change_mps: 30.0"));
+    EXPECT_TRUE(ContainsCapture("config recovery_s    : 2.00"));
+    EXPECT_TRUE(ContainsCapture("config fall_height_m : 5.00"));
+    EXPECT_TRUE(ContainsCapture("impact_direction_mag"));
+    diagnostic_internal::SetKnockout(nullptr);
+}
+
 }  // namespace walkercore

@@ -274,6 +274,8 @@ void TestEncodeFsmLabelEveryState();
 void TestEncodeFsmLabelProgressOnlyForTransitions();
 void TestEncodeFsmLabelClampsProgressToUnitInterval();
 void TestEncodeFsmLabelBoundedOutput();
+void TestDumpKnockoutHandlesUninitialized();
+void TestDumpKnockoutReportsStateAndConfig();
 void TestFsmLabelNeedsReencode();
 void TestFsmLabelNeedsReencodeSteadyStateIsFalse();
 void TestFsmLabelNeedsReencodeTransitionAlwaysTrue();
@@ -796,6 +798,8 @@ int main() {
     RUN_TEST(walkercore::TestEncodeFsmLabelProgressOnlyForTransitions);
     RUN_TEST(walkercore::TestEncodeFsmLabelClampsProgressToUnitInterval);
     RUN_TEST(walkercore::TestEncodeFsmLabelBoundedOutput);
+    RUN_TEST(walkercore::TestDumpKnockoutHandlesUninitialized);
+    RUN_TEST(walkercore::TestDumpKnockoutReportsStateAndConfig);
     RUN_TEST(walkercore::TestFsmLabelNeedsReencode);
     RUN_TEST(walkercore::TestFsmLabelNeedsReencodeSteadyStateIsFalse);
     RUN_TEST(walkercore::TestFsmLabelNeedsReencodeTransitionAlwaysTrue);

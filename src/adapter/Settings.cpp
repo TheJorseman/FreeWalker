@@ -334,10 +334,14 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
             }
         } else if (section == "m11") {
             // M11 ImGui overlay gate. `imgui_overlay = true` turns
-            // on the overlay rendering. The actual D3D11 Present-
-            // path integration is a TODO; the surface + ABI are
-            // wired so the dump reports the configured state even
-            // before the integration lands.
+            // on the overlay rendering. The D3D11 Present-path
+            // integration landed in 5a68662: D3D11Hook's
+            // HookedPresent calls RenderImGuiFrameIfEnabled() after
+            // the per-frame tick, the overlay class creates the
+            // ImGui context on device capture, and the rendering
+            // surfaces the live walker state (camera / player /
+            // FSM) on top of the game's swap chain. The INI gate
+            // here is the user opt-in.
             bool bv = false;
             if (lkey == "imgui_overlay" && TryParseBool(value, &bv)) {
                 loaded.m11_imgui_overlay = bv;

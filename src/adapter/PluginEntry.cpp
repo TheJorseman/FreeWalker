@@ -183,14 +183,17 @@ walkercore::GameFreeCameraShim *g_game_free_camera_shim = nullptr;
 // remains available.
 walkercore::PxSceneHook *g_px_scene_hook = nullptr;
 
-// M11 ImGui overlay. Scaffolding commit: the class API + ABI
-// surface are wired so the dump + INI gate work, but the actual
-// D3D11 Present-path integration (calling RenderImGuiFrameIfEnabled
-// from D3D11Hook::HookedPresent) is a TODO. The provider is
-// always installed (the ImGui context init is gated behind
-// WALKERCORE_HAVE_IMGUI which is off in this commit's build) and
-// `supported_` stays false until the integration lands. The user
-// can flip the INI gate + reload to opt in.
+// M11 ImGui overlay. D3D11 Present-path integration landed
+// in 5a68662: the class creates the ImGui context + D3D11 +
+// Win32 backends on first device capture, the D3D11 hook's
+// HookedPresent calls RenderImGuiFrameIfEnabled() after the
+// per-frame tick, and M11.2 (5370809) bound the FrameLoop +
+// WalkerFsm so the render surfaces the live walker state.
+// M11.3 (00f3132) put the build hash + ISO date in the
+// overlay header so deploy verification is one frame of
+// attention away. The provider is always installed; the
+// user opts in via `[m11] imgui_overlay = true` in
+// WalkerCore.ini.
 walkercore::ImGuiOverlay *g_imgui_overlay = nullptr;
 
 // M7: FlashlightProvider tracks on/off state. Toggle is wired to the G

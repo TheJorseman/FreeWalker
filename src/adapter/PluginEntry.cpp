@@ -391,7 +391,7 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
   {
     static walkercore::WalkerFsmState prev_fsm_for_knockout_prime =
         walkercore::WalkerFsmState::Driving;
-    if (g_knockout != nullptr &&
+    if (g_fsm != nullptr &&
         fsm_state == walkercore::WalkerFsmState::Walking &&
         prev_fsm_for_knockout_prime != walkercore::WalkerFsmState::Walking) {
       // We just entered Walking from any other state. Reset the
@@ -399,14 +399,38 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
       // player currently is — that's the post-transition (door-anchor
       // or in-cabin) coordinate, with the FrameLoop cap now active
       // and ready to bound motion.
-      g_knockout->Prime(player_ptr->feet_position);
-      WALKERCORE_LOG_INFO(
-          "KnockoutProvider: baseline re-primed on Walking entry "
-          "(pos=(%.2f, %.2f, %.2f), prev_state=%s)",
-          player_ptr->feet_position.x,
-          player_ptr->feet_position.y,
-          player_ptr->feet_position.z,
-          walkercore::WalkerFsmStateName(prev_fsm_for_knockout_prime));
+      if (g_knockout != nullptr) {
+        g_knockout->Prime(player_ptr->feet_position);
+        WALKERCORE_LOG_INFO(
+            "KnockoutProvider: baseline re-primed on Walking entry "
+            "(pos=(%.2f, %.2f, %.2f), prev_state=%s)",
+            player_ptr->feet_position.x,
+            player_ptr->feet_position.y,
+            player_ptr->feet_position.z,
+            walkercore::WalkerFsmStateName(prev_fsm_for_knockout_prime));
+      }
+      // Single-source evidence line for M2: confirms that on a real
+      // game process (where the MinHook D3D11 path is live), the
+      // FrameLoop has produced a populated CameraState by the time the
+      // FSM reaches Walking. Until the M2 GPU push ships, the matrices
+      // are computed but never reach the renderer — this log line
+      // tells the deploy-side analyst "the pipeline computed the
+      // matrix, only the swap-chain write remains". Pairs with the
+      // existing FSM transition logs so the next game.log capture can
+      // confirm F10 produce a fresh CameraState without needing GPU
+      // instrumentation.
+      if (g_frame_loop != nullptr) {
+        const walkercore::CameraState &cam = g_frame_loop->camera();
+        WALKERCORE_LOG_INFO(
+            "CameraState on Walking entry: eye=(%.2f, %.2f, %.2f) "
+            "yaw=%.3f pitch=%.3f h_fov=%.3f aspect=%.3f valid=%d",
+            cam.eye_position.x, cam.eye_position.y, cam.eye_position.z,
+            static_cast<double>(cam.yaw_radians),
+            static_cast<double>(cam.pitch_radians),
+            static_cast<double>(cam.horizontal_fov_radians),
+            static_cast<double>(cam.aspect),
+            static_cast<int>(cam.valid));
+      }
     }
     prev_fsm_for_knockout_prime = fsm_state;
   }

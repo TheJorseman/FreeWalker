@@ -68,13 +68,22 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
+          # MINGW64 is deprecated upstream — silence the warning while we
+          # still pin to it (matches the developer's local toolchain).
+          suppress-deprecation-warnings: msystem-mingw64
           install: >-
             git
             base-devel
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-d3d11
+            # Official DirectX headers under an open-source license.
+            # Provides d3d11.h / d3d12.h / dxgi.h / d3dcompiler.h, which
+            # the D3D11 / D3D12 hooks include from src/provider/. The
+            # older name `mingw-w64-x86_64-d3d11` does not exist on the
+            # MSYS2 mirror — it was a transient name; the modern,
+            # maintained package is directx-headers.
+            mingw-w64-x86_64-directx-headers
           update: true
 
       - name: Configure (MinGW + Ninja)

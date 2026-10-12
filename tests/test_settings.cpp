@@ -480,4 +480,72 @@ void TestIniMissingKeysDefaultIsPreserved() {
     std::remove(path.c_str());
 }
 
+void TestIniM2D3DHookGatesParseAndDefault() {
+    // Pin every default + parse path for the two [m2] install gates
+    // added in commit <d3d-gates>. Defaults are true (preserving the
+    // original D3D11 + D3D12 install paths) — users opting out via
+    // `[m2] d3d11_hook = false` / `[m2] d3d12_hook = false` skip the
+    // MinHook Install() calls in PluginEntry, which is the safest fix
+    // for ATS 1.61.3.1s plus ReShade + OptiScaler + RenoDX mod stacks
+    // (which crash on amtrucks.exe+0x1d5300a's `movdqa` instruction
+    // when SYSTEM32 d3d11.dll is MinHook-patched at scs_telemetry_init
+    // time).
+    const std::string path = MakeTempIniPath("m2_d3d_gates");
+    std::remove(path.c_str());
+
+    // Defaults are true (the install path is on out-of-the-box).
+    SettingsStore defaults;
+    EXPECT_TRUE(defaults.current().m2_d3d11_hook);
+    EXPECT_TRUE(defaults.current().m2_d3d12_hook);
+
+    // Parse `false` for both, plus the existing m2 knobs, in one shot.
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "game_free_camera_shim = true\n";
+        w << "camera_hijack = false\n";
+        w << "d3d11_hook = false\n";
+        w << "d3d12_hook = false\n";
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_TRUE(reader.current().m2_game_free_camera_shim);
+    EXPECT_FALSE(reader.current().m2_camera_hijack);
+    EXPECT_FALSE(reader.current().m2_d3d11_hook);
+    EXPECT_FALSE(reader.current().m2_d3d12_hook);
+
+    // Round-trip: write back, reload, confirm both gates survive.
+    SettingsStore store;
+    store.SetCurrent(reader.current());
+    EXPECT_TRUE(store.SaveToPath(path));
+    SettingsStore reader2;
+    EXPECT_TRUE(reader2.LoadFromPath(path));
+    EXPECT_FALSE(reader2.current().m2_d3d11_hook);
+    EXPECT_FALSE(reader2.current().m2_d3d12_hook);
+
+    std::remove(path.c_str());
+}
+
+void TestIniM2D3DHookGatesUnknownKeyIgnored() {
+    // An unknown key inside the [m2] section must be ignored, not
+    // adopted as `false`. This pins the parser's strict-dispatch
+    // contract so a typo in a future INI doesn't silently disable
+    // the install path.
+    const std::string path = MakeTempIniPath("m2_d3d_gates_typo");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "d3d_11_hook = false\n";   // typo: missing one of the 'd's
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    // The typo key must not flip the d3d11_hook gate.
+    EXPECT_TRUE(reader.current().m2_d3d11_hook);
+    EXPECT_TRUE(reader.current().m2_d3d12_hook);
+
+    std::remove(path.c_str());
+}
+
 }  // namespace walkercore

@@ -1001,17 +1001,35 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   // M2 lander: install the D3D11 Present hook. When the game creates its
   // device + swap chain, our wrapper captures them, hooks Present, and
   // each frame calls walker_per_frame_tick(dt).
-  g_d3d11_hook = new walkercore::D3D11Hook();
-  g_d3d11_hook->BindFrameLoop(g_frame_loop);
-  if (g_d3d11_hook->Install()) {
-    WALKERCORE_LOG_INFO("M2 lander: D3D11 hook active");
-    walkercore::diagnostic_internal::SetD3D11(g_d3d11_hook);
+  //
+  // Gated by [m2] d3d11_hook (default 1). On ATS 1.61.3.1s with a heavy
+  // mod stack (ReShade + OptiScaler + RenoDX + DXGI shims on top of
+  // SYSTEM32 d3d11.dll), the MinHook patch on system d3d11.dll's
+  // D3D11CreateDeviceAndSwapChain triggered a downstream
+  // `movdqa [rbp + 0x3e0], xmm0` `#GP` at amtrucks.exe RVA 0x1d5300a.
+  // Setting `[m2] d3d11_hook = false` skips the Install() call (no
+  // MinHook patch on SYSTEM32 d3d11.dll), restoring the crash-free
+  // init path without removing the rest of the plugin surface. The
+  // per-frame loop below still runs via PerFrameThread.
+  const bool d3d11_hook_enabled =
+      g_settings != nullptr && g_settings->current().m2_d3d11_hook;
+  if (d3d11_hook_enabled) {
+    g_d3d11_hook = new walkercore::D3D11Hook();
+    g_d3d11_hook->BindFrameLoop(g_frame_loop);
+    if (g_d3d11_hook->Install()) {
+      WALKERCORE_LOG_INFO("M2 lander: D3D11 hook active");
+      walkercore::diagnostic_internal::SetD3D11(g_d3d11_hook);
+    } else {
+      WALKERCORE_LOG_WARN(
+          "M2 lander: D3D11 hook install failed (d3d11.dll not loaded yet?) — "
+          "frame loop will not tick until game creates its device");
+      delete g_d3d11_hook;
+      g_d3d11_hook = nullptr;
+    }
   } else {
-    WALKERCORE_LOG_WARN(
-        "M2 lander: D3D11 hook install failed (d3d11.dll not loaded yet?) — "
-        "frame loop will not tick until game creates its device");
-    delete g_d3d11_hook;
-    g_d3d11_hook = nullptr;
+    WALKERCORE_LOG_INFO(
+        "M2 lander: D3D11 hook SKIPPED (INI gate [m2] d3d11_hook = false) — "
+        "per-frame loop drives off PerFrameThread only");
   }
 
   // M2 lander (D3D12 path): install the D3D12 + DXGI factory + Present
@@ -1024,18 +1042,31 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   // risk: the game calls exactly one CreateDXGIFactory1 (or exactly
   // one D3D11CreateDeviceAndSwapChain), only one chain captures a
   // swap chain, and only that chain reaches the Present patch.
-  g_d3d12_hook = new walkercore::D3D12Hook();
-  g_d3d12_hook->BindFrameLoop(g_frame_loop);
-  if (g_d3d12_hook->Install()) {
-    WALKERCORE_LOG_INFO("M2 lander: D3D12 + DXGI factory hook active");
-    walkercore::diagnostic_internal::SetD3D12(g_d3d12_hook);
+  //
+  // Gated by [m2] d3d12_hook (default 1). Set `false` to skip the
+  // Install() call when the MinHook patch on system d3d12.dll +
+  // dxgi.dll conflicts with another mod on this build (see the
+  // d3d11_hook comment above for the diagnostic context).
+  const bool d3d12_hook_enabled =
+      g_settings != nullptr && g_settings->current().m2_d3d12_hook;
+  if (d3d12_hook_enabled) {
+    g_d3d12_hook = new walkercore::D3D12Hook();
+    g_d3d12_hook->BindFrameLoop(g_frame_loop);
+    if (g_d3d12_hook->Install()) {
+      WALKERCORE_LOG_INFO("M2 lander: D3D12 + DXGI factory hook active");
+      walkercore::diagnostic_internal::SetD3D12(g_d3d12_hook);
+    } else {
+      WALKERCORE_LOG_WARN(
+          "M2 lander: D3D12 hook install failed (d3d12.dll or dxgi.dll "
+          "not loaded yet?) — frame loop will not tick until game "
+          "creates its device");
+      delete g_d3d12_hook;
+      g_d3d12_hook = nullptr;
+    }
   } else {
-    WALKERCORE_LOG_WARN(
-        "M2 lander: D3D12 hook install failed (d3d12.dll or dxgi.dll "
-        "not loaded yet?) — frame loop will not tick until game "
-        "creates its device");
-    delete g_d3d12_hook;
-    g_d3d12_hook = nullptr;
+    WALKERCORE_LOG_INFO(
+        "M2 lander: D3D12 + DXGI factory hook SKIPPED (INI gate [m2] "
+        "d3d12_hook = false) — per-frame loop drives off PerFrameThread only");
   }
 
   // M2 fallback lander: start the background per-frame ticker.

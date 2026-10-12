@@ -335,6 +335,18 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                 // machine writes to the GPU constant buffer. Default 0;
                 // opt in explicitly.
                 loaded.m2_camera_hijack = bv;
+            } else if (lkey == "d3d11_hook" && TryParseBool(value, &bv)) {
+                // M2 lander (D3D11 hook) install gate. Default 1. Set
+                // `false` to skip MH_CreateHook/MH_EnableHook on system
+                // d3d11.dll when the install path conflicts with another
+                // mod or DLL search-order quirk on this build.
+                loaded.m2_d3d11_hook = bv;
+            } else if (lkey == "d3d12_hook" && TryParseBool(value, &bv)) {
+                // M2 lander (D3D12 + DXGI factory hook) install gate.
+                // Default 1. Set `false` to skip MH_CreateHook/MH_EnableHook
+                // on system d3d12.dll + dxgi.dll when the install path
+                // conflicts with another mod or DLL search-order quirk.
+                loaded.m2_d3d12_hook = bv;
             } else {
                 unknown_count++;
             }
@@ -458,6 +470,8 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "# so out-of-the-box behaviour stays unchanged.\n";
     f << "game_free_camera_shim = " << (current_.m2_game_free_camera_shim ? "true" : "false") << "\n";
     f << "camera_hijack = " << (current_.m2_camera_hijack ? "true" : "false") << "\n";
+    f << "d3d11_hook = " << (current_.m2_d3d11_hook ? "true" : "false") << "\n";
+    f << "d3d12_hook = " << (current_.m2_d3d12_hook ? "true" : "false") << "\n";
     f.close();
     WALKERCORE_LOG_INFO("Settings: saved %s", path.c_str());
     return true;

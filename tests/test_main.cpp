@@ -38,6 +38,12 @@ void TestIniParserUnknownKeys();
 void TestIniRoundtrip();
 void TestIniHeadTrackerSectionParsed();
 void TestIniHeadTrackerUnknownKeyIgnored();
+// M2 lander INI gates — `[m2] d3d11_hook` + `[m2] d3d12_hook`. Default
+// `true` preserves the original D3D11 + D3D12 install path; users opt
+// out via INI when their mod stack conflicts with the SYSTEM32 d3d11.dll
+// MinHook-patch install path on ATS 1.61.3.1s.
+void TestIniM2D3DHookGatesParseAndDefault();
+void TestIniM2D3DHookGatesUnknownKeyIgnored();
 void TestApplyAllPushesEveryFieldToEveryConsumer();
 void TestWalkerFsmInitialState();
 void TestWalkerFsmDrivingToWalking();
@@ -556,6 +562,14 @@ int main() {
     RUN_TEST(walkercore::TestIniRoundtrip);
     RUN_TEST(walkercore::TestIniHeadTrackerSectionParsed);
     RUN_TEST(walkercore::TestIniHeadTrackerUnknownKeyIgnored);
+
+    // M2 lander INI gates — defaults = true, parse `false`, roundtrip
+    // survives Save+Load, and a typo key (e.g. `d3d_11_hook`) does NOT
+    // silently disable the install path. These are the safety net for
+    // the ATS 1.61.3.1s + ReShade + OptiScaler + RenoDX crash on
+    // amtrucks.exe+0x1d5300a (movdqa).
+    RUN_TEST(walkercore::TestIniM2D3DHookGatesParseAndDefault);
+    RUN_TEST(walkercore::TestIniM2D3DHookGatesUnknownKeyIgnored);
 
     // Regression guard for the dump_state_vk / mouse-button round-trip —
     // the user observed "F12 only gives me a screenshot" because the

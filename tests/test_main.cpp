@@ -323,6 +323,7 @@ void TestDumpPerTruckDoorReportsMatchedRow();
 void TestDumpPerTruckDoorReportsUnmatchedRow();
 void TestDumpCouplingHandlesUninitialized();
 void TestDumpCouplingReportsActiveStep();
+void TestDumpBuildInfoEmitsBannerAndFields();
 void TestFsmLabelNeedsReencode();
 void TestFsmLabelNeedsReencodeSteadyStateIsFalse();
 void TestFsmLabelNeedsReencodeTransitionAlwaysTrue();
@@ -897,6 +898,7 @@ int main() {
     RUN_TEST(walkercore::TestDumpPerTruckDoorReportsUnmatchedRow);
     RUN_TEST(walkercore::TestDumpCouplingHandlesUninitialized);
     RUN_TEST(walkercore::TestDumpCouplingReportsActiveStep);
+    RUN_TEST(walkercore::TestDumpBuildInfoEmitsBannerAndFields);
     RUN_TEST(walkercore::TestFsmLabelNeedsReencode);
     RUN_TEST(walkercore::TestFsmLabelNeedsReencodeSteadyStateIsFalse);
     RUN_TEST(walkercore::TestFsmLabelNeedsReencodeTransitionAlwaysTrue);

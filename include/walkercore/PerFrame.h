@@ -307,6 +307,17 @@ void walker_on_d3d11_device_lost(void);
 // D3D11 device has not been captured, or WALKERCORE_HAVE_IMGUI=0.
 void walker_render_imgui_frame_if_enabled(void);
 
+// Build metadata + ABI surface summary. Single line per fact so
+// the output is greppable: "version : 0.0.1", "build hash :
+// 5370809", "build date : 2026-10-12T...", "imgui version :
+// 1.91.5", "abi exports : N". Use this when investigating "did
+// I deploy the right build?" — the build hash and ABI export
+// count are deterministic per source revision, so a mismatch
+// between "expected commit X" and "running build hash Y" is a
+// one-line confirmation. Safe to call at any time; does not
+// touch any provider state.
+void walker_dump_build_info(void);
+
 // M3 lander wire-up point. The real adapter calls this once when its
 // PxScene / public PhysX SDK link succeeds. Until then, the stub returns
 // "no hit" with one warning.

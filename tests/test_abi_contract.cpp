@@ -221,6 +221,7 @@ void TestAbiContractDllLoads() {
         {"walker_on_d3d11_device_captured"},
         {"walker_on_d3d11_device_lost"},
         {"walker_render_imgui_frame_if_enabled"},
+        {"walker_dump_build_info"},
     };
     const size_t kCount = sizeof(kExports) / sizeof(kExports[0]);
 

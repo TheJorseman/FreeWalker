@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "walkercore/BuildInfo.h"
 #include "walkercore/CameraState.h"
 #include "walkercore/D3D11Hook.h"
 #include "walkercore/D3D12Hook.h"
@@ -1364,4 +1365,59 @@ extern "C" __declspec(dllexport) void walker_on_d3d11_device_lost(void) {
 
 extern "C" __declspec(dllexport) void walker_render_imgui_frame_if_enabled(void) {
     walkercore::RenderImGuiFrameIfEnabled();
+}
+
+// Build metadata + ABI surface summary. Pulls the values from
+// the generated BuildInfo.h (version, phase, build hash, build
+// date) plus the runtime ImGui version + the number of
+// __declspec(dllexport) exports we ship. The test build pins
+// the export count to a literal, so a regression that adds or
+// removes a 37th export breaks the ABI test before it breaks
+// the field; this dump surfaces the same number to deploy-side
+// analysts so the deployed build can be matched against the
+// commit it claims to be.
+extern "C" __declspec(dllexport) void walker_dump_build_info(void) {
+    using namespace walkercore;
+
+    // The ABI export count is the same set test_abi_contract
+    // walks. We duplicate the list here to keep the dump
+    // self-contained — the test build and the DLL build both
+    // compile DiagnosticDump.cpp with the same kExports[]
+    // constant (modulo MSVC vs MinGW __declspec). When the
+    // counts diverge the ABI test catches it first; this
+    // function reports the running build's number.
+    constexpr const char *kExportedNames[] = {
+        "DllMain", "scs_telemetry_init", "scs_telemetry_shutdown",
+        "walkercore_main", "walker_dump_state", "walker_dump_settings",
+        "walker_dump_menu", "walker_dump_head_tracker",
+        "walker_dump_shadow", "walker_dump_flashlight",
+        "walker_dump_door", "walker_dump_fsm", "walker_dump_version",
+        "walker_dump_input", "walker_dump_physx", "walker_dump_knockout",
+        "walker_dump_per_truck_door", "walker_dump_coupling",
+        "walker_dump_game_free_camera_shim",
+        "walker_game_free_camera_shim_supported",
+        "walker_game_free_camera_shim_on_enter_walking",
+        "walker_game_free_camera_shim_on_exit_walking",
+        "walker_game_free_camera_shim_toggle_now",
+        "walker_game_free_camera_shim_set_enabled",
+        "walker_pxscene_supported", "walker_pxscene_instance",
+        "walker_dump_pxscene", "walker_imgui_overlay_supported",
+        "walker_imgui_overlay_set_enabled", "walker_dump_imgui_overlay",
+        "walker_imgui_overlay_version", "walker_imgui_overlay_frames_rendered",
+        "walker_shutdown_imgui_overlay", "walker_on_d3d11_device_captured",
+        "walker_on_d3d11_device_lost", "walker_render_imgui_frame_if_enabled",
+        "walker_dump_build_info"};
+    constexpr size_t kExportCount =
+        sizeof(kExportedNames) / sizeof(kExportedNames[0]);
+
+    WALKERCORE_LOG_INFO("--- WalkerCore build info ---");
+    WALKERCORE_LOG_INFO("version         : %d.%d.%d-%s",
+                        WALKERCORE_VERSION_MAJOR, WALKERCORE_VERSION_MINOR,
+                        WALKERCORE_VERSION_PATCH, WALKERCORE_VERSION_PHASE);
+    WALKERCORE_LOG_INFO("build hash      : %s", WALKERCORE_BUILD_HASH);
+    WALKERCORE_LOG_INFO("build date      : %s", WALKERCORE_BUILD_ISO);
+    WALKERCORE_LOG_INFO("imgui version   : %s",
+                        ImGuiOverlay::ImGuiVersionString());
+    WALKERCORE_LOG_INFO("abi exports     : %zu", kExportCount);
+    WALKERCORE_LOG_INFO("--- end build info ---");
 }

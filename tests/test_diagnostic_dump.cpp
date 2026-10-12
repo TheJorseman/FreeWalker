@@ -1710,4 +1710,25 @@ void TestDumpCouplingReportsActiveStep() {
     diagnostic_internal::SetCoupling(nullptr);
 }
 
+void TestDumpBuildInfoEmitsBannerAndFields() {
+    // walker_dump_build_info is a pure metadata dump — no
+    // provider state, no log sink init required beyond the
+    // capture sink. Every line is deterministic from the
+    // build inputs (CMake-time version / phase / hash / ISO)
+    // plus the runtime ImGui version + ABI count, so we pin
+    // each field by partial substring.
+    walkercore_log_shutdown();
+    walkercore_log_init(&DiagnosticDumpCaptureSink);
+    ResetCapture();
+    walker_dump_build_info();
+    walkercore_log_shutdown();
+    EXPECT_TRUE(ContainsCapture("--- WalkerCore build info ---"));
+    EXPECT_TRUE(ContainsCapture("version         :"));
+    EXPECT_TRUE(ContainsCapture("build hash      :"));
+    EXPECT_TRUE(ContainsCapture("build date      :"));
+    EXPECT_TRUE(ContainsCapture("imgui version   :"));
+    EXPECT_TRUE(ContainsCapture("abi exports     :"));
+    EXPECT_TRUE(ContainsCapture("--- end build info ---"));
+}
+
 }  // namespace walkercore

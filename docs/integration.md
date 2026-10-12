@@ -253,9 +253,43 @@ What the long-term hijack still needs (one of):
   ~100-line scanner; would yield the vtable slot 16 function VA
   without needing a live debug session.
 
-(a) and (b) are both out of sandbox scope; the MVP `GameFreeCameraShim`
-remains the deployed path. The captured VAs in the JSON are pinned as
-evidence for whoever picks the work up next.
+(b) has been validated: `scripts/tmrealwalk-re/find_vtable_slot16.py`
+walks `.text` (31 MB) for `FF 92 80 00 00 00` — finds **101
+occurrences**, of which exactly **one** survives the discriminator
+filter (`movss [rbx+0x30], xmm6` + `movss [rbx+0x34], xmm7` +
+`mov dword [rbx+0x30], 0x42B40000` within ±256 bytes). That single
+hit is `0x140C2306D` — the vtable-slot-16 call inside the camera
+state dispatcher at `0x140C22F40`. Encoding-bug note: the post-
+restore `movss` instructions use **mod=01 (1-byte displacement)**,
+so the bytes are `F3 0F 11 73 30` and `F3 0F 11 7B 34`, NOT
+`F3 0F 11 B3 30 00 00 00` (which is mod=10, 4-byte displacement).
+
+That makes path (b) the right path forward. Implementation plan for
+the long-term M2 hijack:
+
+  1. At game start (DLL load), capture `image_base` from the running
+     `amtrucks.exe` process (PE optional header field 24/28 depending
+     on PE32/PE32+). Compute the dispatcher absolute VA:
+     `dispatcher_va = image_base + 0xC22F40` (RVA of `0x140C22F40`
+     relative to image_base, since `amtrucks.exe`'s .text RVA is 0x1000
+     and the function lives at offset 0xC21F40 inside .text).
+  2. MinHook `dispatcher_va`. The trampoline must call the original
+     dispatcher first (so SCS continues to think `g_developer`/`g_free_camera`
+     flips the camera mode) and then replace the post-call state.
+  3. In the trampoline, walk the same singleton path the original
+     dispatcher uses (`mov rbx, [rip + 0x2A95E7F]` from `0x140C22F4A`,
+     then `mov rbx, [rbx + 0x2030]`) to grab the camera state struct,
+     read its vtable, then read `vtable[16]`. That gives us the per-frame
+     camera matrix update function VA — which is the actual hot path.
+  4. Hook `vtable[16]`. In the trampoline, after SCS writes its
+     matrices to the constant buffer, replace them with the matrices
+     from `walker_camera()`.
+
+Steps 1–4 are pure runtime work; the captured VAs in the JSON
+(`commit 07a0e579`) are pinned as evidence. No further RE required.
+
+MVP `GameFreeCameraShim` remains the deployed path until the long-term
+implementation lands.
 
 ### M3 Lander — Real IWorldGeometry
 

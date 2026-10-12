@@ -31,6 +31,7 @@
 
 #include "walkercore/GameFreeCameraShim.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -158,8 +159,7 @@ void TestGameFreeCameraShimTriggerToggleRespectsDisabled() {
 
 void TestGameFreeCameraShimEchoSuppressionAfterTrigger() {
     auto s = MakeShim();
-    s->SetEnabled(true);
-    s->SetToggleVk(0x79);    // pretend F10
+    s->SetEnabled(true);    s->SetToggleVk(0x79);    // pretend F10
     s->SetExitPressVk(0);
 
     // Without supported_=true, TriggerToggle is a no-op — we cannot
@@ -169,6 +169,89 @@ void TestGameFreeCameraShimEchoSuppressionAfterTrigger() {
     s->OnEnterWalking();           // logs advisory, no synthesis
     EXPECT_FALSE(s->ConsumeEchoKey(0x79));
     EXPECT_FALSE(s->ConsumeEchoKey(0x60));
+}
+
+// BindGameHwnd + PostMessage path — pins the fix for the ATS 1.61.3.1s
+// dev-free-camera regression where the shim's SendInput call did not
+// reach the game window in fullscreen / DXGI exclusive mode. Manual
+// Numpad-0 still toggled the camera (so the dev free camera feature
+// itself was intact), but the shim's synthesised input never landed.
+// Switching to PostMessage(hwnd, WM_KEYDOWN) targets the bound game
+// window directly and works regardless of focus / exclusive mode.
+
+void TestGameFreeCameraShimDefaultHwndIsNull() {
+    auto s = MakeShim();
+    // Default-constructed shim has no bound game window — the
+    // BindGameHwnd call at scs_telemetry_init time is what sets
+    // this, and the per-frame re-bind in walker_per_frame_tick
+    // catches the case where the game window wasn't up yet.
+    EXPECT_TRUE(s->game_hwnd() == nullptr);
+}
+
+void TestGameFreeCameraShimBindGameHwndRoundTrip() {
+    auto s = MakeShim();
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xCAFEBABE));
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(s->game_hwnd()),
+              0xCAFEBABEu);
+}
+
+void TestGameFreeCameraShimBindGameHwndOverwrites() {
+    auto s = MakeShim();
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xAAAA));
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xBBBB));
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(s->game_hwnd()),
+              0xBBBBu);
+}
+
+void TestGameFreeCameraShimBindGameHwndNullClears() {
+    auto s = MakeShim();
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xAAAA));
+    s->BindGameHwnd(nullptr);
+    EXPECT_TRUE(s->game_hwnd() == nullptr);
+}
+
+void TestGameFreeCameraShimDispatchFallsBackToSendInputWithoutHwnd() {
+    // With no HWND bound, the dispatch path must be SendInput
+    // (legacy foreground-targeted). This preserves the old
+    // behaviour for callers that never bind an HWND.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->OnEnterWalking();
+    EXPECT_EQ(s->last_dispatch_path(), 1);  // 1 = SendInput
+}
+
+void TestGameFreeCameraShimDispatchUsesPostMessageWhenHwndBound() {
+    // The M2 lander fix: when an HWND is bound, the dispatch path
+    // is PostMessage (HWND-targeted, works in fullscreen /
+    // exclusive). Confirms the dispatch counter still increments
+    // and the target diag records the bound HWND.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xFEEDFACE));
+    s->OnEnterWalking();
+    EXPECT_EQ(s->last_dispatch_path(), 2);  // 2 = PostMessage
+    EXPECT_EQ(s->last_postmessage_target_diag(), 0xFEEDFACEu);
+    EXPECT_EQ(s->toggles_dispatched(), 1);
+}
+
+void TestGameFreeCameraShimRebindOnEntryCatchesLateWindow() {
+    // The per-frame conductor re-binds the HWND on every Walking
+    // entry when the previous bind returned null. Pin: the
+    // first OnEnterWalking with no HWND falls back to SendInput;
+    // a subsequent BindGameHwnd followed by a second OnEnterWalking
+    // flips to PostMessage.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->OnEnterWalking();
+    EXPECT_EQ(s->last_dispatch_path(), 1);  // SendInput fallback
+    // Simulate the late-window bind (e.g. splash screen dismissed).
+    s->BindGameHwnd(reinterpret_cast<HWND>(0x12345678));
+    s->OnEnterWalking();
+    EXPECT_EQ(s->last_dispatch_path(), 2);  // PostMessage
+    EXPECT_EQ(s->last_postmessage_target_diag(), 0x12345678u);
 }
 
 void TestGameFreeCameraShimOnExitWalkingLeavesCountersIntact() {

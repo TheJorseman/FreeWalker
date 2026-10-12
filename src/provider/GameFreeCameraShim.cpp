@@ -16,6 +16,7 @@
 #include "walkercore/Log.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -29,14 +30,47 @@ namespace walkercore {
 
 namespace {
 
-// Test-time fake: a Windows-only `SendInput` call. On a non-Windows
-// host (or under the test macro) we leave it as a no-op so the unit
-// tests still compile and run end-to-end.
-int SynthKey(unsigned int vk) {
+// Synthesise a single keypress. When `target_hwnd` is non-null, use
+// PostMessage(WM_KEYDOWN) + PostMessage(WM_KEYUP) to dispatch directly
+// to the bound game window — this works in fullscreen / DXGI exclusive
+// mode where SendInput's foreground-targeted input gets discarded by
+// the game. When `target_hwnd` is null, fall back to SendInput (the
+// legacy path). Returns the number of events dispatched (always 2 in
+// practice: one KEYDOWN + one KEYUP) and updates the diagnostic path
+// counters in `path_out` / `target_diag_out` for the F12 dump.
+//
+// The PostMessage route is what the M2 lander needs on ATS 1.61.3.1s +
+// ReShade + OptiScaler + RenoDX: the user confirmed Numpad-0 manual
+// presses DO toggle the SCS dev free camera, but the shim's previous
+// SendInput call was not reaching the game window (visible as
+// `dispatched 2 key event(s)` in the log with no on-screen effect).
+// PostMessage targets the HWND directly, which is the standard way
+// for in-process synthetic input to a known window regardless of
+// focus / fullscreen state.
+int SynthKey(unsigned int vk, HWND target_hwnd,
+             int &path_out, unsigned int &target_diag_out) {
 #if defined(_WIN32) && !defined(WALKERCORE_GAME_FREE_CAMERA_SHIM_DISABLED)
     if (vk == 0) {
+        path_out = 0;
+        target_diag_out = 0;
         return 0;
     }
+    if (target_hwnd != nullptr) {
+        // PostMessage path — direct to the bound game window.
+        // lParam encoding for WM_KEYDOWN: repeat count in low word,
+        // scan code in bits 16-23, extended-key flag in bit 24, etc.
+        // We use 0 (no repeat, no extended) which is the simplest
+        // valid encoding for a non-extended VK like VK_NUMPAD0.
+        PostMessageA(target_hwnd, WM_KEYDOWN, static_cast<WPARAM>(vk), 0);
+        PostMessageA(target_hwnd, WM_KEYUP,   static_cast<WPARAM>(vk),
+                     static_cast<LPARAM>(1 << 30 | 1 << 31));
+        path_out = 2;  // PostMessage
+        target_diag_out = static_cast<unsigned int>(
+            reinterpret_cast<std::uintptr_t>(target_hwnd) & 0xFFFFFFFFu);
+        return 2;
+    }
+    // SendInput fallback — foreground-targeted, can be discarded by
+    // fullscreen / DXGI exclusive modes.
     INPUT down = {};
     down.type = INPUT_KEYBOARD;
     down.ki.wVk = static_cast<WORD>(vk);
@@ -48,9 +82,24 @@ int SynthKey(unsigned int vk) {
     up.ki.wVk = static_cast<WORD>(vk);
     up.ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(1, &up, sizeof(up));
-    return 2;  // 2 inputs sent: one down, one up
+    path_out = 1;  // SendInput
+    target_diag_out = 0;
+    return 2;
 #else
+    // Test stub: when GameFreeCameraShim is built with
+    // WALKERCORE_GAME_FREE_CAMERA_SHIM_DISABLED (the test build
+    // configuration), we don't call SendInput or PostMessage.
+    // Instead we simulate the dispatch decision so the tests can
+    // verify the right path was taken based on the bound HWND.
     (void)vk;
+    if (target_hwnd != nullptr) {
+        path_out = 2;  // PostMessage
+        target_diag_out = static_cast<unsigned int>(
+            reinterpret_cast<std::uintptr_t>(target_hwnd) & 0xFFFFFFFFu);
+        return 2;
+    }
+    path_out = 1;  // SendInput
+    target_diag_out = 0;
     return 0;
 #endif
 }
@@ -199,6 +248,7 @@ void GameFreeCameraShim::SetToggleVk(unsigned int vk) { toggle_vk_ = vk; }
 void GameFreeCameraShim::SetExitPressVk(unsigned int vk) {
     exit_press_vk_ = vk;
 }
+void GameFreeCameraShim::BindGameHwnd(HWND hwnd) { hwnd_ = hwnd; }
 
 void GameFreeCameraShim::ProbeGDeveloperFromConfig() {
     const std::string path = ProbeConfigPath();
@@ -234,8 +284,13 @@ void GameFreeCameraShim::OnEnterWalking() {
     const int dispatched = TriggerToggle();
     WALKERCORE_LOG_INFO(
         "GameFreeCameraShim: Walking entry #%d -> dispatched %d key "
-        "event(s) (toggle VK=0x%X, exit press VK=0x%X)",
-        walks_entered_, dispatched, toggle_vk_, exit_press_vk_);
+        "event(s) (toggle VK=0x%X, exit press VK=0x%X, path=%s "
+        "hwnd=0x%X)",
+        walks_entered_, dispatched, toggle_vk_, exit_press_vk_,
+        last_dispatch_path_ == 2 ? "PostMessage"
+                                 : (last_dispatch_path_ == 1 ? "SendInput"
+                                                            : "none"),
+        last_postmessage_hwnd_diag_);
 }
 
 void GameFreeCameraShim::OnExitWalking() {
@@ -256,11 +311,13 @@ int GameFreeCameraShim::TriggerToggle() {
     // camera activated from inside the cabin will be at the cabin's
     // default viewpoint; the player can move from there).
     if (exit_press_vk_ != 0) {
-        total += SynthKey(exit_press_vk_);
+        total += SynthKey(exit_press_vk_, hwnd_, last_dispatch_path_,
+                          last_postmessage_hwnd_diag_);
     }
     // Stage 2 (always): toggle the SCS free camera. VK_NUMPAD0 is
     // the SCS convention for "fly mode" toggle.
-    total += SynthKey(toggle_vk_);
+    total += SynthKey(toggle_vk_, hwnd_, last_dispatch_path_,
+                      last_postmessage_hwnd_diag_);
     toggles_dispatched_++;
     last_dispatch_ms_ = static_cast<int>(NowMs() & 0x7FFFFFFF);
 

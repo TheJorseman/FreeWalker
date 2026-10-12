@@ -64,6 +64,18 @@ public:
     void SetEnabled(bool enabled);
     bool isEnabled() const { return enabled_; }
 
+    // Bind the game window so TriggerToggle can PostMessage(WM_KEYDOWN)
+    // directly to it instead of going through SendInput. PostMessage
+    // reaches the target HWND regardless of which window is in the
+    // foreground, which is critical for fullscreen / DXGI exclusive
+    // modes where SendInput's foreground-targeted input gets discarded
+    // by the game. Bound from PluginEntry via FindGameHwnd (which
+    // enumerates top-level windows owned by the current process).
+    // Safe to call with nullptr — SynthKey then falls back to
+    // SendInput. The previous value is overwritten on every call.
+    void BindGameHwnd(HWND hwnd);
+    HWND game_hwnd() const { return hwnd_; }
+
     // Keystroke sequence tuning. Defaults: 0x60 = Numpad-0 (SCS free
     // camera toggle), 0 = no separate "exit cabin" press. The values
     // are Win32 VK_* codes.
@@ -80,6 +92,12 @@ public:
     // (single text scan, ~64 KiB) and runs at most once per call.
     void ProbeGDeveloperFromConfig();
     bool isSupported() const { return supported_; }
+    // Test-only: force supported_ to a specific value so the unit
+    // tests can exercise the dispatch path (TriggerToggle is a no-op
+    // when supported_ is false). Not part of the runtime API — only
+    // the tests call this. The production path sets supported_ via
+    // ProbeGDeveloperFromConfig, which reads the user's config.cfg.
+    void SetSupportedForTesting(bool s) { supported_ = s; }
     int walks_entered() const { return walks_entered_; }
     int toggles_dispatched() const { return toggles_dispatched_; }
     int last_dispatch_ms() const { return last_dispatch_ms_; }
@@ -96,6 +114,19 @@ public:
     // via SendInput, the OS will deliver it back to our WH_KEYBOARD_LL
     // hook. We mark it as "echo" so the walker does not loop on it.
     bool ConsumeEchoKey(unsigned int vk);
+
+    // Diagnostic getters for the F12 dump + walking-entry log line.
+    //   last_dispatch_path() — 0 = no dispatch yet, 1 = SendInput
+    //     (foreground-targeted, can be discarded in fullscreen),
+    //     2 = PostMessage (HWND-targeted, always reaches the game).
+    //   last_postmessage_target_diag() — lower 32 bits of the HWND
+    //     used on the most recent PostMessage dispatch. Useful for
+    //     confirming "the shim targeted the right window" without
+    //     exposing the raw HWND in the public ABI.
+    int last_dispatch_path() const { return last_dispatch_path_; }
+    unsigned int last_postmessage_target_diag() const {
+        return last_postmessage_hwnd_diag_;
+    }
 
     // -- Test seams ---------------------------------------------------------
     // Pure helpers exposed for the unit-test suite. They are not part
@@ -124,6 +155,9 @@ private:
     unsigned int toggle_vk_ = 0x60;     // VK_NUMPAD0
     unsigned int exit_press_vk_ = 0;    // 0 = no separate exit press
     bool exiting_walking_ = false;
+    HWND hwnd_ = nullptr;              // bound game window for PostMessage path
+    int last_dispatch_path_ = 0;       // 0 = none, 1 = SendInput, 2 = PostMessage
+    unsigned int last_postmessage_hwnd_diag_ = 0;  // lower 32 bits of the HWND we last targeted
     // Echo-suppression: the keystrokes we SendInput come back to our
     // keyboard hook. We tag up to 8 echo VKs seen in the last 250 ms.
     static constexpr int kMaxEcho = 8;

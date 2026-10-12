@@ -1228,6 +1228,18 @@ extern "C" __declspec(dllexport) void walker_dump_game_free_camera_shim(void) {
                         s->toggle_vk());
     WALKERCORE_LOG_INFO("exit_press_vk (hex) : 0x%X",
                         s->exit_press_vk());
+    // M2 lander PostMessage path — surfaces which dispatch path
+    // the shim used on its most recent toggle, and the target HWND
+    // the PostMessage went to. Without these, a regression where
+    // the shim silently falls back to SendInput in fullscreen is
+    // invisible to the deploy-side analyst reading the F12 dump.
+    WALKERCORE_LOG_INFO("last_dispatch_path  : %s",
+                        s->last_dispatch_path() == 2
+                            ? "PostMessage"
+                            : (s->last_dispatch_path() == 1 ? "SendInput"
+                                                            : "none"));
+    WALKERCORE_LOG_INFO("postmessage_target  : 0x%X",
+                        s->last_postmessage_target_diag());
     WALKERCORE_LOG_INFO("--- end game-free-camera shim ---");
 }
 

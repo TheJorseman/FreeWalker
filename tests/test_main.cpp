@@ -307,6 +307,16 @@ void TestGameFreeCameraShimOnEnterWalkingDisabledIsAdvisory();
 void TestGameFreeCameraShimOnEnterWalkingSupportedFalseIsAdvisory();
 void TestGameFreeCameraShimTriggerToggleRespectsDisabled();
 void TestGameFreeCameraShimEchoSuppressionAfterTrigger();
+// BindGameHwnd + PostMessage dispatch path — fixes the ATS 1.61.3.1s
+// dev-free-camera regression where SendInput did not reach the game
+// window in fullscreen / DXGI exclusive mode.
+void TestGameFreeCameraShimDefaultHwndIsNull();
+void TestGameFreeCameraShimBindGameHwndRoundTrip();
+void TestGameFreeCameraShimBindGameHwndOverwrites();
+void TestGameFreeCameraShimBindGameHwndNullClears();
+void TestGameFreeCameraShimDispatchFallsBackToSendInputWithoutHwnd();
+void TestGameFreeCameraShimDispatchUsesPostMessageWhenHwndBound();
+void TestGameFreeCameraShimRebindOnEntryCatchesLateWindow();
 void TestCameraHijackComputeDispatcherVaZero();
 void TestCameraHijackComputeDispatcherVaAtsKbExe();
 void TestCameraHijackComputeDispatcherVaEts2();
@@ -920,6 +930,14 @@ int main() {
     RUN_TEST(walkercore::TestGameFreeCameraShimOnEnterWalkingSupportedFalseIsAdvisory);
     RUN_TEST(walkercore::TestGameFreeCameraShimTriggerToggleRespectsDisabled);
     RUN_TEST(walkercore::TestGameFreeCameraShimEchoSuppressionAfterTrigger);
+    // BindGameHwnd + PostMessage path — see test_game_free_camera_shim.cpp.
+    RUN_TEST(walkercore::TestGameFreeCameraShimDefaultHwndIsNull);
+    RUN_TEST(walkercore::TestGameFreeCameraShimBindGameHwndRoundTrip);
+    RUN_TEST(walkercore::TestGameFreeCameraShimBindGameHwndOverwrites);
+    RUN_TEST(walkercore::TestGameFreeCameraShimBindGameHwndNullClears);
+    RUN_TEST(walkercore::TestGameFreeCameraShimDispatchFallsBackToSendInputWithoutHwnd);
+    RUN_TEST(walkercore::TestGameFreeCameraShimDispatchUsesPostMessageWhenHwndBound);
+    RUN_TEST(walkercore::TestGameFreeCameraShimRebindOnEntryCatchesLateWindow);
     RUN_TEST(walkercore::TestGameFreeCameraShimOnExitWalkingLeavesCountersIntact);
     RUN_TEST(walkercore::TestGameFreeCameraShimProbeConfigCandidatesCoversOneDrive);
     RUN_TEST(walkercore::TestGameFreeCameraShimProbeConfigCandidatesATSFirst);

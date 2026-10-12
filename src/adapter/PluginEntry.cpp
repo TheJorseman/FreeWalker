@@ -92,6 +92,60 @@ walkercore::WalkerFsm *g_fsm = nullptr;
 // return "no hit" (the player passes through geometry, with one warning).
 walkercore::PhysXAdapter *g_world = nullptr;
 
+// M2 lander: game-window discovery for the GameFreeCameraShim.
+// EnumWindows callback that picks the first top-level window owned by
+// the current process with a non-zero size. Used to bind the shim's
+// PostMessage target at init time, so the dev free camera toggle
+// reaches the game window even in fullscreen / DXGI exclusive mode
+// where SendInput's foreground-targeted input gets discarded.
+//
+// Declared as a namespace-scope `extern "C"` callback because Win32's
+// EnumWindows takes a plain function pointer. The data pointer is
+// used to return the discovered HWND; everything else is read-only.
+namespace {
+struct FindHwndData {
+    DWORD target_pid;
+    HWND result;
+};
+BOOL CALLBACK FindHwndEnumProc(HWND hwnd, LPARAM lParam) {
+    auto *data = reinterpret_cast<FindHwndData *>(lParam);
+    if (data == nullptr || hwnd == nullptr) {
+        return TRUE;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != data->target_pid) {
+        return TRUE;  // keep enumerating
+    }
+    // Skip invisible / zero-size windows (these are message-only
+    // windows, owner-hidden tool windows, etc.). The game's main
+    // rendering window always has a visible, non-empty client area.
+    if (!IsWindowVisible(hwnd)) {
+        return TRUE;
+    }
+    RECT rc{};
+    if (!GetClientRect(hwnd, &rc) ||
+        (rc.right - rc.left) <= 0 || (rc.bottom - rc.top) <= 0) {
+        return TRUE;
+    }
+    data->result = hwnd;
+    return FALSE;  // stop enumerating
+}
+}  // namespace
+
+// Returns the first top-level visible window of the current process
+// with a non-empty client area, or nullptr if none. Cheap (one pass
+// of EnumWindows, no work per window beyond the ownership + visibility
+// + size filter). Called once at scs_telemetry_init time, the result
+// is bound to GameFreeCameraShim via BindGameHwnd.
+static HWND FindGameHwnd() {
+    FindHwndData data{};
+    data.target_pid = GetCurrentProcessId();
+    data.result = nullptr;
+    EnumWindows(&FindHwndEnumProc, reinterpret_cast<LPARAM>(&data));
+    return data.result;
+}
+
 // M4 input. The hook is installed once we have a game window (M2 lander);
 // until then, g_input stays null and the FrameLoop no-ops on input phases.
 walkercore::InputHook *g_input = nullptr;
@@ -495,7 +549,18 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
       // when the shim is disabled (the default). Always safe —
       // the FSM-only guard above already filters out any
       // tick where we are not transitioning into Walking.
+      //
+      // Re-bind the game HWND here too: the original bind at
+      // scs_telemetry_init time may have missed the window (e.g.
+      // the splash screen was the only top-level window then, and
+      // the main render window appears later). The rebind is a
+      // no-op when the window has not changed; FindGameHwnd is
+      // cheap (single EnumWindows pass, ~109 windows on the user's
+      // host in the observed dump).
       if (g_game_free_camera_shim != nullptr) {
+        if (g_game_free_camera_shim->game_hwnd() == nullptr) {
+          g_game_free_camera_shim->BindGameHwnd(FindGameHwnd());
+        }
         g_game_free_camera_shim->OnEnterWalking();
       }
     }
@@ -917,6 +982,30 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   g_game_free_camera_shim->SetEnabled(
       g_settings != nullptr && g_settings->current().m2_game_free_camera_shim);
   g_game_free_camera_shim->ProbeGDeveloperFromConfig();
+  // Bind the game window for the shim's PostMessage dispatch path.
+  // FindGameHwnd() enumerates top-level windows owned by the current
+  // process and picks the first visible, non-empty one (which is
+  // amtrucks.exe's main render window in this DLL's host process).
+  // When this returns non-null, the shim's Numpad-0 toggle reaches
+  // the game via PostMessage(WM_KEYDOWN/WM_KEYUP) instead of
+  // SendInput, which is required on ATS 1.61.3.1s with fullscreen
+  // / DXGI exclusive mode where SendInput's foreground-targeted
+  // input gets discarded. When FindGameHwnd() returns null (the
+  // game window is not yet up at scs_telemetry_init time, e.g. the
+  // main menu splash), the shim silently falls back to SendInput —
+  // we'll re-bind on the next F10 transition (see
+  // walker_per_frame_tick). The shim's walking-entry log line
+  // surfaces the dispatch path + target HWND so a future regression
+  // in this binding is visible in game.log.txt.
+  {
+    HWND game_hwnd = FindGameHwnd();
+    g_game_free_camera_shim->BindGameHwnd(game_hwnd);
+    WALKERCORE_LOG_INFO(
+        "GameFreeCameraShim: bound game hwnd=0x%llX (PostMessage %s)",
+        static_cast<unsigned long long>(
+            reinterpret_cast<std::uintptr_t>(game_hwnd)),
+        game_hwnd != nullptr ? "enabled" : "disabled — SendInput fallback");
+  }
   walkercore::diagnostic_internal::SetGameFreeCameraShim(
       g_game_free_camera_shim);
 

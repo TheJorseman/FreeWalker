@@ -20,15 +20,18 @@ void TestKnockoutThreshold() {
     provider.Tick(player, 0.016);
     EXPECT_FALSE(provider.isKnockedOut());
 
-    // Position 1: large jump (10 m in 16 ms → ~625 m/s, way above threshold).
-    player.feet_position = Vec3{10, 0, 0};
+    // Position 1: jump above threshold but below the teleport re-prime
+    // distance (0.5 m / 16 ms = 31 m/s, default velocity threshold is
+    // 12 m/s). Must trigger via the velocity path, NOT be re-primed
+    // as a teleport.
+    player.feet_position = Vec3{0.5, 0, 0};
     provider.Tick(player, 0.016);
     EXPECT_TRUE(provider.isKnockedOut());
 
     // Recovery over the configured recovery_seconds.
     KnockoutConfig cfg = provider.config();
     // Tick repeatedly with no movement until recovered.
-    player.feet_position = Vec3{10, 0, 0};  // not moving
+    player.feet_position = Vec3{0.5, 0, 0};  // not moving
     double total = 0;
     while (!provider.isKnockedOut() == false && total < cfg.recovery_seconds + 1) {
         provider.Tick(player, 0.016);
@@ -62,7 +65,10 @@ void TestKnockoutRunningDoesNotTrigger() {
 void TestKnockoutFastImpactTriggers() {
     // A genuine car impact (instantaneous 10+ m/s velocity gain) MUST
     // trigger a knock-out. This is the case the threshold is calibrated
-    // for.
+    // for. We pick a 0.7 m jump (= 0.7 / 0.016 = 43.75 m/s instantaneous
+    // velocity, above the 12 m/s default threshold but below the 1.0 m
+    // default teleport re-prime distance) so the velocity branch fires
+    // instead of the teleport re-prime branch.
     KnockoutProvider provider;
     PlayerState player;
     PlayerState_Reset(player);
@@ -70,8 +76,8 @@ void TestKnockoutFastImpactTriggers() {
     player.feet_position = Vec3{0, 0, 0};
     provider.Tick(player, 0.016);  // priming frame
 
-    // Sudden 12 m jump = 12/0.016 = 750 m/s instantaneous velocity.
-    player.feet_position = Vec3{12, 0, 0};
+    // 0.7 m jump = 0.7 / 0.016 = 43.75 m/s instantaneous velocity.
+    player.feet_position = Vec3{0.7, 0, 0};
     provider.Tick(player, 0.016);
     EXPECT_TRUE(provider.isKnockedOut());
 }
@@ -148,7 +154,11 @@ void TestKnockoutProviderStateCycleAndEveryField() {
                   static_cast<unsigned>(PlayerMode::Standing));
 
         // Step 3: huge move past threshold → Standing → KnockedOut.
-        player.feet_position = Vec3{20, 0, 0};  // 20/0.016 = 1250 m/s
+        // Use 0.7 m which is above the 12 m/s velocity threshold for
+        // the 16 ms tick but below the 1.0 m default teleport re-prime
+        // distance — so the velocity branch fires (not the teleport
+        // re-prime branch).
+        player.feet_position = Vec3{0.75, 0, 0};  // 47 m/s
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
         EXPECT_TRUE(provider.state().time_remaining_s > 0.0);
@@ -185,6 +195,7 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         KnockoutProvider provider;
         KnockoutConfig cfg = provider.config();
         cfg.velocity_change_threshold_mps = 100.0;  // raise bar very high
+        cfg.teleport_reprime_distance_m = 100.0;   // disable teleport gate
         provider.SetConfig(cfg);
 
         PlayerState player;
@@ -194,14 +205,16 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         provider.Tick(player, 0.016);  // prime
 
         // Move "only" 0.5 m → 31 m/s, below the 100 m/s threshold →
-        // no trigger. With default threshold (8 m/s) the same jump
+        // no trigger. With default threshold (12 m/s) the same jump
         // WOULD have triggered.
         player.feet_position = Vec3{0.5, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Now move 10 m → 625 m/s, above the raised threshold →
-        // trigger.
+        // trigger. (Teleport gate is disabled so the 10 m jump is
+        // treated as a real per-frame displacement rather than as a
+        // programmatic position reset.)
         player.feet_position = Vec3{10, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
@@ -211,7 +224,8 @@ void TestKnockoutProviderStateCycleAndEveryField() {
     {
         KnockoutProvider provider;
         KnockoutConfig cfg = provider.config();
-        cfg.recovery_seconds = 2.0;  // short recovery
+        cfg.recovery_seconds = 2.0;            // short recovery
+        cfg.teleport_reprime_distance_m = 100.0;  // disable teleport gate
         provider.SetConfig(cfg);
 
         PlayerState player;
@@ -220,7 +234,9 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         player.feet_position = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);  // prime
 
-        // Trigger.
+        // Trigger — 10 m jump at dt=16 ms = 625 m/s, above the 12 m/s
+        // default velocity threshold. (Teleport gate is disabled so
+        // the velocity branch fires, not the re-prime branch.)
         player.feet_position = Vec3{10, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
@@ -241,6 +257,10 @@ void TestKnockoutProviderStateCycleAndEveryField() {
     // ---- impact_direction → opposite of displacement ----
     {
         KnockoutProvider provider;
+        KnockoutConfig cfg = provider.config();
+        cfg.teleport_reprime_distance_m = 100.0;  // disable teleport gate
+        provider.SetConfig(cfg);
+
         PlayerState player;
         PlayerState_Reset(player);
         player.has_feet = true;
@@ -248,8 +268,10 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         provider.Tick(player, 0.016);  // prime
 
         // Move in +X direction → impact came from -X (player was
-        // pushed forward).
-        player.feet_position = Vec3{5, 0, 0};
+        // pushed forward). Use 0.7 m so the velocity branch fires
+        // instead of the (default, but disabled in this case) teleport
+        // re-prime branch.
+        player.feet_position = Vec3{0.7, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
         // impact_direction.x should be negative (opposite of +X push).
@@ -300,6 +322,122 @@ void TestKnockoutProviderStateCycleAndEveryField() {
 }
 
 // -----------------------------------------------------------------------------
+// Teleport re-prime contract.
+//
+// The KnockoutProvider's velocity check fires for any per-frame
+// displacement over `cfg.velocity_change_threshold_mps * dt`. When
+// the FSM snaps the player to a new world anchor (Driving ↔ Walking
+// transitions call PlacePlayerAtDoor / PlacePlayerAtSeat, which set
+// player.feet_position to the door / seat world coordinate in a
+// single Tick), that distance is a programmatic reset, not a
+// pedestrian-vs-vehicle impact. The teleport re-prime branch
+// re-primes last_position_ to the current coordinate and returns
+// without firing the velocity trigger when dist² ≥
+// cfg.teleport_reprime_distance_m². The thresholds default to
+// velocity_change_threshold_mps = 12.0 (so a normal run / walk
+// never trips it) and teleport_reprime_distance_m = 1.0 (so a
+// 1.15 m–11.5 m per-frame snap during a cabin transition does
+// NOT fire a knock-out). Both tunables live in KnockoutConfig, so
+// a future M10 lander can lower one or both when real collision
+// normals arrive from PhysX.
+//
+// Contract under test:
+//
+//   1. A position jump above the teleport threshold re-primes the
+//      baseline without firing the knock-out.
+//   2. Subsequent Ticks at the new position stay not-knocked-out
+//      unless a real (sub-teleport) velocity trigger fires.
+//   3. A real sub-teleport car impact still fires the knock-out —
+//      the teleport re-prime is a guard, not a kill-switch.
+//   4. Configure the teleport distance to a value greater than the
+//      test jump → the velocity path takes over (regression: the
+//      threshold must keep working independent of the teleport
+//      re-prime).
+// -----------------------------------------------------------------------------
+
+void TestKnockoutTeleportReprime() {
+    ResetKnockoutStubWarnForTesting();  // fresh warn for this probe
+
+    // ---- Case 1: position jump above teleport threshold → re-prime, no KO ----
+    {
+        KnockoutProvider provider;
+        PlayerState player;
+        PlayerState_Reset(player);
+        player.has_feet = true;
+
+        // Prime at origin.
+        player.feet_position = Vec3{0, 0, 0};
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // Snap 2.0 m in one frame (above the 1.0 m default teleport
+        // threshold; matches the 1.15 m – 11.5 m deltas we observed
+        // during FSM transitions in the live build).
+        player.feet_position = Vec3{2.0, 0, 0};
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // Steady at the new position — must remain not knocked out.
+        player.feet_position = Vec3{2.0, 0, 0};
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // A real sub-teleport car impact at the new position —
+        // 0.7 m / 16 ms = 43.75 m/s — must still fire the velocity
+        // branch (the teleport re-prime is a guard, not a kill-switch).
+        player.feet_position = Vec3{2.7, 0, 0};
+        provider.Tick(player, 0.016);
+        EXPECT_TRUE(provider.isKnockedOut());
+    }
+
+    // ---- Case 2: setting teleport threshold above the test jump ----
+    // → the velocity branch must take over even at 12 m/s.
+    {
+        KnockoutProvider provider;
+        KnockoutConfig cfg = provider.config();
+        cfg.teleport_reprime_distance_m = 100.0;  // disable teleport gate
+        provider.SetConfig(cfg);
+
+        PlayerState player;
+        PlayerState_Reset(player);
+        player.has_feet = true;
+
+        // Prime at origin.
+        player.feet_position = Vec3{0, 0, 0};
+        provider.Tick(player, 0.016);
+
+        // 0.7 m / 16 ms = 43.75 m/s — above the 12 m/s default
+        // velocity threshold. With the teleport gate disabled, this
+        // must fire via the velocity path.
+        player.feet_position = Vec3{0.7, 0, 0};
+        provider.Tick(player, 0.016);
+        EXPECT_TRUE(provider.isKnockedOut());
+    }
+
+    // ---- Case 3: vertical snap (FSM PlacePlayerAtDoor y axis) ----
+    {
+        KnockoutProvider provider;
+        PlayerState player;
+        PlayerState_Reset(player);
+        player.has_feet = true;
+
+        player.feet_position = Vec3{0, 0, 0};
+        provider.Tick(player, 0.016);
+
+        // 50 m down — clear teleport (>= 1 m). Without re-prime, this
+        // would fire the velocity check at 3,125 m/s.
+        player.feet_position = Vec3{0, -50, 0};
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+
+        // Steady at the fallen coordinate.
+        player.feet_position = Vec3{0, -50, 0};
+        provider.Tick(player, 0.016);
+        EXPECT_FALSE(provider.isKnockedOut());
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Recovery → re-prime contract.
 //
 // The KnockoutProvider's velocity check compares against last_position_
@@ -341,17 +479,18 @@ void TestKnockoutRecoveryResetsLastPositionBaseline() {
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
-        // Hit by a car (instantaneous ~750 m/s, way past threshold).
-        player.feet_position = Vec3{10, 0, 0};
+        // Hit by a car (0.7 m / 16 ms = 43.75 m/s — above the 12 m/s
+        // velocity threshold, below the 1 m teleport re-prime).
+        player.feet_position = Vec3{0.7, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
 
         // During the 0.5 s recovery window, the game slides the player
-        // ~10 m further (e.g. impact sliding). We model that by
+        // ~1 m further (e.g. impact sliding). We model that by
         // mutating player.feet_position during the knocked-out ticks
         // (the knocked-out branch doesn't read feet_position for any
         // check, so any value is safe).
-        player.feet_position = Vec3{20, 0, 0};
+        player.feet_position = Vec3{1.7, 0, 0};
         // 31 × 0.016 = 0.496 s < 0.5 s recovery — last iteration still
         // knocked out. 32nd Tick crosses the recovery boundary (cumulative
         // 0.512 s, time_remaining_s ≤ 0).
@@ -375,20 +514,20 @@ void TestKnockoutRecoveryResetsLastPositionBaseline() {
 
         // First post-recovery Tick at the post-slide position —
         // should NOT re-knockout (this is the priming frame).
-        player.feet_position = Vec3{20, 0, 0};
+        player.feet_position = Vec3{1.7, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Steady at the post-slide position — should remain not knocked
         // out (no displacement).
-        player.feet_position = Vec3{20, 0, 0};
+        player.feet_position = Vec3{1.7, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Now simulate a REAL second car impact after recovery — the
-        // velocity check should fire normally. Move 10 m instantaneously
-        // to land past the threshold.
-        player.feet_position = Vec3{30, 0, 0};
+        // velocity check should fire normally. Move 0.7 m instantaneously
+        // to land past the threshold but below the teleport threshold.
+        player.feet_position = Vec3{2.4, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
     }
@@ -406,8 +545,9 @@ void TestKnockoutRecoveryResetsLastPositionBaseline() {
 
         player.feet_position = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);  // prime
-        player.feet_position = Vec3{10, 0, 0};
-        provider.Tick(player, 0.016);  // trigger horizontal impact
+        // Trigger horizontal: 0.7 m / 16 ms = 43.75 m/s.
+        player.feet_position = Vec3{0.7, 0, 0};
+        provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
 
         // During recovery, the player falls 50 m straight down.
@@ -447,12 +587,14 @@ void TestKnockoutRecoveryResetsLastPositionBaseline() {
 
         player.feet_position = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);  // prime
-        player.feet_position = Vec3{10, 0, 0};
-        provider.Tick(player, 0.016);  // trigger
+        // Trigger: 0.7 m / 16 ms = 43.75 m/s, above the 12 m/s default
+        // velocity threshold but below the 1 m default teleport re-prime.
+        player.feet_position = Vec3{0.7, 0, 0};
+        provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
 
         // Stationary during recovery at the impact point.
-        player.feet_position = Vec3{10, 0, 0};
+        player.feet_position = Vec3{0.7, 0, 0};
         provider.Tick(player, 0.25);  // crosses the boundary
         EXPECT_FALSE(provider.isKnockedOut());
 

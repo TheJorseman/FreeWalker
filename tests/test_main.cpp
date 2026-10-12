@@ -80,6 +80,7 @@ void TestKnockoutThreshold();
 void TestKnockoutRunningDoesNotTrigger();
 void TestKnockoutFastImpactTriggers();
 void TestKnockoutProviderStateCycleAndEveryField();
+void TestKnockoutTeleportReprime();
 void TestKnockoutRecoveryResetsLastPositionBaseline();
 void TestDoorAnimEasing();
 void TestDoorAnimProviderEveryFieldHasObservableEffect();
@@ -521,6 +522,7 @@ int main() {
     RUN_TEST(walkercore::TestKnockoutRunningDoesNotTrigger);
     RUN_TEST(walkercore::TestKnockoutFastImpactTriggers);
     RUN_TEST(walkercore::TestKnockoutProviderStateCycleAndEveryField);
+    RUN_TEST(walkercore::TestKnockoutTeleportReprime);
     RUN_TEST(walkercore::TestKnockoutRecoveryResetsLastPositionBaseline);
     RUN_TEST(walkercore::TestDoorAnimEasing);
     RUN_TEST(walkercore::TestDoorAnimProviderEveryFieldHasObservableEffect);

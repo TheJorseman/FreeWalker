@@ -293,6 +293,7 @@ void TestDiagnosticDumpReportsKnockout() {
     KnockoutConfig cfg;
     cfg.recovery_seconds = 8.0;
     cfg.velocity_change_threshold_mps = 8.0;
+    cfg.teleport_reprime_distance_m = 100.0;  // disable for this test
     knockout.SetConfig(cfg);
 
     // Simulate the provider already in the knocked-out state — bypass
@@ -305,7 +306,9 @@ void TestDiagnosticDumpReportsKnockout() {
     // First Tick with has_feet and dt>0 seeds the previous position.
     knockout.Tick(p, 0.016);
     // Second Tick jumps the player 50 m in one frame — velocity ≈ 3125 m/s
-    // >> 8 m/s threshold, triggers knock-out.
+    // >> 8 m/s threshold, triggers knock-out. (Teleport gate is disabled
+    // so the 50 m jump goes through the velocity branch instead of the
+    // re-prime branch.)
     p.feet_position = {50, 0, 0};
     knockout.Tick(p, 0.016);
 

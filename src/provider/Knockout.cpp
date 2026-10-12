@@ -20,8 +20,9 @@ void WarnStub() {
     g_warned = true;
     WALKERCORE_LOG_WARN(
         "KnockoutProvider: stub active — vehicle-impact detection uses "
-        "velocity-change heuristics only. Real impl (collision normal from "
-        "PhysX) lands in M10 lander.");
+        "velocity-change heuristics only (with teleport re-prime for "
+        "FSM position snaps). Real impl (collision normal from PhysX) "
+        "lands in M10 lander.");
 }
 
 }  // namespace
@@ -94,10 +95,30 @@ void KnockoutProvider::Tick(PlayerState &player, double dt) {
     // direction vector. In steady state the player is not being hit by
     // a vehicle, so dist² stays well below the threshold² and the
     // sqrt is never taken.
+    //
+    // Teleport re-prime: any per-frame delta larger than
+    // cfg_.teleport_reprime_distance_m is treated as a programmatic
+    // position reset (FSM `PlacePlayerAtDoor` / `PlacePlayerAtSeat`
+    // snaps the feet_position to a world anchor at the start of every
+    // cabin transition; we observed 1.15 m – 11.5 m per-frame deltas
+    // during Driving ↔ Walking transitions, which dwarf the 12 m/s
+    // velocity threshold after even a single 16 ms tick). The right
+    // response is "this was never a car crash — re-prime the baseline
+    // and wait for the next frame", not "knock the player out". The
+    // computed dist² is already available, so this check is just an
+    // extra comparison.
     const double dx = player.feet_position.x - last_position_.x;
     const double dy = player.feet_position.y - last_position_.y;
     const double dz = player.feet_position.z - last_position_.z;
     const double dist_sq = dx * dx + dy * dy + dz * dz;
+    const double teleport_threshold_sq =
+        cfg_.teleport_reprime_distance_m * cfg_.teleport_reprime_distance_m;
+    if (dist_sq >= teleport_threshold_sq) {
+        // Programmatic snap (FSM transition, teleport, spawn). Re-prime
+        // and skip the velocity-trigger branch for this frame.
+        last_position_ = player.feet_position;
+        return;
+    }
     const double dist_threshold_sq = (cfg_.velocity_change_threshold_mps * dt) *
                                      (cfg_.velocity_change_threshold_mps * dt);
 

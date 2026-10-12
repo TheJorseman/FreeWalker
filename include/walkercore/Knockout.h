@@ -28,14 +28,27 @@ namespace walkercore {
 struct KnockoutConfig {
     // Threshold velocity change (m/s) within a single frame that triggers
     // a knock-out. Typical pedestrian-vs-car: ~10 m/s instant velocity
-    // gain. We default to 8.0 m/s — comfortably above the player's
+    // gain. We default to 12.0 m/s — comfortably above the player's
     // normal run speed (4.5 m/s in MovementConfig) so a running player
     // doesn't false-trigger, while still catching genuine car impacts
-    // (8+ m/s instantaneous velocity gain). The proper delta-v tracking
+    // (15+ m/s instantaneous velocity gain). The proper delta-v tracking
     // (compare against previous-frame velocity, not absolute velocity)
     // is the M10 lander's job — the stub uses absolute velocity as an
     // approximation.
-    double velocity_change_threshold_mps = 8.0;
+    double velocity_change_threshold_mps = 12.0;
+    // Per-frame position delta above which we treat the move as a
+    // programmatic reset (FSM snap to door / seat anchor, teleport,
+    // spawn, etc.) and re-prime last_position_ without firing the
+    // knockout heuristic. Real pedestrian-vs-car collisions don't move
+    // a body more than ~1 m in a single 16 ms frame; anything above
+    // that is a snap. Defaults to 1.0 m / frame (~60 m/s instantaneous
+    // velocity — well above any genuine car impact, well below the
+    // "Position snapped back to cabin seat" deltas we observed in the
+    // hook-disabled build, which were 1.15 m–11.5 m per frame). The M10
+    // lander replaces this heuristic with a real PhysX-driven
+    // collision normal and can keep the same field semantics (it's a
+    // "snap re-prime threshold" guard, not a velocity check).
+    double teleport_reprime_distance_m = 1.0;
     // Recovery duration (seconds).
     double recovery_seconds = 8.0;
     // Minimum fall height (m) to trigger a fall-damage knock-out.

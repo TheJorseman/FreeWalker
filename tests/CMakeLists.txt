@@ -29,6 +29,7 @@ add_library(WalkerCoreTestLib STATIC
     ${CMAKE_SOURCE_DIR}/src/provider/OpentrackReceiver.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/PxSceneHook.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/ImGuiOverlay.cpp
+    ${CMAKE_SOURCE_DIR}/src/provider/WindowSubclass.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/PerTruckDoorTable.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/ScsTelemetryProvider.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/TrailerCoupling.cpp
@@ -97,7 +98,8 @@ add_executable(WalkerCoreTests
     test_per_truck_door_table.cpp
     test_game_free_camera_shim.cpp
     test_px_scene_hook.cpp
-    test_imgui_overlay.cpp)
+    test_imgui_overlay.cpp
+    test_window_subclass.cpp)
 
 target_link_libraries(WalkerCoreTests PRIVATE WalkerCoreTestLib)
 if (WIN32)

@@ -45,6 +45,7 @@
 #include "walkercore/Log.h"
 #include "walkercore/PlayerState.h"
 #include "walkercore/WalkerFsm.h"
+#include "walkercore/WindowSubclass.h"
 
 #if defined(WALKERCORE_HAVE_IMGUI)
 #include "imgui.h"
@@ -165,6 +166,20 @@ bool ImGuiOverlay::InitializeForD3D11Device(void *device, void *context,
     WALKERCORE_LOG_INFO(
         "ImGuiOverlay: initialized (device=%p context=%p hwnd=%p imgui=%s)",
         device, context, hwnd, ImGuiVersionString());
+
+    // M11.4 — install the WndProc subclass on the game hwnd so the
+    // overlay's ImGui_ImplWin32_WndProcHandler is in the WndProc chain
+    // AND the InputHook's raw-input sink receives WM_INPUT. The
+    // subclass is a single shim; both consumers live in the same
+    // module so a single install / uninstall pair covers both. The
+    // install is conditional on hwnd — without a window, the WndProc
+    // has nothing to subclass and the InputHook is also pointless
+    // (RegisterRawInputDevices would fail with a null target). The
+    // ImGui context is alive by this point, so ImGui's WndProc
+    // handler is safe to call from the subclass.
+    if (hwnd != nullptr) {
+        WindowSubclass_Install(static_cast<HWND>(hwnd));
+    }
     return true;
 #else
     (void)device;
@@ -308,6 +323,15 @@ bool ImGuiOverlay::RenderFrameIfEnabled() {
 }
 
 void ImGuiOverlay::Shutdown() {
+    // M11.4 — uninstall the WndProc subclass FIRST, before tearing
+    // down ImGui's Win32 backend. The subclass routes every input
+    // message to ImGui_ImplWin32_WndProcHandler; if the ImGui
+    // context is gone first, the routing would forward messages
+    // to a stale context (or crash on the ImGui::GetIO() call
+    // inside the handler). Uninstall is idempotent and safe to
+    // call when not installed, so the unconditional call here is
+    // fine even if InitializeForD3D11Device was never called.
+    WindowSubclass_Uninstall(nullptr);
 #if defined(WALKERCORE_HAVE_IMGUI)
     if (dx11_initialised_) {
         ImGui_ImplDX11_Shutdown();

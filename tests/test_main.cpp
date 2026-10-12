@@ -123,6 +123,21 @@ void TestInputHookOnRawInputRightButtonPress();
 void TestInputHookOnRawInputButtonHeldNoExtraEdges();
 void TestInputHookOnRawInputIgnoresNonMouse();
 void TestInputHookOnRawInputCombinedMotionAndButton();
+void TestWindowSubclassFreshStateIsNotInstalled();
+void TestWindowSubclassInstallOnNullHwndIsRefused();
+void TestWindowSubclassInstallUninstallRoundTrip();
+void TestWindowSubclassInstallIsIdempotent();
+void TestWindowSubclassUninstallWhenNotInstalledIsSafe();
+void TestWindowSubclassUninstallWithMismatchedHwndIsIgnored();
+void TestWindowSubclassReinstallReplacesHwnd();
+void TestWindowSubclassRawInputSinkReceivesWM_INPUT();
+void TestWindowSubclassRawInputSinkReceivesMultipleWM_INPUT();
+void TestWindowSubclassClearedSinkDropsWM_INPUT();
+void TestWindowSubclassSinkSurvivesReinstall();
+void TestWindowSubclassChainsToOriginalForNonWM_INPUT();
+void TestWindowSubclassChainsToOriginalForMultipleMessages();
+void TestWindowSubclassWM_INPUTAlsoChainsToOriginal();
+void TestWindowSubclassRestoresOriginalOnUninstall();
 void TestHeadTrackerSteadyStateConverges();
 void TestHeadTrackerNoInputDoesNotDrift();
 void TestHeadTrackerNegativeDeltaReturns();
@@ -704,6 +719,26 @@ int main() {
     RUN_TEST(walkercore::TestInputHookOnRawInputButtonHeldNoExtraEdges);
     RUN_TEST(walkercore::TestInputHookOnRawInputIgnoresNonMouse);
     RUN_TEST(walkercore::TestInputHookOnRawInputCombinedMotionAndButton);
+
+    // M11.4 — WndProc subclass. The fixture creates a fresh
+    // message-only window per test (HWND_MESSAGE parent), so the
+    // tests don't depend on the test process's window station or
+    // the desktop being available.
+    RUN_TEST(walkercore::TestWindowSubclassFreshStateIsNotInstalled);
+    RUN_TEST(walkercore::TestWindowSubclassInstallOnNullHwndIsRefused);
+    RUN_TEST(walkercore::TestWindowSubclassInstallUninstallRoundTrip);
+    RUN_TEST(walkercore::TestWindowSubclassInstallIsIdempotent);
+    RUN_TEST(walkercore::TestWindowSubclassUninstallWhenNotInstalledIsSafe);
+    RUN_TEST(walkercore::TestWindowSubclassUninstallWithMismatchedHwndIsIgnored);
+    RUN_TEST(walkercore::TestWindowSubclassReinstallReplacesHwnd);
+    RUN_TEST(walkercore::TestWindowSubclassRawInputSinkReceivesWM_INPUT);
+    RUN_TEST(walkercore::TestWindowSubclassRawInputSinkReceivesMultipleWM_INPUT);
+    RUN_TEST(walkercore::TestWindowSubclassClearedSinkDropsWM_INPUT);
+    RUN_TEST(walkercore::TestWindowSubclassSinkSurvivesReinstall);
+    RUN_TEST(walkercore::TestWindowSubclassChainsToOriginalForNonWM_INPUT);
+    RUN_TEST(walkercore::TestWindowSubclassChainsToOriginalForMultipleMessages);
+    RUN_TEST(walkercore::TestWindowSubclassWM_INPUTAlsoChainsToOriginal);
+    RUN_TEST(walkercore::TestWindowSubclassRestoresOriginalOnUninstall);
 
     RUN_TEST(walkercore::TestHeadTrackerSteadyStateConverges);
     RUN_TEST(walkercore::TestHeadTrackerNoInputDoesNotDrift);

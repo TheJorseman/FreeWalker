@@ -34,6 +34,7 @@
 #include <windows.h>
 
 #include "walkercore/Log.h"
+#include "walkercore/WindowSubclass.h"
 
 namespace walkercore {
 
@@ -42,6 +43,19 @@ namespace walkercore {
 // "WalkerCore runs on the game thread, no thread sync needed" rule.
 namespace {
 InputHook *g_instance = nullptr;
+
+// M11.4 — trampoline that the WndProc subclass calls on every
+// WM_INPUT message. WindowSubclass_SetRawInputSink takes a (fn, ctx)
+// pair where ctx is the InputHook instance and fn is this static.
+// The trampoline is a free function so the function pointer has
+// stable linkage; ctx carries the per-instance state. The function
+// is a no-op when ctx is null (defensive — the WndProc already
+// null-checks the fn pointer before calling, but a clear that
+// happens between the check and the call would still land here).
+void OnRawInputMessageTrampoline(void *ctx, LPARAM l_param) {
+    if (ctx == nullptr) return;
+    static_cast<InputHook *>(ctx)->OnRawInputMessage(l_param);
+}
 }  // namespace
 
 // Low-level keyboard hook callback. Translates VK -> WalkercoreKey bits
@@ -150,11 +164,24 @@ bool InputHook::Install(HWND game_window) {
     installed_ = true;
     last_.valid = true;
 
+    // M11.4 — register this InputHook as the raw-input sink for the
+    // WndProc subclass. The WndProc is installed later by
+    // ImGuiOverlay::InitializeForD3D11Device (when D3D11Hook captures
+    // the game hwnd). Registering the sink now — before the subclass
+    // is installed — is safe: the WindowSubclass stores the (fn, ctx)
+    // pair and only uses it once a WndProc subclass is alive. When
+    // the D3D11 hook captures the hwnd and the subclass is installed,
+    // the WndProc sees the registered sink on every WM_INPUT and
+    // forwards via the trampoline.
+    WindowSubclass_SetRawInputSink(&OnRawInputMessageTrampoline, this);
+
     WALKERCORE_LOG_INFO(
         "InputHook::Install: keyboard hook live%s",
         (game_window != nullptr)
-            ? " (mouse WM_INPUT pending M2 lander)"
-            : " (no game hwnd yet; mouse WM_INPUT will need a re-Install)");
+            ? " (raw-input sink registered; WM_INPUT will route once "
+              "the D3D11 hook installs the WndProc subclass)"
+            : " (no game hwnd yet; raw-input sink registered globally "
+              "so the WndProc subclass will route when it lands)");
 
     return true;
 }
@@ -166,6 +193,15 @@ void InputHook::Uninstall() {
     if (kb_hook_ != nullptr) {
         UnhookWindowsHookEx(kb_hook_);
         kb_hook_ = nullptr;
+    }
+    // M11.4 — clear the raw-input sink so the WndProc subclass
+    // (which is uninstalled by ImGuiOverlay::Shutdown) no longer
+    // dispatches to a stale this pointer. The trampoline would
+    // still call OnRawInputMessage on a dangling pointer if the
+    // sink were not cleared before the subclass stays alive
+    // past our destruction.
+    if (WindowSubclass_IsInstalled(nullptr)) {
+        WindowSubclass_SetRawInputSink(nullptr, nullptr);
     }
     if (g_instance == this) {
         g_instance = nullptr;

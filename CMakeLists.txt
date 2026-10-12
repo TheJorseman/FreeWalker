@@ -102,6 +102,7 @@ add_library(WalkerCore SHARED
     src/provider/OpentrackReceiver.cpp
     src/provider/PxSceneHook.cpp
     src/provider/ImGuiOverlay.cpp
+    src/provider/WindowSubclass.cpp
     src/provider/ScsTelemetryProvider.cpp
     src/provider/PerTruckDoorTable.cpp
     src/provider/TrailerCoupling.cpp

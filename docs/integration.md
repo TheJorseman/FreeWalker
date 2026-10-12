@@ -45,7 +45,8 @@ The M-landers are:
 | M8 Lander | Real fuel-station prefab list + SCS fuel channels | Not yet started (RE of SCS `prefab/list_station` required; not yet wired because that RE needs a live debugging session against `amtrucks.exe`). |
 | M9 Lander | Real trailer-attach API + per-trailer king-pin offsets | **Partial**. `CouplingProvider` tracks the live `hook_position` from the SCS configuration event and uses it to derive per-step waypoints (ApproachToKingPin / LowerLandingGear / ConnectAirLines / RaiseLandingGear) instead of fixed placeholders. `walker_dump_coupling()` reports the active step + progress + waypoint on F12. |
 | M10 Lander | Vehicle-impact normal from PhysX collision results | **Partial**. `KnockoutProvider::Tick` logs the per-angle collision direction (TMRealWalk-style probe line: `KnockoutProvider: collision direction (angle=... deg, normal=...)`). `walker_dump_knockout()` reports the live state + magnitude-normalized impact direction + config thresholds (vel-change, snap-re-prime, recovery, fall-height) on F12. The hook into `PhysXAdapter::SphereSweep`'s contact normal remains — M3 runtime queries must be live before the hook can replace the velocity-change heuristic. |
-| M11 Lander | Dear ImGui integration under D3D11 | **D3D11 integration landed**. Dear ImGui v1.91 vendored + linked into both DLL and test builds via `imgui_vendor` static lib (`-w` warnings). `WALKERCORE_HAVE_IMGUI=1` set; 6 internal headers (`imgui_internal.h`, `imconfig.h`, `imstb_*`) added. `ImGuiOverlay` class extended with full D3D11 lifecycle (InitializeForD3D11Device / OnDeviceLost / OnDeviceCreated / RenderFrameIfEnabled / Shutdown); `D3D11Hook::HookedCreateDeviceAndSwapChain` calls `OnD3D11DeviceCaptured` (with `FindGameWindowHandle` EnumWindows helper); `HookedPresent` calls `RenderImGuiFrameIfEnabled` after the per-frame tick. ABI contract: 21 → 27 (6 new: `walker_imgui_overlay_version`, `walker_imgui_overlay_frames_rendered`, `walker_shutdown_imgui_overlay`, `walker_on_d3d11_device_captured`, `walker_on_d3d11_device_lost`, `walker_render_imgui_frame_if_enabled`). 6 new unit tests pin the lifecycle + version + null-safety contracts. |
+| M4 Lander | Mouse-pump + WndProc subclass for input wiring | **Implemented**. `InputHook::OnRawInputData(const RAWINPUT&)` accumulates mouse motion / wheel / LMB+RMB into `last_` (data plane). `InputHook::OnRawInputMessage(LPARAM)` is the production path that calls `GetRawInputData` and forwards. `Sample()` now drains `mouse_dx` / `mouse_dy` / `wheel_delta` after the struct copy so per-frame motion doesn't accumulate across frames. New module `WindowSubclass` (`include/walkercore/WindowSubclass.h` + `src/provider/WindowSubclass.cpp`) installs a single WndProc shim on the game hwnd via `SetWindowLongPtrA + GWLP_WNDPROC`; the shim routes `WM_INPUT` to a registered sink (the InputHook's `OnRawInputMessage` trampoline with the InputHook instance as ctx) AND forwards every input message to `ImGui_ImplWin32_WndProcHandler` (no-op when no ImGui context is alive) AND chains to the original WndProc via `CallWindowProcA` (never swallows). The shim is installed by `ImGuiOverlay::InitializeForD3D11Device` after `ImGui_ImplWin32_Init` + `ImGui_ImplDX11_Init` succeed, uninstalled by `ImGuiOverlay::Shutdown` BEFORE `ImGui_ImplWin32_Shutdown` so the WndProc never forwards to a dead context. `InputHook::Install` registers the sink (safe even before the shim is installed — the sink is stored in module-local state); `InputHook::Uninstall` clears it if a shim is currently live. 27 new unit tests (11 RAWINPUT data plane + 16 WndProc state machine) pin motion / wheel / button edges / absolute-coordinate drop / keyboard raw-input drop / install-uninstall round-trip / sink routing / chain-to-original. Internal module (no ABI surface). |
+| M11 Lander | Dear ImGui integration under D3D11 | **D3D11 integration + interactive input landed**. Dear ImGui v1.91 vendored + linked into both DLL and test builds via `imgui_vendor` static lib (`-w` warnings). `WALKERCORE_HAVE_IMGUI=1` set; 6 internal headers (`imgui_internal.h`, `imconfig.h`, `imstb_*`) added. `ImGuiOverlay` class extended with full D3D11 lifecycle (InitializeForD3D11Device / OnDeviceLost / OnDeviceCreated / RenderFrameIfEnabled / Shutdown); `D3D11Hook::HookedCreateDeviceAndSwapChain` calls `OnD3D11DeviceCaptured` (with `FindGameWindowHandle` EnumWindows helper); `HookedPresent` calls `RenderImGuiFrameIfEnabled` after the per-frame tick. M11.2 (commit `5370809`) renders live walker state (camera eye/yaw/pitch/FOV, player feet/mode, FSM state + transition progress). M11.3 (commit `00f3132`) shows the build hash + build date in the overlay header so deploy-side analysts can confirm "yes, this is the DLL I just copied" at a glance. M11.4 (commit `61ebc23`) installs the WndProc subclass (see M4 row) so the overlay is interactive — `ImGui_ImplWin32_WndProcHandler` is in the WndProc chain and the data plane's WM_INPUT pump routes into the same subclass. ABI contract: 21 → 37 total (M11: 3 scaffolding + 6 D3D11 + 9 build state + 1 dump_abi; M11.4 adds no exports — `WindowSubclass` is internal to the DLL). 16+ unit tests pin the lifecycle + version + null-safety + WndProc state machine contracts. |
 
 All non-lander modules are written and the test scaffold is in place; the
 compilation status depends on the user's toolchain.
@@ -444,16 +445,24 @@ extend the rendered content; the plumbing is now in place.
 
 **What does NOT ship (follow-up commits):**
 
-- Win32 message routing for mouse input. ImGui reads cursor
-  position via `ImGui_ImplWin32_NewFrame()` which needs a
-  `WNDPROC` hook. The current input hook only tracks key state;
-  adding mouse tracking for ImGui is its own small change.
+- The M11 D3D11-integration commit was the plumbing. The follow-up
+  M11.2 (commit `5370809`) shipped the live walker state render
+  (camera eye + yaw + pitch + FOV; player feet + mode; FSM state +
+  transition progress; walk counter; frame counter) so deploy-side
+  analysts can see the live state at a glance. M11.3 (commit
+  `00f3132`) added the build hash + build date to the overlay
+  header so a one-glance comparison against the expected commit
+  confirms "did I deploy the right DLL?". M11.4 (commit `61ebc23`)
+  installed the WndProc subclass (see M4 row) so the overlay is
+  interactive — `ImGui_ImplWin32_WndProcHandler` is in the WndProc
+  chain and the same shim routes `WM_INPUT` to the data plane.
 - The actual UI content (camera preview, settings menu re-skin,
-  real-time FSM state). The current overlay shows a single
-  status line ("WalkerCore v0.0.1 (imgui 1.91.5)" + walk
-  counters + frame counter) so deploy-side analysts can confirm
-  the render path is firing. The UI content work is its own
-  follow-up.
+  interactive dump buttons) is still out of scope. The overlay
+  shows a status panel; clicking inside it does nothing yet
+  because no widget has been wired to a callback. The first
+  interactive widget (a "press to dump state" button that calls
+  `walker_dump_state()` from ImGui) is the natural M11.5 follow-up
+  once M11.4 has been deployed + verified.
 
 **When the user enables the overlay:**
 

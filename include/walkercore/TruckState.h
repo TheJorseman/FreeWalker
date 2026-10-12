@@ -65,6 +65,25 @@ struct TruckState {
     bool has_fuel = false;
     bool has_adblue = false;
 
+    // M9 truck configuration from SCS_TELEMETRY_EVENT_configuration:
+    // the king-pin / fifth-wheel position in truck-local space. Until
+    // the configuration event fires, the value is stale (default 0)
+    // and downstream coupling code must check has_hook_position
+    // before using it. Convention: +X is right of cab, +Y is up, +Z is
+    // rear (matches the SCS SDK dvector convention used by
+    // SCS_TELEMETRY_CONFIG_ATTRIBUTE_hook_position).
+    bool has_hook_position = false;
+    Vec3 hook_position{0.0, 0.0, 0.0};
+
+    // M9 trailer world placement (telemetry.0.world.placement). The
+    // trailer's pose in world space, refreshed every frame. Used by
+    // the coupling provider to compute the distance from the player
+    // to the trailer's king-pin (front-bottom) and to drive the
+    // ApproachToKingPin waypoint. Until the channel fires, the value
+    // is stale and has_trailer_placement stays false.
+    bool has_trailer_placement = false;
+    Placement trailer_placement;
+
     // Cached scalar speed in m/s, derived from the local velocity vector.
     // Convenience for collision/bob-speed thresholds.
     double speed_mps = 0.0;
@@ -96,6 +115,10 @@ inline void TruckState_Clear(TruckState &s) {
     s.has_trailer_attached = false;
     s.has_fuel = false;
     s.has_adblue = false;
+    s.has_hook_position = false;
+    s.hook_position = {0.0, 0.0, 0.0};
+    s.has_trailer_placement = false;
+    s.trailer_placement = {};
     s.speed_mps = 0.0;
     s.placement = {};
     s.local_linear_velocity = {};

@@ -65,6 +65,8 @@ void TestScsTelemetryProviderFreshStateAllHasFlagsAreFalse() {
     EXPECT_FALSE(s.has_trailer_attached);
     EXPECT_FALSE(s.has_fuel);
     EXPECT_FALSE(s.has_adblue);
+    EXPECT_FALSE(s.has_hook_position);    // M9: configuration event
+    EXPECT_FALSE(s.has_trailer_placement); // M9: trailer.world.placement
 }
 
 void TestScsTelemetryProviderFreshStateScalarFieldsAreZero() {
@@ -91,6 +93,14 @@ void TestScsTelemetryProviderFreshStateScalarFieldsAreZero() {
     EXPECT_EQ(s.fuel_amount_l, 0.0f);
     EXPECT_EQ(s.adblue_amount_l, 0.0f);
     EXPECT_EQ(s.last_update_us, 0ull);
+    // M9 hooks: hook_position stays zeroed (truck-local triple),
+    // trailer_placement stays zeroed.
+    EXPECT_EQ(s.hook_position.x, 0.0);
+    EXPECT_EQ(s.hook_position.y, 0.0);
+    EXPECT_EQ(s.hook_position.z, 0.0);
+    EXPECT_EQ(s.trailer_placement.position.x, 0.0);
+    EXPECT_EQ(s.trailer_placement.position.y, 0.0);
+    EXPECT_EQ(s.trailer_placement.position.z, 0.0);
 }
 
 void TestScsTelemetryProviderStateIsStableAcrossConstAccess() {
@@ -157,6 +167,40 @@ void TestScsTelemetryProviderUnregisterAllNullIsSafe() {
 // directly. If any of those macros disappear from a future SCS SDK
 // update, the provider .cpp fails to compile — that's a stronger
 // pin than any runtime check could provide.
+
+// -------------------------------------------------------------------------
+// M9 lander: configuration event registration is null-safe.
+// -------------------------------------------------------------------------
+
+void TestScsTelemetryProviderRegisterEventsNullIsSafe() {
+    // M9: RegisterEvents takes the SDK's `register_for_event` function
+    // pointer. PluginEntry must be able to pass nullptr (e.g. the SDK
+    // init did not advertise the event registration function) and
+    // expect the provider to log an error and return false without
+    // crashing. The state_ fields stay at defaults so downstream
+    // CouplingProvider falls back to the truck-local placeholder
+    // waypoints.
+    ScsTelemetryProvider provider;
+    const bool ok = provider.RegisterEvents(nullptr);
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(provider.state().has_hook_position);
+}
+
+void TestScsTelemetryProviderUnregisterEventsNullIsSafe() {
+    // M9: shutdown with nullptr must not crash. The provider state is
+    // left untouched (no fields reset) so a partial unregister is
+    // observable through the diagnostic dump without hiding it from
+    // a follow-up unregister call with a real pointer.
+    ScsTelemetryProvider provider;
+    provider.mutable_state().hook_position = {0.5, 1.0, -2.5};
+    provider.mutable_state().has_hook_position = true;
+
+    provider.UnregisterEvents(nullptr);
+    EXPECT_TRUE(provider.state().has_hook_position);
+    EXPECT_EQ(provider.state().hook_position.x, 0.5);
+    EXPECT_EQ(provider.state().hook_position.y, 1.0);
+    EXPECT_EQ(provider.state().hook_position.z, -2.5);
+}
 // -------------------------------------------------------------------------
 
 }  // namespace walkercore

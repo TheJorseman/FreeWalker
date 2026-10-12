@@ -213,13 +213,13 @@ void TestCouplingStubWarnsExactlyOnce() {
     PlayerState p;
     PlayerState_Reset(p);
 
-    const int before_first = CountOccurrences("CouplingProvider: stub");
+    const int before_first = CountOccurrences("CouplingProvider:");
     coupling.Tick(t, p, /*interact_pressed=*/false, 0.016);
-    const int after_first = CountOccurrences("CouplingProvider: stub");
+    const int after_first = CountOccurrences("CouplingProvider:");
     for (int i = 0; i < 4; ++i) {
         coupling.Tick(t, p, false, 0.016);
     }
-    const int after_five = CountOccurrences("CouplingProvider: stub");
+    const int after_five = CountOccurrences("CouplingProvider:");
 
     walkercore_log_shutdown();
     EXPECT_EQ(after_first - before_first, 1);

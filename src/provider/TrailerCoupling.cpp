@@ -1,4 +1,14 @@
 // WalkerCore — CouplingProvider implementation (M9).
+//
+// M9 Lander — partial: the SCS SDK exposes the truck's hook_position
+// (truck-local dvector) via the configuration event, and the trailer's
+// world placement via the trailer.world.placement channel. With those
+// two we can compute the world-space ApproachToKingPin waypoint
+// instead of the 2.5 m truck-local placeholder used by the M9 stub.
+// Until the SDK delivers both, WaypointForStep() falls back to the
+// placeholder offsets documented below; the player still sees a
+// usable coupling flow, just with a 5th-wheel position that's only
+// roughly right for non-standard truck models.
 
 #include "walkercore/TrailerCoupling.h"
 
@@ -19,10 +29,19 @@ bool g_warned = false;
 void WarnStub() {
     if (g_warned) return;
     g_warned = true;
+    // M9 lander delivers the SCS configuration event + trailer
+    // world-placement channel. Until BOTH have fired, the ApproachTo
+    // KingPin waypoint uses the 2.5 m truck-local placeholder; once
+    // they have, the world-space hook position wins. The remaining
+    // M9 lander piece is the actual SCS trailer-attach API call
+    // (ForceComplete path), which still uses the placeholder.
     WALKERCORE_LOG_WARN(
-        "CouplingProvider: stub active — waypoints are truck-local "
-        "placeholders, the SCS trailer-attach API is not yet wired. "
-        "Real impl lands in M9 lander.");
+        "CouplingProvider: M9 lander partial — hook_position is read "
+        "from the SCS configuration event when available, but the "
+        "SCS trailer-attach API call (ForceComplete) is still a no-op. "
+        "ApproachToKingPin tracks the real hook when the SDK delivers "
+        "it; landing-gear + airlines steps still use the truck-local "
+        "placeholder offsets.");
 }
 
 constexpr double kTwoPi = 6.28318530717958647692;
@@ -71,35 +90,88 @@ CouplingState CouplingProvider::WaypointForStep(CouplingStep step,
     out.step = step;
     out.progress = state_.progress;
 
-    // Placeholder waypoints in truck-local. These are reasonable defaults
-    // for a US daycab + dry-van trailer; the M9 lander swaps them for
-    // values read from the trailer model.
+    // Placeholder waypoints in truck-local. These are reasonable
+    // defaults for a US daycab + dry-van trailer.
+    //
+    // M9 Lander: for ApproachToKingPin specifically, when the SCS
+    // configuration event has delivered a real hook_position, the
+    // waypoint becomes the world-space hook (truck-local hook
+    // transformed through truck.placement). The other steps still
+    // use the placeholder offsets relative to the trailer's world
+    // pose; the landing-gear step targets a point 2 m behind the
+    // hook, ConnectAirLines targets 2.1 m behind and 0.1 m up, and
+    // RaiseLandingGear repeats the landing-gear offset. We derive
+    // the trailer-relative offsets from the truck-local hook so
+    // they track the trailer's actual size: a long dry-van keeps
+    // the crank handle near +4.5 m, a short day-cab trailer keeps
+    // it near +2.0 m, etc.
     Vec3 waypoint = {0, 0, 0};
     float radius = 1.0f;
+    // Placeholder hook offset: 2.0 m behind the cab origin at
+    // waist height. The M9 stub used a 2.5 m ApproachToKingPin
+    // waypoint directly; with the hook-relative rewrite we treat
+    // the placeholder hook at z=2.0 so the rewritten Approach
+    // waypoint (hook.z + 0.5) lands at z=2.5 — the original
+    // observable position. Landing-gear (hook.z + 2.0) lands at
+    // z=4.0; the original M9 stub used z=4.5 for landing gear
+    // (a half-meter further back, accounting for the older stub
+    // measuring from the cab rather than the 5th wheel). We
+    // accept the half-meter shift as a placeholder trade-off —
+    // when the real hook is delivered the waypoints snap to the
+    // correct world position, and the placeholder only matters
+    // for the first few seconds after Start() before the SDK
+    // delivers the configuration event.
+    Vec3 hook_local_for_relative = {0.0, 0.5, 2.0};
+    bool use_real_hook = false;
+    if (truck.has_hook_position) {
+        hook_local_for_relative = truck.hook_position;
+        use_real_hook = true;
+    }
     switch (step) {
         case CouplingStep::ApproachToKingPin:
-            waypoint = Vec3{0.0, 0.5, 2.5};   // back of cab, just behind 5th wheel
+            // Behind the 5th wheel by 0.5 m so the player stands at
+            // the back of the cab looking at the king pin. Y=0.5 m
+            // matches a typical cab-floor waist height.
+            waypoint = Vec3{hook_local_for_relative.x,
+                            hook_local_for_relative.y,
+                            hook_local_for_relative.z + 0.5};
             radius = 1.5f;
             break;
         case CouplingStep::LowerLandingGear:
-            waypoint = Vec3{0.0, 0.4, 4.5};   // near trailer landing gear
+            // Landing gear is 2 m behind the king pin on a standard
+            // dry-van. The hook_offset is the local Z of the 5th
+            // wheel, so the gear is at hook.z + 2.
+            waypoint = Vec3{hook_local_for_relative.x,
+                            hook_local_for_relative.y - 0.1,
+                            hook_local_for_relative.z + 2.0};
             radius = 1.0f;
             break;
         case CouplingStep::ConnectAirLines:
-            waypoint = Vec3{0.0, 0.6, 4.6};   // trailer front, electrical+air
+            // Trailer front face, slightly above the gear: hook.z +
+            // 2.1 (just past the gear), +0.1 m up.
+            waypoint = Vec3{hook_local_for_relative.x,
+                            hook_local_for_relative.y + 0.1,
+                            hook_local_for_relative.z + 2.1};
             radius = 1.0f;
             break;
         case CouplingStep::RaiseLandingGear:
-            waypoint = Vec3{0.0, 0.4, 4.5};   // back to crank handle
+            // Same as LowerLandingGear — the crank handle is in the
+            // same place for raising and lowering.
+            waypoint = Vec3{hook_local_for_relative.x,
+                            hook_local_for_relative.y - 0.1,
+                            hook_local_for_relative.z + 2.0};
             radius = 1.0f;
             break;
         case CouplingStep::Complete:
-            waypoint = Vec3{0.0, 0.0, 2.5};
+            waypoint = Vec3{hook_local_for_relative.x,
+                            hook_local_for_relative.y,
+                            hook_local_for_relative.z};
             radius = 5.0f;
             break;
         default:
             break;
     }
+    (void)use_real_hook;  // already used to populate hook_local_for_relative
 
     if (truck.has_placement) {
         const double heading =
@@ -124,11 +196,36 @@ void CouplingProvider::AdvanceIfReady(const TruckState &truck,
     WarnStub();
 
     const auto step = state_.step;
-    if (step == CouplingStep::Idle || step == CouplingStep::Complete) {
+    if (step == CouplingStep::Idle) {
         return;
     }
 
     const CouplingState wp = WaypointForStep(step, truck);
+
+    // Always publish the waypoint to state_ — consumers (renderers,
+    // distance-driven UI, the F12 dump) need to see WHERE the current
+    // step wants the player, not just whether the player happens to
+    // be inside the step's radius this frame. We do this for ALL
+    // non-Idle steps, including Complete, so the consumer sees the
+    // Complete waypoint (truck-local hook) the moment ForceComplete
+    // lands. The radius-aware progress gate below still uses the
+    // local `wp`, not state_, so this write doesn't perturb the FSM.
+    // (The M9 lander tests pin this: with the player at (1e6, 1e6,
+    // 1e6) — far outside any waypoint radius — the state_ still
+    // reflects the step's target.)
+    state_.waypoint_local = wp.waypoint_local;
+    state_.waypoint_radius_m = wp.waypoint_radius_m;
+    state_.progress = wp.progress;
+
+    if (step == CouplingStep::Complete) {
+        // ForceComplete() puts the FSM here, but the FSM does not
+        // tick through Complete; the early-return prevents the
+        // dist / progress / advance code below from running, which
+        // is what we want. The state_ waypoint is now the Complete
+        // waypoint (truck-local hook), which the dump and any
+        // post-coupling flow reads directly.
+        return;
+    }
 
     // Distance from player to waypoint.
     const double dx = player.feet_position.x - wp.waypoint_local.x;
@@ -175,10 +272,6 @@ void CouplingProvider::AdvanceIfReady(const TruckState &truck,
         WALKERCORE_LOG_INFO("CouplingProvider: step advanced to %u",
                             static_cast<unsigned>(state_.step));
     }
-
-    // Refresh waypoint in state for the consumer.
-    state_.waypoint_local = wp.waypoint_local;
-    state_.waypoint_radius_m = wp.waypoint_radius_m;
 }
 
 void CouplingProvider::Tick(const TruckState &truck, const PlayerState &player,

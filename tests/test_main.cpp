@@ -198,6 +198,15 @@ void TestPhysXMemoryScanRejectsShortBuffer();
 void TestPhysXMemoryScanRejectsNullBuffer();
 void TestPhysXMemoryScanRejectsAllZeroBuffer();
 
+// M9 SCS configuration event + CouplingProvider real-hook probes.
+void TestScsTelemetryProviderRegisterEventsNullIsSafe();
+void TestScsTelemetryProviderUnregisterEventsNullIsSafe();
+void TestCouplingProviderPlaceholderWaypointWhenHookUnset();
+void TestCouplingProviderRealHookPositionTransformsToWorld();
+void TestCouplingProviderRealHookPositionRotatesWithTruckHeading();
+void TestCouplingProviderRealHookLandingGearStep();
+void TestCouplingProviderHookUnsetUsesTruckLocalFallback();
+
 void TestLogCustomSinkReceivesAllLevels();
 void TestLogLevelReachesSink();
 void TestLogShutdownIdempotent();
@@ -653,6 +662,15 @@ int main() {
     RUN_TEST(walkercore::TestPhysXMemoryScanRejectsShortBuffer);
     RUN_TEST(walkercore::TestPhysXMemoryScanRejectsNullBuffer);
     RUN_TEST(walkercore::TestPhysXMemoryScanRejectsAllZeroBuffer);
+
+    // M9 SCS configuration event + CouplingProvider real-hook probes.
+    RUN_TEST(walkercore::TestScsTelemetryProviderRegisterEventsNullIsSafe);
+    RUN_TEST(walkercore::TestScsTelemetryProviderUnregisterEventsNullIsSafe);
+    RUN_TEST(walkercore::TestCouplingProviderPlaceholderWaypointWhenHookUnset);
+    RUN_TEST(walkercore::TestCouplingProviderRealHookPositionTransformsToWorld);
+    RUN_TEST(walkercore::TestCouplingProviderRealHookPositionRotatesWithTruckHeading);
+    RUN_TEST(walkercore::TestCouplingProviderRealHookLandingGearStep);
+    RUN_TEST(walkercore::TestCouplingProviderHookUnsetUsesTruckLocalFallback);
 
     RUN_TEST(walkercore::TestLogCustomSinkReceivesAllLevels);
     RUN_TEST(walkercore::TestLogLevelReachesSink);

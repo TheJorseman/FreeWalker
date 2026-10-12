@@ -83,6 +83,7 @@ add_executable(WalkerCoreTests
     test_d3d11_hook.cpp
     test_d3d12_hook.cpp
     test_scstelemetry_provider.cpp
+    test_coupling_provider.cpp
     test_time.cpp
     test_per_frame_thread.cpp)
 

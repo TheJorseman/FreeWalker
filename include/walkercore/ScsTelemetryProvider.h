@@ -39,6 +39,17 @@ public:
     // Mirror of RegisterAll. Idempotent: safe to call twice.
     void UnregisterAll(void *unregister_from_channel_ptr);
 
+    // M9 lander: register for the SCS_TELEMETRY_EVENT_configuration
+    // event so the configuration callback (which extracts
+    // hook_position, cabin_position, head_position, fuel_capacity,
+    // adblue_capacity) lands before any other telemetry. Returns true
+    // on success. The function pointer is `void *` for the same SDK-
+    // free reason as the channel registration above.
+    bool RegisterEvents(void *register_for_event_ptr);
+
+    // M9 lander: unregister the configuration event. Idempotent.
+    void UnregisterEvents(void *unregister_from_event_ptr);
+
     // Read-only access to the latest snapshot. Thread-safety: the SCS SDK
     // calls our callbacks from the game thread, and WalkerCore's main
     // loop runs on the same thread. M1 has no background workers, so no

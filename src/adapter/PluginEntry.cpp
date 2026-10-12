@@ -637,6 +637,17 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   WALKERCORE_LOG_INFO("M1: snapshot provider live (%d channels)",
                      registered);
 
+  // M9 lander: register for the configuration event so we get the
+  // truck's hook_position (truck-local fifth-wheel offset) before any
+  // channel callback fires. The SDK does not replay this event, so we
+  // MUST register here during init. CouplingProvider uses the stored
+  // hook_position to compute the world king-pin location; the
+  // trailer.world.placement channel registered above gives the trailer
+  // pose. Best-effort: a failure here logs a warning and the
+  // CouplingProvider falls back to truck-local placeholder waypoints.
+  g_telemetry->RegisterEvents(
+      const_cast<void *>(static_cast<const void *>(&v100->register_for_event)));
+
   // M2: frame loop orchestration. The D3D11 hook (M2 lander) calls
   // g_frame_loop->RunOnce() every frame. For M4 the frame loop is fully
   // populated; the D3D11 hook and Input/World providers will be wired in

@@ -39,6 +39,7 @@
 #include <cstdio>
 #include <string>
 
+#include "walkercore/BuildInfo.h"
 #include "walkercore/CameraState.h"
 #include "walkercore/FrameLoop.h"
 #include "walkercore/Log.h"
@@ -236,7 +237,17 @@ bool ImGuiOverlay::RenderFrameIfEnabled() {
     ImGui::Begin("WalkerCore", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::Text("WalkerCore v0.0.1 (imgui %s)", ImGuiVersionString());
+    // WALKERCORE_VERSION_STRING already includes the version
+    // (0.0.1), the phase tag (m0), the git short SHA, and the
+    // build ISO date. Surfacing the build hash in the on-screen
+    // overlay closes the deploy-verification loop visually: an
+    // operator who can't read game.log (or who forgot to enable
+    // the SCS log sink) can still confirm "did I deploy build
+    // X?" by glancing at the HUD. The WALKERCORE_VERSION_STRING
+    // macro is a compile-time constant so this is a single
+    // ImGui::Text call with no runtime cost.
+    ImGui::Text("WalkerCore %s (imgui %s)",
+                WALKERCORE_VERSION_STRING, ImGuiVersionString());
     if (frame_loop_ != nullptr) {
         // Camera eye + yaw / pitch + FOV. The eye position flips
         // during transitions and only settles when the FSM enters

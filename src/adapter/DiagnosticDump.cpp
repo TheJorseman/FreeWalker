@@ -548,6 +548,23 @@ extern "C" __declspec(dllexport) void walker_dump_state(void) {
         WALKERCORE_LOG_INFO("settings menu       : (not initialized)");
     }
 
+    // M3.5 PxScene runtime hook — surface the captured PxScene
+    // pointer inside the full state dump so the user can confirm
+    // "did addActor fire and where is the live instance?" without
+    // having to press the focused walker_dump_pxscene key. The
+    // captured value is informational; it never gates other landers.
+    if (g_px_scene_hook != nullptr) {
+        WALKERCORE_LOG_INFO(
+            "px scene hook       : installed=%s target_reachable=%s "
+            "instance=0x%llX addActor_calls=%d",
+            bool_str(g_px_scene_hook->isInstalled()),
+            bool_str(g_px_scene_hook->target_reachable()),
+            static_cast<unsigned long long>(g_px_scene_hook->captured_instance()),
+            g_px_scene_hook->add_actor_calls());
+    } else {
+        WALKERCORE_LOG_INFO("px scene hook       : (not initialized)");
+    }
+
     VersionTable::DumpToLog();
 
     WALKERCORE_LOG_INFO("--- end dump ---");

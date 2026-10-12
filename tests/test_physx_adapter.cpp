@@ -186,4 +186,43 @@ void TestPhysXStrategyTagIsCanonical() {
     EXPECT_TRUE(is_canonical);
 }
 
+// DumpVtableEntries — when a buffer has a signature-acceptable vtable
+// run, the dump reports the first N function pointers (synthetic
+// mode here, since the test runs without a real .text). When the
+// buffer has no vtable, the dump is a no-op (returns 0).
+
+void TestPhysXDumpVtableEntriesReportsFirstNVtableRun() {
+    std::vector<uint8_t> buf = BufferWithSyntheticVtable(kMinPhysXVtableRun + 8);
+    char out[512] = {0};
+    const size_t n = PhysXAdapter::DumpVtableEntries(
+        buf.data(), buf.size(), 8, out, sizeof(out));
+    EXPECT_TRUE(n > 0);
+    // Each entry is 18 chars ("0x" + 16 hex digits), plus 3 bytes
+    // separator (" | "). 8 entries => >= 8 * 18 + 7 * 3 = 165 bytes.
+    EXPECT_TRUE(n >= 165);
+    // The output should contain at least one "0x" prefix per entry.
+    int zero_x_count = 0;
+    for (size_t i = 0; i + 1 < n; ++i) {
+        if (out[i] == '0' && out[i + 1] == 'x') {
+            zero_x_count += 1;
+        }
+    }
+    EXPECT_EQ(zero_x_count, 8);
+}
+
+void TestPhysXDumpVtableEntriesNoMatchReturnsZero() {
+    std::vector<uint8_t> buf(8192, 0);
+    char out[256] = {0};
+    const size_t n = PhysXAdapter::DumpVtableEntries(
+        buf.data(), buf.size(), 16, out, sizeof(out));
+    EXPECT_EQ(n, 0u);
+}
+
+void TestPhysXDumpVtableEntriesRejectsNullBuffer() {
+    char out[256] = {0};
+    const size_t n = PhysXAdapter::DumpVtableEntries(
+        nullptr, 0, 16, out, sizeof(out));
+    EXPECT_EQ(n, 0u);
+}
+
 }  // namespace walkercore

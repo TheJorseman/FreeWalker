@@ -207,6 +207,9 @@ void TestPhysXSignatureRunAcceptedAtThreshold();
 void TestPhysXSignatureRunRejectedBelowThreshold();
 void TestPhysXBothStrategiesHybrid();
 void TestPhysXStrategyTagIsCanonical();
+void TestPhysXDumpVtableEntriesReportsFirstNVtableRun();
+void TestPhysXDumpVtableEntriesNoMatchReturnsZero();
+void TestPhysXDumpVtableEntriesRejectsNullBuffer();
 
 // M9 SCS configuration event + CouplingProvider real-hook probes.
 void TestScsTelemetryProviderRegisterEventsNullIsSafe();
@@ -703,6 +706,9 @@ int main() {
     RUN_TEST(walkercore::TestPhysXSignatureRunRejectedBelowThreshold);
     RUN_TEST(walkercore::TestPhysXBothStrategiesHybrid);
     RUN_TEST(walkercore::TestPhysXStrategyTagIsCanonical);
+    RUN_TEST(walkercore::TestPhysXDumpVtableEntriesReportsFirstNVtableRun);
+    RUN_TEST(walkercore::TestPhysXDumpVtableEntriesNoMatchReturnsZero);
+    RUN_TEST(walkercore::TestPhysXDumpVtableEntriesRejectsNullBuffer);
 
     // M5 PerTruckDoorTable probes — per model_id door geometry overrides.
     RUN_TEST(walkercore::TestPerTruckDoorTableBuiltInFindsKnownRow);

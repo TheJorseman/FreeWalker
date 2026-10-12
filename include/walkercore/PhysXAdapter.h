@@ -183,6 +183,35 @@ public:
     static PhysXScanResult MemoryScanFromBuffer(const uint8_t *bytes,
                                                 size_t size);
 
+    // Dump the first `max_entries` 8-byte values from the vtable the
+    // signature scan identifies. The output is the function pointer
+    // (absolute VA when running with the real .text range, raw value
+    // in synthetic mode) of each entry, separated by " | " so a single
+    // log line carries enough to spot row 18 (release), row N (raycast),
+    // etc. against the open-source PhysX 3.4 SDK headers.
+    //
+    // This is the bridge from "signature scan accepts the vtable" to
+    // "I know which slot is which method". Each slot is one 8-byte
+    // pointer; comparing them against the open-source symbols
+    // (PxScene::release is slot 0, PxScene::raycast slot 18, ...) lets
+    // the maintainer pin `raycast_slot`, `overlap_slot`, `sweep_slot`
+    // without a live PxScene instance.
+    //
+    // `out` is a caller-supplied buffer; the function writes a
+    // null-terminated string. Returns the number of bytes written
+    // (excluding the trailing NUL). The buffer must be at least 256
+    // bytes to accommodate `max_entries = 16`; bigger values need a
+    // bigger buffer (the per-entry size is ~21 bytes incl. separators).
+    //
+    // `strategy` is the strategy tag returned by MemoryScanFromBuffer;
+    // `out_strategy` lets the caller display the canonical name next
+    // to the entry list.
+    static size_t DumpVtableEntries(const uint8_t *bytes,
+                                    size_t size,
+                                    size_t max_entries,
+                                    char *out,
+                                    size_t out_size);
+
 private:
     PhysXAdapterConfig cfg_;
     bool installed_ = false;

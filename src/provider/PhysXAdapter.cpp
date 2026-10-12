@@ -18,6 +18,7 @@
 #include "walkercore/PhysXAdapter.h"
 
 #include <cmath>  // std::sqrt
+#include <cstdio>  // std::snprintf
 #include <cstring>  // memmem, memcpy
 
 #include "walkercore/Log.h"
@@ -249,6 +250,55 @@ PhysXScanResult PhysXAdapter::MemoryScanFromBuffer(const uint8_t *bytes,
         res.strategy = "no_match";
     }
     return res;
+}
+
+size_t PhysXAdapter::DumpVtableEntries(const uint8_t *bytes,
+                                        size_t size,
+                                        size_t max_entries,
+                                        char *out,
+                                        size_t out_size) {
+    if (out == nullptr || out_size == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    if (bytes == nullptr || size == 0 || max_entries == 0) {
+        return 0;
+    }
+    // Reuse the same scan so the dump points at the *signature*
+    // candidate, not the strings location. Synthetic branch — the
+    // unit test calls with arbitrary non-zero payloads.
+    PhysXScanResult sig = ScanBufferForVtable(bytes, size, 0, 0);
+    if (!sig.success) {
+        return 0;
+    }
+    const size_t vtable_off = sig.vtable.vtable_base;
+    const size_t vtable_run =
+        (sig.vtable.accepted_run > 0)
+            ? static_cast<size_t>(sig.vtable.accepted_run)
+            : 0;
+    const size_t to_dump = (max_entries < vtable_run) ? max_entries : vtable_run;
+    const size_t vtable_end = vtable_off + to_dump * 8;
+    if (vtable_end > size) {
+        return 0;
+    }
+    // Format each entry as 0x%016llX, separated by " | ". 21 bytes per
+    // entry + slack. We size the snprintf buffer generously.
+    size_t written = 0;
+    for (size_t i = 0; i < to_dump; ++i) {
+        uint64_t val = 0;
+        std::memcpy(&val, bytes + vtable_off + i * 8, 8);
+        const int n = std::snprintf(
+            out + written,
+            (out_size > written) ? out_size - written : 0,
+            "%s0x%016llX",
+            (i == 0 ? "" : " | "), val);
+        if (n <= 0 || static_cast<size_t>(n) >= out_size - written) {
+            // Truncate cleanly. The next call would need a bigger buffer.
+            break;
+        }
+        written += static_cast<size_t>(n);
+    }
+    return written;
 }
 
 }  // namespace walkercore

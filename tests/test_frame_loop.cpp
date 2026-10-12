@@ -253,6 +253,41 @@ struct DiagHarness {
     }
 };
 
+// No-world harness for tests that need PhaseResolveCollision to
+// early-return (so gravity integrates without bound). We deliberately
+// skip loop.BindWorld — PhaseResolveCollision's `if (world_ == nullptr)
+// return;` then takes over and the player's feet_position.y is
+// free-fall. Use this ONLY for tests that explicitly exercise the no-
+// collision code path; a regular test wants DiagWorld so the player
+// stays grounded after the first landing.
+struct NoWorldHarness {
+    FrameLoop loop;
+    WalkerFsm fsm;
+    InputHook input;
+    PlayerState player;
+    NoWorldHarness() {
+        PlayerState_Reset(player);
+        fsm.BindPlayerTarget(&player);
+        loop.BindFsm(&fsm);
+        loop.BindInput(&input);
+        // Deliberately no loop.BindWorld — world_ stays null.
+        MovementConfig cfg;
+        cfg.crouchBlendMps = 1000.0f;
+        loop.SetMovementConfig(cfg);
+        fsm.SetTransitionSeconds(0.05);
+        WalkerFsmInputs inputs;
+        TruckState truck_state{};
+        inputs.truck = &truck_state;
+        inputs.player = &player;
+        inputs.interact_pressed = false;
+        inputs.toggle_walk_pressed = true;
+        CameraState target;
+        CameraState_Reset(target);
+        fsm.Update(inputs, 0.016, &target);
+        fsm.Update(inputs, 0.10, &target);  // advance past transition → Walking
+    }
+};
+
 }  // namespace
 
 // Diagonal motion must be speed-bounded: with Forward + StrafeRight both
@@ -871,6 +906,99 @@ void TestFrameLoopPlayerSnapshotStableAcrossConductor() {
     // the FSM's player_target_ are the same storage.
     EXPECT_TRUE(static_cast<const void *>(&h.loop.player()) ==
                 static_cast<const void *>(fsm_target));
+}
+
+// PhaseIntegrateMovement must keep |vertical_velocity_| bounded by
+// MovementConfig::vertical_velocity_max_mps after the gravity step.
+//
+// The cap exists because, with the M3 collision adapter currently a
+// stub (PhysXAdapter logs "no collision geometry loaded" once per
+// session and PhaseResolveCollision early-returns when world_ is
+// null), gravity integrates without bound across Walking frames.
+// Without a cap, vertical_velocity_ grows linearly frame-over-frame
+// (downward at 9.81 × dt per frame). The value also persists across
+// FSM transitions because RunOnce bails during Driving / TransitionIn
+// / TransitionOut, so a Walking session that accumulated vy ≈ -27 m/s
+// after ~3 seconds of freefall keeps that same vy through the cabin
+// trip back to Walking, where the very first PhaseIntegrateMovement
+// integrates |dy| ≈ 0.43 m and KnockoutProvider reads a per-frame
+// velocity of ≈ 28 m/s — well above its 12 m/s threshold. The
+// resulting "knock-out triggered" log fires within 30–400 ms of every
+// F10 door-snap frame on ATS 1.61.3.1s at build 79be7b6 (see the
+// in-game DLL test log evidence captured at the M11 work session).
+//
+// This test compares two no-world freefall scenarios over 200 frames
+// (3.3 s). Scenario A uses a tight cap (4 m/s); scenario B uses a cap
+// of 200 m/s — effectively unbounded for this run. The bounded drop
+// is markedly smaller than the unbounded one, and the asymptotic
+// per-tick |dy| in the bounded case matches the cap.
+//
+// We jump on the first frame so vy starts at jumpInitialVelocityMps
+// (4.5 m/s with the default MovementConfig) — a fresh-Walking vy of
+// 0 would otherwise mask the run-away case because gravity has to
+// accumulate from 0 to >cap before the clamp matters, which takes
+// ~cap/gravity seconds. Starting from a positive jump cuts the warm-up
+// and lets the test exercise the cap on both sides (the upward side
+// right after the jump + gravity step; the downward side after vy
+// saturates).
+void TestPhaseIntegrateMovementClampsVerticalVelocity() {
+    constexpr double kDt = 1.0 / 60.0;
+    constexpr int kTicks = 200;
+
+    double drop_with_cap;
+    {
+        NoWorldHarness h;
+        MovementConfig cfg = h.loop.movementConfig();
+        cfg.vertical_velocity_max_mps = 4.0f;
+        h.loop.SetMovementConfig(cfg);
+        PressKey(h.input, WalkercoreKey::Jump);  // vy starts at 4.5 m/s
+        const double y_start = h.loop.player().feet_position.y;
+        for (int i = 0; i < kTicks; ++i) h.loop.RunOnce(kDt);
+        drop_with_cap = y_start - h.loop.player().feet_position.y;
+    }
+    double drop_no_cap;
+    {
+        NoWorldHarness h;
+        MovementConfig cfg = h.loop.movementConfig();
+        cfg.vertical_velocity_max_mps = 200.0f;
+        h.loop.SetMovementConfig(cfg);
+        PressKey(h.input, WalkercoreKey::Jump);
+        const double y_start = h.loop.player().feet_position.y;
+        for (int i = 0; i < kTicks; ++i) h.loop.RunOnce(kDt);
+        drop_no_cap = y_start - h.loop.player().feet_position.y;
+    }
+
+    // Cap=4, no world: vy reaches ±4 by the second freefall tick and
+    // stays there. Total drop ≈ cap × (ticks × dt) ≈ 4 × 3.33 ≈
+    // 13.3 m. We allow a generous upper bound (15 m) to leave headroom
+    // for the few pre-saturation ticks (the first ~27 ticks still have
+    // |vy| < cap while gravity pulls vy from +jump toward 0).
+    EXPECT_LT(drop_with_cap, 15.0);
+    // Sanity — the capped scenario didn't silently no-op.
+    EXPECT_GT(drop_with_cap, 1.0);
+
+    // Cap=200, no world: vy grows linearly past 4 m/s in well under
+    // a second of ticks, so the cumulative drop dwarfs the capped
+    // number. At tick 200 vy ≈ 4.5 - 9.81 × 3.33 ≈ -28.2 m/s and
+    // the integral is ≈ -36 m. We pin a >30 m lower bound to make
+    // "the clamp wasn't applied" visible if a future refactor breaks
+    // it.
+    EXPECT_GT(drop_no_cap, 30.0);
+    // The capped scenario is at most ~13.3 m; the uncapped is well
+    // over 30 m. A regression that lets either side run unbounded
+    // would put them both above 30 m and fail the *2.5× ratio.
+    EXPECT_GT(drop_no_cap, drop_with_cap * 2.5);
+}
+
+// MovementConfig's vertical_velocity_max_mps default must match the
+// expected "one second of gravity" value (9.81 m/s). This is the
+// fallback INI override target — if a future M6 release ships without
+// the INI key, the runtime still gets a sane cap that puts the
+// single-frame |dy| at ≤ 0.157 m, well below the 12 m/s Knockout
+// threshold.
+void TestMovementConfigVerticalVelocityCapDefault() {
+    MovementConfig c;
+    EXPECT_NEAR(c.vertical_velocity_max_mps, 9.81f, 1e-4);
 }
 
 }  // namespace walkercore

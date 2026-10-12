@@ -20,6 +20,12 @@ void TestMovementConfigDefaults() {
     EXPECT_TRUE(c.headBobFrequencyHz > 0.0f);
     EXPECT_TRUE(c.maxStepUpM >= 0.0f);
     EXPECT_TRUE(c.maxSlopeAngleRad > 0.0f && c.maxSlopeAngleRad < 1.6f);
+    // Vertical-velocity safety cap. Must be > 0 (PhaseIntegrateMovement
+    // divides by it conceptually via the clamp) and ≤ gravity × a
+    // human-skydiving-relevant upper bound. The default of 9.81
+    // (one second of gravity) lands in the middle.
+    EXPECT_TRUE(c.vertical_velocity_max_mps > 0.0f);
+    EXPECT_TRUE(c.vertical_velocity_max_mps <= 50.0f);
 }
 
 }  // namespace walkercore

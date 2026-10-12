@@ -330,6 +330,26 @@ void FrameLoop::PhaseIntegrateMovement(double dt) {
     }
     vertical_velocity_ -= static_cast<double>(movement_cfg_.gravityMps2) * dt;
 
+    // Cap |vertical_velocity_| to MovementConfig::vertical_velocity_max_mps.
+    // The cap is applied AFTER the gravity step so legitimate short-
+    // duration gravity runs (a fresh jump that falls back, a one- or
+    // two-second freefall before re-entry) pass through unaffected —
+    // only the unbounded-accumulation case (multiple seconds of Walking
+    // without a collision-resolution floor) is intercepted. The clamp
+    // happens before the y integration below so the per-frame |dy| the
+    // downstream KnockoutProvider reads through player_.feet_position is
+    // guaranteed to be at most max × dt ≤ 0.167 m. See MovementConfig
+    // for the rationale; this single comparison pair is the cheapest
+    // fix to the post-transition spurious-knockout problem without
+    // requiring a working collision engine.
+    const double vy_max =
+        static_cast<double>(movement_cfg_.vertical_velocity_max_mps);
+    if (vertical_velocity_ > vy_max) {
+        vertical_velocity_ = vy_max;
+    } else if (vertical_velocity_ < -vy_max) {
+        vertical_velocity_ = -vy_max;
+    }
+
     // Capture pre-integration position for the collision phase.
     pre_integration_pos_ = player_.feet_position;
 

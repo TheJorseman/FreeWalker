@@ -26,6 +26,29 @@ struct MovementConfig {
     float jumpInitialVelocityMps = 4.5f;   // initial vy when Space pressed.
     float gravityMps2 = 9.81f;             // gravitational accel downward.
 
+    // Safety cap on |vertical_velocity_| applied every Walking tick in
+    // PhaseIntegrateMovement after the gravity step. The cap exists
+    // because the M3 collision adapter is currently a stub
+    // (PhysXAdapter logs "no collision geometry loaded" once per
+    // session) and PhaseResolveCollision early-returns when world_ is
+    // null — without a ground/floor hit, gravity integrates without
+    // bound across every Walking tick, and the residual vy persists
+    // across FSM transitions (Driving / TransitionIn / TransitionOut
+    // all gate RunOnce, so the value survives the trip back into the
+    // cabin). When the FSM re-enters Walking, the stale vy drives a
+    // per-frame |dy| that the velocity-change knockout check sees as a
+    // 18–28 m/s "impact" within ~30 ms of the door-snap frame
+    // (log evidence on ATS 1.61.3.1s with the in-game DLL build at
+    // commit 79be7b6 — see the M10-stub lander notes). The cap forces
+    // terminal vertical velocity to 9.81 m/s so single-frame |dy| stays
+    // at 9.81 × dt ≤ 0.167 m, well below the 12 m/s velocity threshold
+    // (which evaluates dist/dt against dist² / dt² ≥ 0.037 m²). 9.81
+    // matches the magnitude vy reaches after one second of gravity —
+    // a representative "fast fall" without pretending to model sky-
+    // diving terminal velocities we don't actually integrate. INI-
+    // overridable via the M6 SettingsStore once the bind lands.
+    float vertical_velocity_max_mps = 9.81f;
+
     // Mouse look.
     float mouseSensitivityRadPerUnit = 0.0022f;  // radians per raw input unit.
 

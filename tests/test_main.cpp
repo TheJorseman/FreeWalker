@@ -64,6 +64,8 @@ void TestPhaseAnimatePlayerZeroAmplitudeIsSilent();
 void TestFrameLoopSetAspectIsNoopWhenUnchanged();
 void TestPhaseAnimatePlayerKeepsHeadBobPhaseBounded();
 void TestPhaseIntegrateMovementSkipsSqrtWhenIntentIsOnAxis();
+void TestPhaseIntegrateMovementClampsVerticalVelocity();
+void TestMovementConfigVerticalVelocityCapDefault();
 void TestFrameLoopRunOnceDoesNotClobberConductorInput();
 void TestFrameLoopRunOnceSamplesWhenConductorDidNot();
 void TestFrameLoopPlayerSnapshotStableAcrossConductor();
@@ -444,6 +446,8 @@ int main() {
     RUN_TEST(walkercore::TestFrameLoopSetAspectIsNoopWhenUnchanged);
     RUN_TEST(walkercore::TestPhaseAnimatePlayerKeepsHeadBobPhaseBounded);
     RUN_TEST(walkercore::TestPhaseIntegrateMovementSkipsSqrtWhenIntentIsOnAxis);
+    RUN_TEST(walkercore::TestPhaseIntegrateMovementClampsVerticalVelocity);
+    RUN_TEST(walkercore::TestMovementConfigVerticalVelocityCapDefault);
 
     // Per-frame conductor input-sample contract. Pin: RunOnce must not
     // wipe the rising edge the conductor's SampleInput just produced

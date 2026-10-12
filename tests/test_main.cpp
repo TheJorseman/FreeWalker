@@ -212,7 +212,7 @@ void TestPhysXDumpVtableEntriesNoMatchReturnsZero();
 void TestPhysXDumpVtableEntriesRejectsNullBuffer();
 void TestPhysXDumpVtableEntriesAnnotatedLabelsCatalogMatches();
 void TestPhysXResolveKnownMethodsFindsReleaseAtSlotZero();
-void TestPhysXResolveKnownMethodsAllSevenSlotsInOrder();
+void TestPhysXResolveKnownMethodsAllEightSlotsInOrder();
 void TestPhysXResolveKnownMethodsNoMatchReturnsFalse();
 void TestPhysXResolveKnownMethodsRespectsBounds();
 void TestPhysXKnownMethodsCatalogIsComplete();
@@ -733,7 +733,7 @@ int main() {
     RUN_TEST(walkercore::TestPhysXDumpVtableEntriesRejectsNullBuffer);
     RUN_TEST(walkercore::TestPhysXDumpVtableEntriesAnnotatedLabelsCatalogMatches);
     RUN_TEST(walkercore::TestPhysXResolveKnownMethodsFindsReleaseAtSlotZero);
-    RUN_TEST(walkercore::TestPhysXResolveKnownMethodsAllSevenSlotsInOrder);
+    RUN_TEST(walkercore::TestPhysXResolveKnownMethodsAllEightSlotsInOrder);
     RUN_TEST(walkercore::TestPhysXResolveKnownMethodsNoMatchReturnsFalse);
     RUN_TEST(walkercore::TestPhysXResolveKnownMethodsRespectsBounds);
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogIsComplete);

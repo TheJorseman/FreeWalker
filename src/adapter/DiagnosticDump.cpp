@@ -956,6 +956,7 @@ extern "C" __declspec(dllexport) void walker_dump_physx(void) {
         -1,   // sweep: lives in 5-slot run @ RVA 0x2507C08, slot 4
         15,   // raycast      → slot 15
         13,   // overlap      → slot 13
+        14,   // removeActor  → slot 14
     };
     const int kResolvedSlot[kPhysXKnownMethodCount] = {
         cache.resolve.release_slot,
@@ -965,6 +966,7 @@ extern "C" __declspec(dllexport) void walker_dump_physx(void) {
         cache.resolve.sweep_slot,
         cache.resolve.raycast_slot,
         cache.resolve.overlap_slot,
+        cache.resolve.remove_actor_slot,
     };
     WALKERCORE_LOG_INFO(
         "physx runtime         : %s strategy=%s vtable_off=0x%llX run=%d "

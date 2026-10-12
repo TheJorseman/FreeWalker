@@ -300,12 +300,13 @@ void TestPhysXResolveKnownMethodsFindsReleaseAtSlotZero() {
     EXPECT_EQ(out.sweep_slot, -1);
     EXPECT_EQ(out.raycast_slot, -1);
     EXPECT_EQ(out.overlap_slot, -1);
+    EXPECT_EQ(out.remove_actor_slot, -1);
 }
 
-void TestPhysXResolveKnownMethodsAllSevenSlotsInOrder() {
-    constexpr int kRun = 8;
+void TestPhysXResolveKnownMethodsAllEightSlotsInOrder() {
+    constexpr int kRun = 9;
     std::vector<uint8_t> buf(kRun * 8, 0);
-    // Embed all seven known VAs at slots 0..6 in their catalog order.
+    // Embed all eight known VAs at slots 0..7 in their catalog order.
     for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
         const uint64_t v = walkercore::kPhysXKnownMethods[m].va;
         std::memcpy(buf.data() + m * 8, &v, 8);
@@ -321,6 +322,7 @@ void TestPhysXResolveKnownMethodsAllSevenSlotsInOrder() {
     EXPECT_EQ(out.sweep_slot, 4);
     EXPECT_EQ(out.raycast_slot, 5);
     EXPECT_EQ(out.overlap_slot, 6);
+    EXPECT_EQ(out.remove_actor_slot, 7);
 }
 
 void TestPhysXResolveKnownMethodsNoMatchReturnsFalse() {
@@ -338,6 +340,7 @@ void TestPhysXResolveKnownMethodsNoMatchReturnsFalse() {
     EXPECT_EQ(out.sweep_slot, -1);
     EXPECT_EQ(out.raycast_slot, -1);
     EXPECT_EQ(out.overlap_slot, -1);
+    EXPECT_EQ(out.remove_actor_slot, -1);
 }
 
 void TestPhysXResolveKnownMethodsRespectsBounds() {
@@ -353,10 +356,10 @@ void TestPhysXResolveKnownMethodsRespectsBounds() {
 }
 
 void TestPhysXKnownMethodsCatalogIsComplete() {
-    // The catalog must list the seven methods we ship. Adding a method
-    // to the .cpp catalog without bumping kPhysXKnownMethodCount would
-    // mis-list the count; this test is a regression guard.
-    EXPECT_EQ(kPhysXKnownMethodCount, 7);
+    // The catalog must list the eight methods we ship. Adding a
+    // method to the .cpp catalog without bumping kPhysXKnownMethodCount
+    // would mis-list the count; this test is a regression guard.
+    EXPECT_EQ(kPhysXKnownMethodCount, 8);
     EXPECT_TRUE(kPhysXKnownMethods[0].name != nullptr);
     EXPECT_TRUE(kPhysXKnownMethods[1].name != nullptr);
     EXPECT_TRUE(kPhysXKnownMethods[2].name != nullptr);
@@ -364,7 +367,8 @@ void TestPhysXKnownMethodsCatalogIsComplete() {
     EXPECT_TRUE(kPhysXKnownMethods[4].name != nullptr);
     EXPECT_TRUE(kPhysXKnownMethods[5].name != nullptr);
     EXPECT_TRUE(kPhysXKnownMethods[6].name != nullptr);
-    // All seven VAs must be non-zero and differ from each other (we
+    EXPECT_TRUE(kPhysXKnownMethods[7].name != nullptr);
+    // All eight VAs must be non-zero and differ from each other (we
     // have to make sure the catalog isn't accidentally all the same
     // address).
     EXPECT_TRUE(kPhysXKnownMethods[0].va != 0ULL);
@@ -425,22 +429,26 @@ void TestPhysXKnownMethodsCatalogNamesMatchSDK() {
     EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[6].name, "overlap") == 0);
 }
 
-// Catalog-order regression guard: the two newly-added public-API
-// entries (raycast, overlap) must keep their position in the catalog
-// at indices 5 and 6 respectively, after the original five. Adding
-// them in a different order would shift the slot-resolution switch
-// in ResolveKnownMethods and break TestPhysXResolveKnownMethodsAllSevenSlotsInOrder.
+// Catalog-order regression guard: the three newly-added public-API
+// entries (raycast, overlap, removeActor) must keep their position
+// in the catalog at indices 5, 6, and 7 respectively, after the
+// original five. Adding them in a different order would shift the
+// slot-resolution switch in ResolveKnownMethods and break
+// TestPhysXResolveKnownMethodsAllEightSlotsInOrder.
 
 void TestPhysXKnownMethodsCatalogOrderIsStable() {
     EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[5].name, "raycast") == 0);
     EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[6].name, "overlap") == 0);
-    // raycast lives in PxScene TU range too (just below sweep, which
-    // is in the 0x141B0xxxx sub-band). Verifies the VAs came from
-    // the same TU the other methods came from.
+    EXPECT_TRUE(std::strcmp(kPhysXKnownMethods[7].name, "removeActor") == 0);
+    // raycast and removeActor live in PxScene TU range too (just
+    // below or near addActor's VA). Verifies the VAs came from the
+    // same TU the other methods came from.
     EXPECT_TRUE(kPhysXKnownMethods[5].va >= 0x141AD0000ULL);
     EXPECT_TRUE(kPhysXKnownMethods[6].va >= 0x141AD0000ULL);
+    EXPECT_TRUE(kPhysXKnownMethods[7].va >= 0x141AD0000ULL);
     EXPECT_TRUE(kPhysXKnownMethods[5].va <  0x141B20000ULL);
     EXPECT_TRUE(kPhysXKnownMethods[6].va <  0x141B20000ULL);
+    EXPECT_TRUE(kPhysXKnownMethods[7].va <  0x141B20000ULL);
 }
 
 // Real-binary integration test: read amtrucks.exe from disk, run
@@ -625,6 +633,10 @@ void TestPhysXRealBinaryMatchesCatalog() {
     // (their VAs were identified by disassembling these exact slots).
     EXPECT_EQ(resolved.raycast_slot, 15);
     EXPECT_EQ(resolved.overlap_slot, 13);
+    // removeActor should resolve to slot 14 (identified by the
+    // "PxScene::removeActor(): Actor" error-path string and a tail
+    // jump to a per-type detach dispatcher).
+    EXPECT_EQ(resolved.remove_actor_slot, 14);
     // sweep is NOT in the 0x25020A0 vtable — it lives in a separate
     // 5-slot run at 0x2507C08 (slot 4) that MemoryScanFromBuffer does
     // not discover on its own.
@@ -723,6 +735,7 @@ void TestPhysXRealBinaryRuntimeScanPath() {
     EXPECT_EQ(resolved.shift_origin_slot, 117);
     EXPECT_EQ(resolved.raycast_slot, 15);
     EXPECT_EQ(resolved.overlap_slot, 13);
+    EXPECT_EQ(resolved.remove_actor_slot, 14);
     EXPECT_EQ(resolved.sweep_slot, -1);
 
     // Silence the unused-variable warning for kAtsImageBase (kept

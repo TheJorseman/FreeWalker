@@ -631,6 +631,16 @@ const PhysXKnownMethod kPhysXKnownMethods[kPhysXKnownMethodCount] = {
     // 0x2c0-byte stack frame and 8-slot hit buffer init.
     // Located as slot 13 in the PxScene vtable @ RVA 0x25020A0.
     {"overlap",       0x141AE0F70ULL, -1},
+    // removeActor: thin dispatcher at 0x141AE1C60 whose error-path
+    // strings uniquely identify "PxScene::removeActor(): Actor"
+    // (followed by source-file
+    // "D:\\manual\\third\\physx\\version_patched\\PhysX_3.4\\Source\\PhysX\\src\\NpScene.cpp"
+    // and message "%s not assigned to scene or assigned to another
+    // scene. Call will be ignored!"). The tail target 0x141AE1CF0
+    // dispatches over the actor kind and calls the per-type detach
+    // helper. Located as slot 14 in the PxScene vtable @ RVA
+    // 0x25020A0. Catalog VA is exact (no LEA-walk-back drift).
+    {"removeActor",   0x141AE1C60ULL, -1},
 };
 
 bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
@@ -648,6 +658,7 @@ bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
     out->sweep_slot = -1;
     out->raycast_slot = -1;
     out->overlap_slot = -1;
+    out->remove_actor_slot = -1;
     if (accepted_run <= 0) {
         return false;
     }
@@ -683,6 +694,7 @@ bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
                     case 4: out->sweep_slot = slot; break;
                     case 5: out->raycast_slot = slot; break;
                     case 6: out->overlap_slot = slot; break;
+                    case 7: out->remove_actor_slot = slot; break;
                     default: break;
                 }
                 matched += 1;

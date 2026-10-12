@@ -111,20 +111,30 @@ struct PhysXKnownMethod {
     int32_t slot;
 };
 
-constexpr int kPhysXKnownMethodCount = 7;
+constexpr int kPhysXKnownMethodCount = 8;
 
 // The runtime catalog for ATS 1.61.3.1s. RVA computed from the VA using
 // image base 0x140000000. The five "stable" entries (release,
 // addActor, simulate, shiftOrigin, sweep) were located by walking
 // back from the LEA r64, [rip+disp32] that loads the matching
 // "PxScene::<method>(...) ..." assertion string in .text. The
-// PxScene::raycast and PxScene::overlap entries were identified by
-// disassembling the vtable at RVA 0x25020A0 (PxScene vtable, 118
-// slots) and matching each slot's function prologue to the expected
-// public-API signature: raycast has a 0x490-byte stack frame and a
-// 64-slot hit buffer; overlap has a 0x2c0-byte stack frame and an
-// 8-slot hit buffer. Both functions are exact-match at the file
-// offset, with no walk-back heuristic drift.
+// PxScene::raycast, PxScene::overlap and PxScene::removeActor entries
+// were identified by disassembling the vtable at RVA 0x25020A0
+// (PxScene vtable, 118 slots):
+//   - raycast (slot 15): 0x490-byte stack frame and a 64-slot hit
+//     buffer; full implementation at VA 0x141AE1610.
+//   - overlap (slot 13): thin dispatcher (xor r9d, r9d; jmp tail)
+//     at VA 0x141AE0F70. Tail target has a 0x2c0-byte stack frame and
+//     an 8-slot hit buffer (overlap's default buffer is smaller than
+//     raycast's).
+//   - removeActor (slot 14): thin dispatcher at VA 0x141AE1C60
+//     identified by disambiguating the error-path string
+//     "PxScene::removeActor(): Actor" (followed by source-file
+//     "D:\\manual\\third\\physx\\version_patched\\PhysX_3.4\\Source\\PhysX\\src\\NpScene.cpp"
+//     and message "%s not assigned to scene or assigned to another
+//     scene. Call will be ignored!"). The function tail-jumps to
+//     0x141AE1CF0 which dispatches over the actor kind and ultimately
+//     calls the per-type detach helper.
 //
 //   PxScene::release      VA=0x141AE07B6  RVA=0x1AE07B6
 //   PxScene::addActor     VA=0x141AE0B62  RVA=0x1AE0162
@@ -133,14 +143,16 @@ constexpr int kPhysXKnownMethodCount = 7;
 //   PxScene::sweep        VA=0x141B06F10  RVA=0x1B06F10
 //   PxScene::raycast      VA=0x141AE1610  RVA=0x1AE1310
 //   PxScene::overlap      VA=0x141AE0F70  RVA=0x1AE0C70
+//   PxScene::removeActor  VA=0x141AE1C60  RVA=0x1AE1360
 //
-// ResolveKnownMethods cross-checks all 7 VAs against the vtable at
+// ResolveKnownMethods cross-checks all 8 VAs against the vtable at
 // RVA 0x25020A0 (118 slots): release->2, addActor->11,
 // simulate->57, shiftOrigin->117, sweep->NOT IN THIS VTABLE
 // (sweep's slot lives in a separate 5-slot run at RVA 0x2507C08),
-// raycast->15, overlap->13. See
+// raycast->15, overlap->13, removeActor->14. See
 // docs/observations/ats_1_61_3_1s.physx.functions.md for the full
-// provenance.
+// provenance and docs/observations/m3-progress-2026-10.md for the
+// slot-14 disassembly record.
 extern const PhysXKnownMethod kPhysXKnownMethods[kPhysXKnownMethodCount];
 
 // Result of running the known-method matcher against a buffer that
@@ -187,6 +199,17 @@ struct PhysXVtableResolveResult {
     // hit-buffer init (overlap's default buffer is smaller than
     // raycast's). -1 when the catalog did not match.
     int32_t overlap_slot = -1;
+    // Slot index of PxScene::removeActor. Located by disassembling the
+    // 0x25020A0 vtable: slot 14's pointer (VA 0x141AE1C60) is a thin
+    // dispatcher whose error-path strings uniquely identify
+    // "PxScene::removeActor(): Actor" (followed by the same
+    // PhysX 3.4 NpScene.cpp source path used by other PxScene
+    // methods, with the message "%s not assigned to scene or
+    // assigned to another scene. Call will be ignored!"). The
+    // tail target at 0x141AE1CF0 dispatches over the actor kind and
+    // calls the per-type detach helper. -1 when the catalog did not
+    // match.
+    int32_t remove_actor_slot = -1;
 };
 
 // Result of a memory scan over a module's .rdata. success is true when

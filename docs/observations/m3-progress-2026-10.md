@@ -6,7 +6,7 @@ for ATS 1.61.3.1s (Steam). For a detailed byte-level analysis, see
 
 ## Catalog
 
-7 entries in `walkercore::kPhysXKnownMethods`:
+8 entries in `walkercore::kPhysXKnownMethods`:
 
 | # | Method | VA | Slot |
 | - | ------ | -- | ---- |
@@ -17,6 +17,7 @@ for ATS 1.61.3.1s (Steam). For a detailed byte-level analysis, see
 | 4 | `sweep`        | `0x141B06F10` | NOT in 0x25020A0 |
 | 5 | `raycast`      | `0x141AE1610` | 15  |
 | 6 | `overlap`      | `0x141AE0F70` | 13  |
+| 7 | `removeActor`  | `0x141AE1C60` | 14  |
 
 ## PxScene vtable
 
@@ -29,16 +30,17 @@ catalog comment should be updated to point at 0x25020A0.
 
 ## Resolution
 
-`ResolveKnownMethods` matches all 7 catalog VAs against any
+`ResolveKnownMethods` matches all 8 catalog VAs against any
 candidate vtable buffer. For ATS 1.61.3.1s the vtable @ 0x25020A0
-contains 5 exact slot matches (release/2, addActor/11, simulate/57,
-raycast/15, overlap/13) and 1 near-match (shiftOrigin at slot 117,
-Δ=-8 bytes). `sweep` does NOT live in this vtable — it lives in a
-separate 5-slot run starting at RVA 0x2507C08 (slot 4).
+contains 6 exact slot matches (release/2, addActor/11, simulate/57,
+raycast/15, overlap/13, removeActor/14) and 1 near-match
+(shiftOrigin at slot 117, Δ=-8 bytes). `sweep` does NOT live in
+this vtable — it lives in a separate 5-slot run starting at RVA
+0x2507C08 (slot 4).
 
 ## Slot dispatch
 
-The `PhysXVtableResolveResult` carries all 7 slot fields:
+The `PhysXVtableResolveResult` carries all 8 slot fields:
 - `release_slot`
 - `add_actor_slot`
 - `simulate_slot`
@@ -47,6 +49,56 @@ The `PhysXVtableResolveResult` carries all 7 slot fields:
   also probe 0x2507C08)
 - `raycast_slot`
 - `overlap_slot`
+- `remove_actor_slot`
+
+## How slot 14 (`removeActor`) was located
+
+`removeActor` does not emit an assertion string in the binary's
+hot path, so it cannot be located the way `release` /
+`shiftOrigin` / etc. were (the LEA-walk-back from an assertion
+string). Instead:
+
+1. Disassembled the function pointer at vtable slot 14 (VA
+   `0x141AE1C60`).
+2. The first ~50 instructions are a thin dispatcher:
+   ```
+   0x141AE1C60  mov [rsp+0x8], rbx
+   0x141AE1C65  mov [rsp+0x10], rsi
+   0x141AE1C6A  push rdi
+   0x141AE1C6B  sub rsp, 0x30
+   0x141AE1C6F  mov rax, qword ptr [rdx]      ; rax = other->vtable
+   0x141AE1C72  mov rdi, rcx                   ; rdi = this (PxScene*)
+   0x141AE1C75  mov rcx, rdx                   ; rcx = other (PxActor*)
+   0x141AE1C7C  mov rbx, rdx
+   0x141AE1C7F  call qword ptr [rax + 0x30]   ; other->getType()
+   0x141AE1C82  cmp rax, rdi                   ; type == this?
+   ```
+3. The branch to `0x141AE1CCC` sets `r9b=1, r8d=sil` and tail-
+   jumps to `0x141AE1CF0`, which calls `[other + vtable[0x28]]`
+   (i.e. `other->getType()`) and dispatches over the actor kind
+   (5-case switch). Final helper calls land in:
+   - `0x141AFCDC0` — per-type detach helper
+   - `0x141B09900` — likely a patch-up / bounds helper
+4. The **error path** (`rdi != rax`, i.e. `this != type`) loads
+   three strings:
+   - `PxScene::removeActor(): Actor` (RVA `0x182500E18`)
+   - `D:\manual\third\physx\version_patched\PhysX_3.4\Source\PhysX\src\NpScene.cpp`
+     (RVA `0x182500490`)
+   - `%s not assigned to scene or assigned to another scene.
+     Call will be ignored!`
+     (RVA `0x182500410`)
+   together with line-number 89 (`r9d = 0x59`), then calls
+   `0x141B23F30` (PhysX internal assertion sink). The
+   **`"PxScene::removeActor(): Actor"`** literal is the unique
+   string that disambiguates slot 14 from every other thin
+   dispatcher in the vtable.
+5. Catalog VA `0x141AE1C60` matches the vtable slot-14 pointer
+   exactly (no LEA-walk-back drift). The `PhysXKnownMethod` entry
+   ships at compile time with the exact address.
+6. `walker_dump_physx` reports slot 14 with the same
+   `[expected_slot, resolved_slot]` table as the other entries.
+
+## How raycast/overlap were located
 
 ## How raycast/overlap were located
 

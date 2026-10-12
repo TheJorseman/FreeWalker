@@ -101,6 +101,17 @@ if (WIN32)
     target_link_libraries(WalkerCoreTests PRIVATE ws2_32)
 endif()
 
+# Stub out the DLL-adapter functions referenced by D3D11Hook and
+# D3D12Hook when the test build defines WALKERCORE_HAVE_MINHOOK=1.
+# The real implementations live in src/Main.cpp of the DLL adapter
+# layer; tests don't link against that layer. Without the stubs,
+# enabling MinHook in tests breaks the link with undefined
+# references to walker_per_frame_tick / walker_set_swapchain_aspect.
+# See tests/TestD3DHookStubs.cpp for the implementation.
+if (WALKERCORE_HAVE_MINHOOK)
+    target_sources(WalkerCoreTestLib PRIVATE TestD3DHookStubs.cpp)
+endif()
+
 # We don't need the SCS SDK at runtime for the domain tests; the SDK is
 # only consulted in the SDK callback path which we don't exercise. Stub
 # the symbols out so we don't link them in for tests. Same goes for
@@ -115,6 +126,17 @@ else()
     target_compile_definitions(WalkerCoreTestLib PRIVATE
         WALKERCORE_TEST_NO_SDK=1
         WALKERCORE_TEST_NO_PER_FRAME_TICK=1)
+endif()
+
+# Mirror the root CMakeLists.txt: when WALKERCORE_HAVE_MINHOOK is set,
+# the test build also defines it on WalkerCoreTestLib so D3D11Hook::Install
+# and D3D12Hook::Install take the real-minhook code path. The test then
+# exercises the actual MinHookInstall/MH_CreateHook/etc. flow rather than
+# the stub. The root sets this cache var on the parent scope.
+if (WALKERCORE_HAVE_MINHOOK)
+    target_compile_definitions(WalkerCoreTestLib PRIVATE
+        WALKERCORE_HAVE_MINHOOK=1)
+    target_link_libraries(WalkerCoreTestLib PUBLIC minhook)
 endif()
 
 # Real-binary integration test: when WALKERCORE_REAL_BINARY_TEST_PATH

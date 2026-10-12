@@ -37,3 +37,8 @@ desktop.ini
 dumps/
 *.dump
 gamedumps/
+
+# Locally-downloaded diagnostic tools (not part of the build)
+procdump.exe
+procdump64.exe
+procdump64a.exe

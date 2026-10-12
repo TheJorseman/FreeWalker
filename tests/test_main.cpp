@@ -222,6 +222,7 @@ void TestPhysXKnownMethodsCatalogNamesMatchSDK();
 void TestPhysXKnownMethodsCatalogOrderIsStable();
 #ifdef WALKERCORE_REAL_BINARY_TEST_PATH
 void TestPhysXRealBinaryMatchesCatalog();
+void TestPhysXRealBinaryRuntimeScanPath();
 #endif
 
 // M9 SCS configuration event + CouplingProvider real-hook probes.
@@ -735,6 +736,7 @@ int main() {
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogOrderIsStable);
 #ifdef WALKERCORE_REAL_BINARY_TEST_PATH
     RUN_TEST(walkercore::TestPhysXRealBinaryMatchesCatalog);
+    RUN_TEST(walkercore::TestPhysXRealBinaryRuntimeScanPath);
 #endif
 
     // M5 PerTruckDoorTable probes — per model_id door geometry overrides.

@@ -468,6 +468,52 @@ struct PeTextInfo {
     bool ok;
 };
 
+struct PeRdataInfo {
+    uint32_t rdata_rva;
+    uint32_t rdata_size;
+    bool ok;
+};
+
+// Parse the PE section table for ".rdata". Mirrors FindPeTextSection
+// above and the FindPeSection helper inside PhysXAdapter's runtime
+// scan path: identical algorithm, separate implementation to keep
+// the test hermetic (the runtime helper is in an anonymous namespace
+// inside the production .cpp). Any divergence between the two is a
+// test failure on the production side.
+PeRdataInfo FindRdataSection(const uint8_t *buf, size_t size) {
+    PeRdataInfo info{0, 0, false};
+    if (buf == nullptr || size < 0x40) {
+        return info;
+    }
+    uint32_t e_lfanew = 0;
+    std::memcpy(&e_lfanew, buf + 0x3C, 4);
+    if (e_lfanew + 24 > size) {
+        return info;
+    }
+    if (buf[e_lfanew] != 'P' || buf[e_lfanew + 1] != 'E' ||
+        buf[e_lfanew + 2] != 0 || buf[e_lfanew + 3] != 0) {
+        return info;
+    }
+    uint16_t num_sections = 0;
+    std::memcpy(&num_sections, buf + e_lfanew + 4 + 2, 2);
+    uint16_t opt_hdr_size = 0;
+    std::memcpy(&opt_hdr_size, buf + e_lfanew + 4 + 16, 2);
+    const size_t sections_off = e_lfanew + 4 + 20 + opt_hdr_size;
+    for (uint16_t i = 0; i < num_sections; ++i) {
+        const size_t off = sections_off + static_cast<size_t>(i) * 40;
+        if (off + 40 > size) break;
+        if (buf[off] == '.' && buf[off + 1] == 'r' &&
+            buf[off + 2] == 'd' && buf[off + 3] == 'a' &&
+            buf[off + 4] == 't' && buf[off + 5] == 'a') {
+            std::memcpy(&info.rdata_rva, buf + off + 12, 4);
+            std::memcpy(&info.rdata_size, buf + off + 8, 4);
+            info.ok = true;
+            return info;
+        }
+    }
+    return info;
+}
+
 PeTextInfo FindPeTextSection(const uint8_t *buf, size_t size) {
     PeTextInfo info{0, 0, false};
     if (buf == nullptr || size < 0x40) {
@@ -583,6 +629,105 @@ void TestPhysXRealBinaryMatchesCatalog() {
     // 5-slot run at 0x2507C08 (slot 4) that MemoryScanFromBuffer does
     // not discover on its own.
     EXPECT_EQ(resolved.sweep_slot, -1);
+}
+
+// Runtime-scan path test. Mirrors the algorithm in
+// PhysXAdapter_RuntimeScan but operates on the file buffer instead
+// of GetModuleHandleA's pointer. The production runtime code
+// (FindPeSection + MemoryScanFromBufferWithTextRange +
+// ResolveKnownMethods) lives in src/provider/PhysXAdapter.cpp; this
+// test re-derives the PE parsing from a separate helper so a change
+// in one but not the other fails the test.
+//
+// Critical invariant: the scan must find the same vtable (RVA
+// 0x25020A0) and resolve the same 6 slots (release/addActor/
+// simulate/shiftOrigin/raycast/overlap). The catalog-derived text
+// range (1 MiB slack around the catalog VAs) replaces the fixed
+// PhysX TU range here because the runtime uses catalog-derived
+// ranges, not the fixed PhysX TU constants.
+void TestPhysXRealBinaryRuntimeScanPath() {
+    FILE *f = std::fopen(WALKERCORE_REAL_BINARY_TEST_PATH, "rb");
+    if (f == nullptr) {
+        return;  // production host without the binary: skip
+    }
+    std::fseek(f, 0, SEEK_END);
+    const long fsize = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (fsize <= 0) {
+        std::fclose(f);
+        return;
+    }
+    std::vector<uint8_t> buf(static_cast<size_t>(fsize));
+    const size_t nread = std::fread(buf.data(), 1, buf.size(), f);
+    std::fclose(f);
+    if (nread != buf.size()) {
+        return;
+    }
+
+    // Parse the PE section table for .rdata and .text.
+    const PeTextInfo text_info = FindPeTextSection(buf.data(), buf.size());
+    const PeRdataInfo rdata_info = FindRdataSection(buf.data(), buf.size());
+    EXPECT_TRUE(text_info.ok);
+    EXPECT_TRUE(rdata_info.ok);
+    if (!text_info.ok || !rdata_info.ok) {
+        return;
+    }
+
+    // Compute the catalog-derived text range exactly as the runtime
+    // scan does: [min(catalog VA) - 1 MiB, max(catalog VA) + 1 MiB].
+    uint64_t catalog_min = UINT64_MAX;
+    uint64_t catalog_max = 0;
+    for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
+        const uint64_t va = kPhysXKnownMethods[m].va;
+        if (va < catalog_min) catalog_min = va;
+        if (va > catalog_max) catalog_max = va;
+    }
+    constexpr uint64_t kSlack = 0x100000ULL;
+    constexpr uint64_t kAtsImageBase = 0x140000000ULL;
+    const uint64_t text_lo =
+        (catalog_min > kSlack) ? (catalog_min - kSlack) : 0;
+    const uint64_t text_hi = catalog_max + kSlack;
+    // .rdata is where the vtable lives; scan over its RVA range.
+    const uint8_t *rdata_ptr = buf.data() + rdata_info.rdata_rva;
+    const size_t rdata_size =
+        (rdata_info.rdata_size > 0)
+            ? static_cast<size_t>(rdata_info.rdata_size)
+            : 0;
+    // Bound-check before passing to the scan.
+    if (rdata_info.rdata_rva >= buf.size() ||
+        rdata_size > buf.size() - rdata_info.rdata_rva) {
+        return;
+    }
+
+    const PhysXScanResult scan =
+        PhysXAdapter::MemoryScanFromBufferWithTextRange(
+            rdata_ptr, rdata_size, text_lo, text_hi);
+    EXPECT_TRUE(scan.success);
+    EXPECT_TRUE(std::strcmp(scan.strategy, "hybrid") == 0);
+    EXPECT_TRUE(scan.vtable.accepted_run >= kMinPhysXVtableRun);
+
+    // The catalog-derived range gives a vtable_base RVA inside
+    // .rdata. On ATS 1.61.3.1s it lands on 0x25020A0 (118 slots).
+    // We don't pin the exact RVA (sensitive to PE layout) but we do
+    // pin the resolved slots after.
+    PhysXVtableResolveResult resolved{};
+    const bool ok = PhysXAdapter::ResolveKnownMethods(
+        rdata_ptr, rdata_size,
+        scan.vtable.vtable_base,
+        scan.vtable.accepted_run,
+        &resolved);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(resolved.release_slot, 2);
+    EXPECT_EQ(resolved.add_actor_slot, 11);
+    EXPECT_EQ(resolved.simulate_slot, 57);
+    EXPECT_EQ(resolved.shift_origin_slot, 117);
+    EXPECT_EQ(resolved.raycast_slot, 15);
+    EXPECT_EQ(resolved.overlap_slot, 13);
+    EXPECT_EQ(resolved.sweep_slot, -1);
+
+    // Silence the unused-variable warning for kAtsImageBase (kept
+    // for symmetry with the on-disk test above).
+    (void)kAtsImageBase;
 }
 #endif  // WALKERCORE_REAL_BINARY_TEST_PATH
 

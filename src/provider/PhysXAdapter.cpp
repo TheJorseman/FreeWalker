@@ -18,6 +18,7 @@
 #include "walkercore/PhysXAdapter.h"
 
 #include <cmath>  // std::sqrt
+#include <cstdint>  // UINT64_MAX
 #include <cstdio>  // std::snprintf
 #include <cstring>  // memmem, memcpy
 
@@ -248,9 +249,27 @@ static bool PhysXAdapter_RuntimeScan(PhysXAdapter::RuntimeCache *cache) {
     if (rdata_size == 0 || rdata_size > kMaxScanBytes) {
         return false;
     }
-    const uint64_t text_lo =
-        reinterpret_cast<uint64_t>(mod) + text_sec.rva;
-    const uint64_t text_hi = text_lo + text_sec.size;
+    // Narrow the .text VA range to [min(catalog VA) - 1 MiB,
+    // max(catalog VA) + 1 MiB]. Passing the full .text section lets
+    // unrelated giant vtables (e.g. 13185 slots at RVA 0x1DBF8C8 on
+    // ATS 1.61.3.1s) dominate the "best run" pick. The catalog is
+    // already build-specific, so deriving the range from it makes the
+    // scan automatically build-correct: a matching PxScene vtable
+    // will have all 7 of its slot pointers inside this window, while
+    // unrelated vtables will have at least one pointer outside it and
+    // get rejected by the signature scan.
+    uint64_t catalog_min = UINT64_MAX;
+    uint64_t catalog_max = 0;
+    for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
+        const uint64_t va = kPhysXKnownMethods[m].va;
+        if (va < catalog_min) catalog_min = va;
+        if (va > catalog_max) catalog_max = va;
+    }
+    constexpr uint64_t kCatalogSlackBytes = 0x100000ULL;  // 1 MiB
+    const uint64_t text_lo = (catalog_min > kCatalogSlackBytes)
+                                 ? (catalog_min - kCatalogSlackBytes)
+                                 : 0;
+    const uint64_t text_hi = catalog_max + kCatalogSlackBytes;
 
     cache->scan = PhysXAdapter::MemoryScanFromBufferWithTextRange(
         rdata_ptr, rdata_size, text_lo, text_hi);

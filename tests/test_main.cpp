@@ -207,6 +207,13 @@ void TestCouplingProviderRealHookPositionRotatesWithTruckHeading();
 void TestCouplingProviderRealHookLandingGearStep();
 void TestCouplingProviderHookUnsetUsesTruckLocalFallback();
 
+// M7 opentrack UDP receiver probes.
+void TestOpentrackReceiverInstallUninstallIdempotent();
+void TestOpentrackReceiverTickWithoutInstallIsSafe();
+void TestOpentrackReceiverTickWithNullProviderDrainsSocket();
+void TestOpentrackReceiverRoundTripFeedsDeltasIntoProvider();
+void TestOpentrackReceiverShortestArcDeltaOnYawWrap();
+
 void TestLogCustomSinkReceivesAllLevels();
 void TestLogLevelReachesSink();
 void TestLogShutdownIdempotent();
@@ -671,6 +678,13 @@ int main() {
     RUN_TEST(walkercore::TestCouplingProviderRealHookPositionRotatesWithTruckHeading);
     RUN_TEST(walkercore::TestCouplingProviderRealHookLandingGearStep);
     RUN_TEST(walkercore::TestCouplingProviderHookUnsetUsesTruckLocalFallback);
+
+    // M7 opentrack UDP receiver probes.
+    RUN_TEST(walkercore::TestOpentrackReceiverInstallUninstallIdempotent);
+    RUN_TEST(walkercore::TestOpentrackReceiverTickWithoutInstallIsSafe);
+    RUN_TEST(walkercore::TestOpentrackReceiverTickWithNullProviderDrainsSocket);
+    RUN_TEST(walkercore::TestOpentrackReceiverRoundTripFeedsDeltasIntoProvider);
+    RUN_TEST(walkercore::TestOpentrackReceiverShortestArcDeltaOnYawWrap);
 
     RUN_TEST(walkercore::TestLogCustomSinkReceivesAllLevels);
     RUN_TEST(walkercore::TestLogLevelReachesSink);

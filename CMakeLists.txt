@@ -98,6 +98,7 @@ add_library(WalkerCore SHARED
     src/provider/PerFrameThread.cpp
     src/provider/PhysXAdapter.cpp
     src/provider/PolishProviders.cpp
+    src/provider/OpentrackReceiver.cpp
     src/provider/ScsTelemetryProvider.cpp
     src/provider/TrailerCoupling.cpp
     src/workflow/FrameLoop.cpp
@@ -173,6 +174,14 @@ endif()
 if (WALKERCORE_HAVE_MINHOOK)
     target_link_libraries(WalkerCore PRIVATE minhook)
     target_compile_definitions(WalkerCore PRIVATE WALKERCORE_HAVE_MINHOOK=1)
+endif()
+
+# M7 lander: opentrack UDP receiver uses Winsock2 (Windows-only).
+# We link ws2_32 unconditionally; on non-Windows the receiver
+# .cpp guards the Winsock calls with `#if defined(_WIN32)`, so the
+# link line is dead weight on Linux but does not error.
+if (WIN32)
+    target_link_libraries(WalkerCore PRIVATE ws2_32)
 endif()
 
 # -----------------------------------------------------------------------------

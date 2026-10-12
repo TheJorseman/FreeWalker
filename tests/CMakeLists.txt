@@ -25,6 +25,7 @@ add_library(WalkerCoreTestLib STATIC
     ${CMAKE_SOURCE_DIR}/src/provider/PerFrameThread.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/PhysXAdapter.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/PolishProviders.cpp
+    ${CMAKE_SOURCE_DIR}/src/provider/OpentrackReceiver.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/ScsTelemetryProvider.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/TrailerCoupling.cpp
     ${CMAKE_SOURCE_DIR}/src/workflow/FrameLoop.cpp
@@ -84,10 +85,17 @@ add_executable(WalkerCoreTests
     test_d3d12_hook.cpp
     test_scstelemetry_provider.cpp
     test_coupling_provider.cpp
+    test_opentrack_receiver.cpp
     test_time.cpp
     test_per_frame_thread.cpp)
 
 target_link_libraries(WalkerCoreTests PRIVATE WalkerCoreTestLib)
+if (WIN32)
+    # M7 OpentrackReceiver uses Winsock2 (Windows-only). The test
+    # static lib compiles the .cpp; the test exe needs ws2_32 on
+    # the link line.
+    target_link_libraries(WalkerCoreTests PRIVATE ws2_32)
+endif()
 
 # We don't need the SCS SDK at runtime for the domain tests; the SDK is
 # only consulted in the SDK callback path which we don't exercise. Stub

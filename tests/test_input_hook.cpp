@@ -255,4 +255,259 @@ void TestWalkercoreKeyRangeIsContiguous() {
               static_cast<unsigned>(WalkercoreKey::ToggleMenu) + 1u);
 }
 
+// -----------------------------------------------------------------------------
+// M4 MousePump tests.
+//
+// OnRawInputData(const RAWINPUT&) is the test-friendly entry point — it
+// takes a fully-decoded RAWINPUT struct so the unit suite can drive the
+// motion / wheel / button-edges accumulation without spinning up a
+// WM_INPUT pump. The tests below pin the four contracts the FrameLoop
+// depends on:
+//
+//   1. Motion deltas accumulate across multiple OnRawInputData calls
+//      and are drained by the next Sample() (so the per-frame motion
+//      is exactly the sum of WM_INPUT events between two samples).
+//   2. Wheel deltas accumulate the same way and survive the same drain.
+//   3. LMB press / release flips the WalkercoreKey::Zoom held bit and
+//      produces a one-frame rising / falling edge.
+//   4. RMB press / release flips WalkercoreKey::FlashlightToggle.
+//   5. Absolute-coordinate reports (touchscreen) are dropped so a
+//      tablet contact doesn't yank the camera across the world.
+//   6. Non-mouse raw input (keyboard) is ignored — keyboard events
+//      still flow through the WH_KEYBOARD_LL callback.
+// -----------------------------------------------------------------------------
+
+namespace {
+
+// Build a relative-motion RAWINPUT with the given dx/dy and no buttons.
+RAWINPUT MakeMouseMotion(int dx, int dy) {
+    RAWINPUT raw{};
+    raw.header.dwType = RIM_TYPEMOUSE;
+    raw.header.dwSize = sizeof(RAWINPUT);
+    raw.data.mouse.usFlags = 0;  // relative
+    raw.data.mouse.lLastX = static_cast<LONG>(dx);
+    raw.data.mouse.lLastY = static_cast<LONG>(dy);
+    return raw;
+}
+
+// Build a relative-motion RAWINPUT with absolute-coordinate flag set
+// (the OS would deliver this for touchscreens / tablets).
+RAWINPUT MakeMouseMotionAbsolute(int dx, int dy) {
+    RAWINPUT raw = MakeMouseMotion(dx, dy);
+    raw.data.mouse.usFlags = MOUSE_MOVE_ABSOLUTE;
+    return raw;
+}
+
+// Build a wheel-only RAWINPUT.
+RAWINPUT MakeMouseWheel(int wheel_delta) {
+    RAWINPUT raw{};
+    raw.header.dwType = RIM_TYPEMOUSE;
+    raw.header.dwSize = sizeof(RAWINPUT);
+    raw.data.mouse.usButtonFlags = RI_MOUSE_WHEEL;
+    raw.data.mouse.usButtonData = static_cast<USHORT>(wheel_delta);
+    return raw;
+}
+
+// Build a left-button RAWINPUT.
+RAWINPUT MakeMouseLeftButton(bool down) {
+    RAWINPUT raw{};
+    raw.header.dwType = RIM_TYPEMOUSE;
+    raw.header.dwSize = sizeof(RAWINPUT);
+    raw.data.mouse.usButtonFlags = down ? RI_MOUSE_LEFT_BUTTON_DOWN
+                                        : RI_MOUSE_LEFT_BUTTON_UP;
+    return raw;
+}
+
+// Build a right-button RAWINPUT.
+RAWINPUT MakeMouseRightButton(bool down) {
+    RAWINPUT raw{};
+    raw.header.dwType = RIM_TYPEMOUSE;
+    raw.header.dwSize = sizeof(RAWINPUT);
+    raw.data.mouse.usButtonFlags = down ? RI_MOUSE_RIGHT_BUTTON_DOWN
+                                        : RI_MOUSE_RIGHT_BUTTON_UP;
+    return raw;
+}
+
+}  // namespace
+
+void TestInputHookOnRawInputMotionAccumulates() {
+    // Two raw motion events in a frame sum into the next Sample's
+    // mouse_dx / mouse_dy. Without accumulation the second motion
+    // would overwrite the first and the player would only see half
+    // the camera sweep.
+    InputHook hook;
+    hook.OnRawInputData(MakeMouseMotion(10, 5));
+    hook.OnRawInputData(MakeMouseMotion(-3, 2));
+
+    InputState out;
+    hook.Sample(out);
+    EXPECT_EQ(7, out.mouse_dx);
+    EXPECT_EQ(7, out.mouse_dy);
+}
+
+void TestInputHookOnRawInputMotionDrainsOnNextSample() {
+    // After the first Sample, the source motion accumulator MUST be
+    // zero so the next frame starts fresh. Otherwise the player's
+    // yaw / pitch would integrate the same delta twice.
+    InputHook hook;
+    hook.OnRawInputData(MakeMouseMotion(50, 50));
+
+    InputState out1;
+    hook.Sample(out1);
+    EXPECT_EQ(50, out1.mouse_dx);
+    EXPECT_EQ(50, out1.mouse_dy);
+
+    InputState out2;
+    hook.Sample(out2);
+    EXPECT_EQ(0, out2.mouse_dx);
+    EXPECT_EQ(0, out2.mouse_dy);
+}
+
+void TestInputHookOnRawInputAbsoluteMotionIsDropped() {
+    // A touchscreen delivers MOUSE_MOVE_ABSOLUTE; integrating the
+    // absolute coordinates as relative motion would yank the camera
+    // across the world on first contact. The pump MUST drop the
+    // report and leave the accumulators untouched.
+    InputHook hook;
+    hook.OnRawInputData(MakeMouseMotionAbsolute(1920, 1080));
+
+    InputState out;
+    hook.Sample(out);
+    EXPECT_EQ(0, out.mouse_dx);
+    EXPECT_EQ(0, out.mouse_dy);
+}
+
+void TestInputHookOnRawInputWheelAccumulates() {
+    // Wheel events sum across the frame; the FrameLoop reads the
+    // single accumulated delta on the consumer's sample.
+    InputHook hook;
+    hook.OnRawInputData(MakeMouseWheel(120));
+    hook.OnRawInputData(MakeMouseWheel(-240));
+
+    InputState out;
+    hook.Sample(out);
+    EXPECT_EQ(-120, out.wheel_delta);
+}
+
+void TestInputHookOnRawInputWheelDrainsOnNextSample() {
+    // Wheel drain contract mirrors motion: once consumed, the
+    // accumulator is zero for the next frame.
+    InputHook hook;
+    hook.OnRawInputData(MakeMouseWheel(360));
+
+    InputState out1;
+    hook.Sample(out1);
+    EXPECT_EQ(360, out1.wheel_delta);
+
+    InputState out2;
+    hook.Sample(out2);
+    EXPECT_EQ(0, out2.wheel_delta);
+}
+
+void TestInputHookOnRawInputLeftButtonPress() {
+    // LMB press flips the WalkercoreKey::Zoom held bit and sets a
+    // one-frame rising edge so the consumer's IsKeyPressed is true on
+    // the next Sample.
+    InputHook hook;
+    hook.OnRawInputData(MakeMouseLeftButton(true));
+
+    InputState out;
+    hook.Sample(out);
+    EXPECT_TRUE(IsKeyHeld(out, WalkercoreKey::Zoom));
+    EXPECT_TRUE(IsKeyPressed(out, WalkercoreKey::Zoom));
+}
+
+void TestInputHookOnRawInputLeftButtonRelease() {
+    // LMB release clears the held bit and sets a one-frame falling
+    // edge. Same contract as the WH_KEYBOARD_LL keyboard path.
+    InputHook hook;
+    hook.OnRawInputData(MakeMouseLeftButton(true));
+    hook.OnRawInputData(MakeMouseLeftButton(false));
+
+    InputState out;
+    hook.Sample(out);
+    EXPECT_FALSE(IsKeyHeld(out, WalkercoreKey::Zoom));
+    EXPECT_TRUE(IsKeyReleased(out, WalkercoreKey::Zoom));
+}
+
+void TestInputHookOnRawInputRightButtonPress() {
+    // RMB press flips WalkercoreKey::FlashlightToggle, the second
+    // mouse button the walker actually consumes.
+    InputHook hook;
+    hook.OnRawInputData(MakeMouseRightButton(true));
+
+    InputState out;
+    hook.Sample(out);
+    EXPECT_TRUE(IsKeyHeld(out, WalkercoreKey::FlashlightToggle));
+    EXPECT_TRUE(IsKeyPressed(out, WalkercoreKey::FlashlightToggle));
+}
+
+void TestInputHookOnRawInputButtonHeldNoExtraEdges() {
+    // Holding LMB across multiple OnRawInputData calls (the OS keeps
+    // firing LEFT_BUTTON_DOWN as the user holds — Windows repeats the
+    // press flag under some configurations) MUST NOT add a new rising
+    // edge. The held-bit guard inside the update_button lambda
+    // mirrors the WH_KEYBOARD_LL key-repeat defence.
+    InputHook hook;
+    hook.OnRawInputData(MakeMouseLeftButton(true));
+    hook.OnRawInputData(MakeMouseLeftButton(true));
+    hook.OnRawInputData(MakeMouseLeftButton(true));
+
+    InputState out1;
+    hook.Sample(out1);
+    EXPECT_TRUE(IsKeyPressed(out1, WalkercoreKey::Zoom));
+
+    InputState out2;
+    hook.Sample(out2);
+    EXPECT_FALSE(IsKeyPressed(out2, WalkercoreKey::Zoom));
+    EXPECT_TRUE(IsKeyHeld(out2, WalkercoreKey::Zoom));
+}
+
+void TestInputHookOnRawInputIgnoresNonMouse() {
+    // Keyboard raw input is delivered through WH_KEYBOARD_LL, not
+    // through WM_INPUT. The pump MUST ignore RIM_TYPEKEYBOARD so
+    // there's no double-source for the keys[] array. Constructing
+    // a minimal keyboard RAWINPUT with a real key transition would
+    // require the FULL keyboard union layout, so we use a sentinel
+    // type and check that nothing in last_ changed.
+    InputHook hook;
+    RAWINPUT kbd{};
+    kbd.header.dwType = RIM_TYPEKEYBOARD;
+    kbd.header.dwSize = sizeof(RAWINPUT);
+    // No MakeCode / Flags mutation — the function MUST short-circuit
+    // before touching anything.
+    hook.OnRawInputData(kbd);
+
+    InputState out;
+    hook.Sample(out);
+    EXPECT_EQ(0, out.mouse_dx);
+    EXPECT_EQ(0, out.mouse_dy);
+    EXPECT_EQ(0, out.wheel_delta);
+    EXPECT_FALSE(IsKeyHeld(out, WalkercoreKey::Zoom));
+    EXPECT_FALSE(IsKeyHeld(out, WalkercoreKey::FlashlightToggle));
+}
+
+void TestInputHookOnRawInputCombinedMotionAndButton() {
+    // The OS can deliver a single WM_INPUT that carries both motion
+    // AND button transitions (high-DPI mice often batch events to
+    // save on the user -> kernel transition). The pump MUST apply
+    // every field of the report, not bail on the first one set.
+    RAWINPUT raw{};
+    raw.header.dwType = RIM_TYPEMOUSE;
+    raw.header.dwSize = sizeof(RAWINPUT);
+    raw.data.mouse.lLastX = 7;
+    raw.data.mouse.lLastY = -3;
+    raw.data.mouse.usButtonFlags = RI_MOUSE_LEFT_BUTTON_DOWN;
+    raw.data.mouse.usButtonData = 0;
+
+    InputHook hook;
+    hook.OnRawInputData(raw);
+
+    InputState out;
+    hook.Sample(out);
+    EXPECT_EQ(7, out.mouse_dx);
+    EXPECT_EQ(-3, out.mouse_dy);
+    EXPECT_TRUE(IsKeyHeld(out, WalkercoreKey::Zoom));
+}
+
 }  // namespace walkercore

@@ -112,6 +112,17 @@ void TestInputHookClassifyToggleWalkAlone();
 void TestInputHookClassifyToggleWalkWithCrouchHeld();
 void TestWalkercoreKeyNameReturnsNameForEveryValue();
 void TestWalkercoreKeyRangeIsContiguous();
+void TestInputHookOnRawInputMotionAccumulates();
+void TestInputHookOnRawInputMotionDrainsOnNextSample();
+void TestInputHookOnRawInputAbsoluteMotionIsDropped();
+void TestInputHookOnRawInputWheelAccumulates();
+void TestInputHookOnRawInputWheelDrainsOnNextSample();
+void TestInputHookOnRawInputLeftButtonPress();
+void TestInputHookOnRawInputLeftButtonRelease();
+void TestInputHookOnRawInputRightButtonPress();
+void TestInputHookOnRawInputButtonHeldNoExtraEdges();
+void TestInputHookOnRawInputIgnoresNonMouse();
+void TestInputHookOnRawInputCombinedMotionAndButton();
 void TestHeadTrackerSteadyStateConverges();
 void TestHeadTrackerNoInputDoesNotDrift();
 void TestHeadTrackerNegativeDeltaReturns();
@@ -678,6 +689,21 @@ int main() {
     // WalkerFsmState / HeadTrackerSource probes.
     RUN_TEST(walkercore::TestWalkercoreKeyNameReturnsNameForEveryValue);
     RUN_TEST(walkercore::TestWalkercoreKeyRangeIsContiguous);
+
+    // M4 MousePump — RAWINPUT-driven motion / wheel / button
+    // accumulation. Production path is OnRawInputMessage(LPARAM); the
+    // tests drive OnRawInputData(const RAWINPUT&) directly.
+    RUN_TEST(walkercore::TestInputHookOnRawInputMotionAccumulates);
+    RUN_TEST(walkercore::TestInputHookOnRawInputMotionDrainsOnNextSample);
+    RUN_TEST(walkercore::TestInputHookOnRawInputAbsoluteMotionIsDropped);
+    RUN_TEST(walkercore::TestInputHookOnRawInputWheelAccumulates);
+    RUN_TEST(walkercore::TestInputHookOnRawInputWheelDrainsOnNextSample);
+    RUN_TEST(walkercore::TestInputHookOnRawInputLeftButtonPress);
+    RUN_TEST(walkercore::TestInputHookOnRawInputLeftButtonRelease);
+    RUN_TEST(walkercore::TestInputHookOnRawInputRightButtonPress);
+    RUN_TEST(walkercore::TestInputHookOnRawInputButtonHeldNoExtraEdges);
+    RUN_TEST(walkercore::TestInputHookOnRawInputIgnoresNonMouse);
+    RUN_TEST(walkercore::TestInputHookOnRawInputCombinedMotionAndButton);
 
     RUN_TEST(walkercore::TestHeadTrackerSteadyStateConverges);
     RUN_TEST(walkercore::TestHeadTrackerNoInputDoesNotDrift);

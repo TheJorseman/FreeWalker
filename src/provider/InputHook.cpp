@@ -188,6 +188,108 @@ void InputHook::Sample(InputState &out) {
     for (auto &b : last_.keys) {
         b &= 0x01;  // keep only the held bit
     }
+    // M4 MousePump: drain the per-frame motion / wheel deltas. Without
+    // this drain the deltas would accumulate forever across Sample()
+    // calls and PhaseApplyMouseLook would integrate the entire session's
+    // mouse motion into a single yaw / pitch jump on the first Walking
+    // frame. Mouse-button held / edge bits live in the keys[] array
+    // and are drained by the loop above — only the motion accumulators
+    // need an explicit zero.
+    last_.mouse_dx = 0;
+    last_.mouse_dy = 0;
+    last_.wheel_delta = 0;
+    last_.valid = true;
+}
+
+void InputHook::OnRawInputData(const RAWINPUT &raw) {
+    // M4 MousePump — accumulate one parsed RAWINPUT event into last_.
+    //
+    // The structure is the union member from the OS — we only handle
+    // RIM_TYPEMOUSE here. Keyboard events are already covered by the
+    // WH_KEYBOARD_LL hook (it owns the keys[] bits end-to-end) and HID
+    // events are not used by the walker. Filtering by header.dwType is
+    // the canonical discriminator.
+    if (raw.header.dwType != RIM_TYPEMOUSE) {
+        return;
+    }
+    const RAWMOUSE &m = raw.data.mouse;
+
+    // Motion: usFlags & MOUSE_MOVE_ABSOLUTE means the OS reports absolute
+    // coordinates (touchscreens / tablets); we only integrate relative
+    // motion. Without this guard a tablet would inject a single huge dx
+    // on first contact and yank the camera across the world.
+    if ((m.usFlags & MOUSE_MOVE_ABSOLUTE) == 0) {
+        last_.mouse_dx += static_cast<int>(m.lLastX);
+        last_.mouse_dy += static_cast<int>(m.lLastY);
+    }
+
+    // Wheel: usButtonFlags & RI_MOUSE_WHEEL means usButtonData is the
+    // wheel delta in WHEEL_DELTA units (positive == wheel rotated away
+    // from the user == "scroll up"). The cast through int16_t matches
+    // the WM_MOUSEWHEEL wParam high-word contract; usButtonData is a
+    // WORD (16-bit signed) per the RAWHID / RAWMOUSE union.
+    if (m.usButtonFlags & RI_MOUSE_WHEEL) {
+        last_.wheel_delta += static_cast<int16_t>(m.usButtonData);
+    }
+
+    // Button transitions: route the per-button press / release flags to
+    // the matching WalkercoreKey slot in keys[]. The held bit is
+    // derived from the transition (rising → held becomes true, falling →
+    // held becomes false) so a raw report that only fires press / release
+    // edges (which is what Windows actually sends) updates the same
+    // per-key invariant the WH_KEYBOARD_LL callback maintains. We
+    // route only LMB and RMB to the existing Zoom / FlashlightToggle
+    // slots — middle / X1 / X2 are not used by the walker.
+    auto update_button = [this, &m](USHORT pressed_flag, USHORT released_flag,
+                                    WalkercoreKey k) {
+        if ((m.usButtonFlags & (pressed_flag | released_flag)) == 0) {
+            return;
+        }
+        uint8_t &bits = last_.keys[KeyIndex(k)];
+        const bool was_held = (bits & 0x01) != 0;
+        if (m.usButtonFlags & pressed_flag) {
+            bits = static_cast<uint8_t>(bits | 0x01);
+            if (!was_held) {
+                bits = static_cast<uint8_t>(bits | 0x02);
+            }
+        } else {
+            if (was_held) {
+                bits = static_cast<uint8_t>(bits | 0x04);
+            }
+            bits = static_cast<uint8_t>(bits & ~0x01);
+        }
+    };
+    update_button(RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP,
+                  WalkercoreKey::Zoom);
+    update_button(RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP,
+                  WalkercoreKey::FlashlightToggle);
+}
+
+void InputHook::OnRawInputMessage(LPARAM l_param) {
+    // M4 MousePump — production path. Called from a WndProc subclass on
+    // WM_INPUT with the OS-delivered LPARAM (an HRAWINPUT). Two calls:
+    //   1. GetRawInputData with pcbSize=NULL returns the buffer size
+    //      required to hold the decoded RAWINPUT.
+    //   2. GetRawInputData with a sized buffer decodes the message.
+    //
+    // We pre-size to a single RAWINPUT (which is what the OS guarantees
+    // for one WM_INPUT); if a HID report ever exceeded that the second
+    // call would return -1 and we silently drop. The walker doesn't use
+    // HID and the pre-sized buffer is plenty for mouse / keyboard
+    // reports.
+    RAWINPUT raw{};
+    UINT size = sizeof(RAWINPUT);
+    const UINT got = GetRawInputData(reinterpret_cast<HRAWINPUT>(l_param),
+                                     RID_INPUT, &raw, &size,
+                                     sizeof(RAWINPUTHEADER));
+    if (got == static_cast<UINT>(-1) || got == 0) {
+        // OS couldn't decode the message (truncated buffer, invalid
+        // handle, etc.) — drop silently. The walker is a passive
+        // observer; we never want a malformed WM_INPUT to crash the
+        // game thread.
+        return;
+    }
+    OnRawInputData(raw);
 }
 
 }  // namespace walkercore

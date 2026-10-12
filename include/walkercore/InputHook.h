@@ -105,6 +105,31 @@ public:
                             : WalkercoreKey::ToggleWalk;
     }
 
+    // M4 MousePump — accumulate a parsed RAWINPUT event into last_. The
+    // production path goes through OnRawInputMessage(LPARAM) which calls
+    // GetRawInputData and forwards; this overload is the test-friendly
+    // entry point that takes a fully-decoded RAWINPUT directly so the
+    // unit suite can drive motion / wheel / button edges without
+    // spinning up a WM_INPUT pump. The semantic contract is identical:
+    // mouse motion accumulates (consumed by Sample() the same frame the
+    // conductor reads it), wheel accumulates, and LMB / RMB flip the
+    // Zoom / FlashlightToggle held bits and produce rising / falling
+    // edges on transitions. Idempotent under multiple calls: each call
+    // adds its delta to the existing accumulator and the next Sample()
+    // drains everything in one copy.
+    //
+    // The function is a no-op on non-Windows builds (it touches
+    // <windows.h> types); the include guard is in the header.
+    void OnRawInputData(const RAWINPUT &raw);
+
+    // M4 MousePump — production entry. Called from a WndProc subclass on
+    // WM_INPUT with the LPARAM the OS delivered. Internally calls
+    // GetRawInputData(HRAWINPUT(lParam), RID_INPUT, ...) and forwards
+    // the decoded buffer to OnRawInputData. Safe to call when the raw
+    // buffer is too small (the GetRawInputData contract returns -1 and
+    // the call becomes a no-op; the function never throws / aborts).
+    void OnRawInputMessage(LPARAM lParam);
+
 private:
     KeyBindings bindings_;
     HHOOK kb_hook_ = nullptr;

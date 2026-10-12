@@ -287,16 +287,36 @@ void TestInputHookSamplePerfBudget() {
     // artificially fast — a perf budget test that goes "fast" because
     // it's not doing the work it claims to do is the failure mode we
     // most want to avoid).
+    //
+    // M4 MousePump contract: Sample() also drains the per-frame motion
+    // and wheel accumulators so the next frame's OnRawInputData calls
+    // start from zero. After 200000+20000 Sample() calls in this
+    // perf-budget test, the source mouse_dx/dy are zero (drained on
+    // every iteration). The fixture's initial 17/-3 is gone. We
+    // re-prime the deltas and one more Sample() to confirm the drain
+    // contract is exercised by this loop.
     InputState verify;
     hook.Sample(verify);
-    EXPECT_EQ(verify.mouse_dx, 17);
-    EXPECT_EQ(verify.mouse_dy, -3);
+    EXPECT_EQ(verify.mouse_dx, 0);
+    EXPECT_EQ(verify.mouse_dy, 0);
     EXPECT_TRUE(verify.valid);
     // Held bits remain set; edges were cleared by the prior Sample().
     for (int i = 0; i < 16; ++i) {
         EXPECT_EQ(verify.keys[i] & 0x01, 0x01);  // held survives
         EXPECT_EQ(verify.keys[i] & 0x02, 0x00);  // rising edge cleared
     }
+
+    // M4 MousePump drain re-check: prime + sample + verify the
+    // accumulator survives exactly one Sample() then drains.
+    hook.mutable_last().mouse_dx = 17;
+    hook.mutable_last().mouse_dy = -3;
+    hook.Sample(verify);
+    EXPECT_EQ(verify.mouse_dx, 17);
+    EXPECT_EQ(verify.mouse_dy, -3);
+    InputState verify2;
+    hook.Sample(verify2);
+    EXPECT_EQ(verify2.mouse_dx, 0);
+    EXPECT_EQ(verify2.mouse_dy, 0);
 }
 
 //   - TestWalkerFsmUpdateSteadyStatePerfBudget

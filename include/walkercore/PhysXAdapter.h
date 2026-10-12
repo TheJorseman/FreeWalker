@@ -397,9 +397,30 @@ public:
                                     int32_t accepted_run,
                                     PhysXVtableResolveResult *out);
 
+    // Cached install-time results. PhysXAdapter::Install() runs the
+    // real-binary scan + ResolveKnownMethods against the live
+    // amtrucks.exe process (when GetModuleHandleA resolves it) and
+    // caches the output here. walker_dump_physx() reads this so the
+    // F12 dump shows the actual resolved slot per method instead of
+    // -1 placeholders. When amtrucks.exe is not the host process
+    // (e.g. unit tests) the cache stays at the no_match default and
+    // the dump reports "(no live process)".
+    struct RuntimeCache {
+        PhysXScanResult scan{};
+        PhysXVtableResolveResult resolve{};
+        bool have_scan = false;
+        bool have_resolve = false;
+    };
+
+    // Read-only accessor for the diagnostic dump. Returns the live
+    // cache; when the adapter has not run the scan, every slot field
+    // is -1 and have_scan / have_resolve are false.
+    const RuntimeCache &runtime_cache() const { return cache_; }
+
 private:
     PhysXAdapterConfig cfg_;
     bool installed_ = false;
+    RuntimeCache cache_;
 };
 
 }  // namespace walkercore

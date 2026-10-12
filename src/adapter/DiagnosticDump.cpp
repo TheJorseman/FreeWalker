@@ -429,19 +429,22 @@ extern "C" __declspec(dllexport) void walker_dump_state(void) {
         // Mirror the install-time catalog (the same 7-VA list the
         // adapter logs on Install). We split the line in half so the
         // dump stays legible without forcing a single very-long row:
-        //   physx adapter       : installed=true catalog=7
+        //   physx adapter       : installed=true catalog=7 runtime=live
         //   physx catalog       : release=0x141AE07B6 addActor=0x141AE0B62
         //                          simulate=0x141AE4D80 shiftOrigin=0x141AE6C28
         //                          sweep=0x141B06F10 raycast=0x141AE1610
         //                          overlap=0x141AE0F70
-        // Slot dispatch stays at -1 until a live PxScene instance is
-        // resolved; the focused walker_dump_physx() dump adds the
-        // expected slot per build so analysts can confirm what the
-        // matcher would pick up.
+        // The runtime column tells the analyst whether the in-memory
+        // scan actually ran (live) or whether we're in a unit-test /
+        // non-game host (no live process). The focused
+        // walker_dump_physx() dump adds per-method resolved_slot.
+        const PhysXAdapter::RuntimeCache &cache = g_physx->runtime_cache();
+        const bool live = cache.have_scan && cache.have_resolve;
         WALKERCORE_LOG_INFO(
-            "physx adapter       : installed=%s catalog=%d",
+            "physx adapter       : installed=%s catalog=%d runtime=%s",
             bool_str(g_physx->isInstalled()),
-            kPhysXKnownMethodCount);
+            kPhysXKnownMethodCount,
+            live ? "live" : "(no live process)");
         char catalog_buf[768];
         size_t off = 0;
         for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
@@ -899,13 +902,15 @@ extern "C" __declspec(dllexport) void walker_dump_physx(void) {
     WALKERCORE_LOG_INFO("disable collisions    : %s",
                         bool_str(cfg.disable_collisions));
 
-    // Catalog + expected slot dispatch. The slot column is what
-    // ResolveKnownMethods *would* report for ATS 1.61.3.1s (PxScene
-    // vtable @ RVA 0x25020A0, 118 slots). Until a live PxScene
-    // instance is wired the runtime column stays at -1 — we surface
-    // the expected value here so analysts can confirm the catalog is
-    // current for their build without scrolling through
-    // docs/observations/ats_1_61_3_1s.physx.functions.md.
+    // Catalog + slot dispatch. The runtime column is sourced from
+    // the install-time cache populated by PhysXAdapter_RuntimeScan:
+    // when amtrucks.exe is loaded and the in-memory PxScene vtable
+    // is reachable, each row carries the actual resolved slot from
+    // ResolveKnownMethods. When the scan could not run (unit tests,
+    // non-game hosts), the runtime column stays at -1 and we emit a
+    // "no live process" summary so analysts know what is happening.
+    const PhysXAdapter::RuntimeCache &cache = g_physx->runtime_cache();
+    const bool live = cache.have_scan && cache.have_resolve;
     static constexpr int kExpectedSlot[kPhysXKnownMethodCount] = {
         2,    // release      → slot 2  on ATS 1.61.3.1s
         11,   // addActor     → slot 11
@@ -915,13 +920,31 @@ extern "C" __declspec(dllexport) void walker_dump_physx(void) {
         15,   // raycast      → slot 15
         13,   // overlap      → slot 13
     };
+    const int kResolvedSlot[kPhysXKnownMethodCount] = {
+        cache.resolve.release_slot,
+        cache.resolve.add_actor_slot,
+        cache.resolve.simulate_slot,
+        cache.resolve.shift_origin_slot,
+        cache.resolve.sweep_slot,
+        cache.resolve.raycast_slot,
+        cache.resolve.overlap_slot,
+    };
+    WALKERCORE_LOG_INFO(
+        "physx runtime         : %s strategy=%s vtable_off=0x%llX run=%d "
+        "string_probes=%d",
+        live ? "live" : "(no live process)",
+        cache.scan.strategy,
+        static_cast<unsigned long long>(cache.scan.vtable.vtable_base),
+        cache.scan.vtable.accepted_run,
+        cache.scan.string_probes_hit);
     WALKERCORE_LOG_INFO("catalog size          : %d", kPhysXKnownMethodCount);
     for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
         WALKERCORE_LOG_INFO(
-            "physx[%d] %-12s : va=0x%llX expected_slot=%d resolved_slot=-1",
+            "physx[%d] %-12s : va=0x%llX expected_slot=%d resolved_slot=%d",
             m, kPhysXKnownMethods[m].name,
             static_cast<unsigned long long>(kPhysXKnownMethods[m].va),
-            kExpectedSlot[m]);
+            kExpectedSlot[m],
+            kResolvedSlot[m]);
     }
     WALKERCORE_LOG_INFO(
         "physx resolve         : tolerance=%llu B min_run=%d "

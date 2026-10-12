@@ -23,6 +23,10 @@
 
 #include "walkercore/Log.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace walkercore {
 
 namespace {
@@ -146,6 +150,130 @@ PhysXAdapter::~PhysXAdapter() {
     }
 }
 
+#if defined(_WIN32)
+namespace {
+
+// Minimal in-memory PE parser used by the runtime scan. Returns the
+// (rva, size) pair for the requested section, or {0, 0, false} when
+// not found / malformed. Pure byte reader — no Win32 header needed
+// beyond the section name + the standard offsets. The implementation
+// mirrors FindPeTextSection in tests/test_physx_adapter.cpp: the test
+// reads from a FILE* into a vector, this reads from a const uint8_t*
+// base address.
+struct PeSectionRange {
+    uint32_t rva;
+    uint32_t size;
+    bool ok;
+};
+
+PeSectionRange FindPeSection(const uint8_t *buf,
+                              size_t size,
+                              const char *section_name) {
+    PeSectionRange info{0, 0, false};
+    if (buf == nullptr || size < 0x40 || section_name == nullptr) {
+        return info;
+    }
+    uint32_t e_lfanew = 0;
+    std::memcpy(&e_lfanew, buf + 0x3C, 4);
+    if (e_lfanew + 24 > size) {
+        return info;
+    }
+    if (buf[e_lfanew] != 'P' || buf[e_lfanew + 1] != 'E' ||
+        buf[e_lfanew + 2] != 0 || buf[e_lfanew + 3] != 0) {
+        return info;
+    }
+    uint16_t num_sections = 0;
+    std::memcpy(&num_sections, buf + e_lfanew + 4 + 2, 2);
+    uint16_t opt_hdr_size = 0;
+    std::memcpy(&opt_hdr_size, buf + e_lfanew + 4 + 16, 2);
+    const size_t sections_off = e_lfanew + 4 + 20 + opt_hdr_size;
+    const size_t name_len = std::strlen(section_name);
+    if (name_len > 8) {
+        // Standard PE section names are <= 8 chars (including the
+        // trailing NUL if shorter). Anything longer is a malformed
+        // request, not a real PE section.
+        return info;
+    }
+    for (uint16_t i = 0; i < num_sections; ++i) {
+        const size_t off = sections_off + static_cast<size_t>(i) * 40;
+        if (off + 40 > size) break;
+        if (std::memcmp(buf + off, section_name, name_len) == 0 &&
+            (name_len == 8 || buf[off + name_len] == 0)) {
+            std::memcpy(&info.rva, buf + off + 12, 4);
+            std::memcpy(&info.size, buf + off + 8, 4);
+            info.ok = true;
+            return info;
+        }
+    }
+    return info;
+}
+
+}  // namespace
+#endif  // _WIN32
+
+// Run the real-binary scan + ResolveKnownMethods against the live
+// amtrucks.exe process (Windows hosts only). Returns true when at
+// least one catalog slot was resolved against the in-memory PxScene
+// vtable. On non-Windows hosts or when amtrucks.exe is not in the
+// process (unit tests, debug runs without a game), returns false and
+// leaves the cache empty — walker_dump_physx reports "(no live
+// process)" for the slot column.
+static bool PhysXAdapter_RuntimeScan(PhysXAdapter::RuntimeCache *cache) {
+#if !defined(_WIN32)
+    (void)cache;
+    return false;
+#else
+    if (cache == nullptr) return false;
+    const HMODULE mod = ::GetModuleHandleA("amtrucks.exe");
+    if (mod == nullptr) {
+        return false;
+    }
+    const auto *base = reinterpret_cast<const uint8_t *>(mod);
+    // We don't know the mapped size without parsing optional header
+    // fields we don't currently consume. The signature scan reads up
+    // to its buffer size, so a 4 MiB ceiling is enough to cover the
+    // PxScene vtable on ATS 1.61.3.1s (the vtable lives at RVA
+    // 0x25020A0 well within the first ~2.5 MiB of .text mapping).
+    // Reading past the actual mapping is unsafe; cap at 8 MiB which
+    // comfortably covers the .rdata + early .text range the scan
+    // needs and never reads past the .text section end + slack.
+    constexpr size_t kMaxScanBytes = 8u * 1024u * 1024u;
+    const PeSectionRange text_sec = FindPeSection(base, kMaxScanBytes, ".text");
+    const PeSectionRange rdata_sec = FindPeSection(base, kMaxScanBytes, ".rdata");
+    if (!text_sec.ok || !rdata_sec.ok) {
+        return false;
+    }
+    const uint8_t *rdata_ptr = base + rdata_sec.rva;
+    const size_t rdata_size = static_cast<size_t>(rdata_sec.size);
+    if (rdata_size == 0 || rdata_size > kMaxScanBytes) {
+        return false;
+    }
+    const uint64_t text_lo =
+        reinterpret_cast<uint64_t>(mod) + text_sec.rva;
+    const uint64_t text_hi = text_lo + text_sec.size;
+
+    cache->scan = PhysXAdapter::MemoryScanFromBufferWithTextRange(
+        rdata_ptr, rdata_size, text_lo, text_hi);
+    cache->have_scan = cache->scan.success;
+
+    if (!cache->scan.success) {
+        return false;
+    }
+    // The vtable_base returned by the scan is an OFFSET INTO THE
+    // BUFFER WE PASSED (i.e., offset into .rdata). ResolveKnownMethods
+    // takes the same buffer + the same base offset + accepted_run,
+    // so the math is the same as in the on-disk test.
+    const bool ok = PhysXAdapter::ResolveKnownMethods(
+        rdata_ptr,
+        rdata_size,
+        cache->scan.vtable.vtable_base,
+        cache->scan.vtable.accepted_run,
+        &cache->resolve);
+    cache->have_resolve = ok;
+    return ok;
+#endif  // _WIN32
+}
+
 void PhysXAdapter::SetConfig(const PhysXAdapterConfig &cfg) {
     cfg_ = cfg;
 }
@@ -155,10 +283,34 @@ bool PhysXAdapter::Install() {
         return false;
     }
     installed_ = true;
-    WALKERCORE_LOG_WARN(
-        "PhysXAdapter::Install: partial — vtable signature scan ready "
-        "(see MemoryScanFromBuffer), slot dispatch pending live PxScene "
-        "verification. Queries fall back to no-hit until then.");
+
+    // Run the real-binary scan + ResolveKnownMethods against the
+    // live amtrucks.exe process when present. The result feeds
+    // walker_dump_physx() so the F12 dump reports actual slot
+    // numbers, not -1 placeholders. When amtrucks.exe is not loaded
+    // (unit tests, debug runs without a game), the cache stays
+    // empty and the dump says "(no live process)".
+    const bool scanned = PhysXAdapter_RuntimeScan(&cache_);
+    if (scanned && cache_.have_resolve) {
+        WALKERCORE_LOG_INFO(
+            "PhysXAdapter::Install: runtime scan resolved %d slots: "
+            "release=%d addActor=%d simulate=%d shiftOrigin=%d "
+            "sweep=%d raycast=%d overlap=%d [TMRealWalk-style probe]",
+            cache_.resolve.release_slot >= 0 ? 1 : 0,
+            cache_.resolve.add_actor_slot,
+            cache_.resolve.simulate_slot,
+            cache_.resolve.shift_origin_slot,
+            cache_.resolve.sweep_slot,
+            cache_.resolve.raycast_slot,
+            cache_.resolve.overlap_slot);
+    } else {
+        WALKERCORE_LOG_WARN(
+            "PhysXAdapter::Install: amtrucks.exe not in-process or "
+            "scan failed; walker_dump_physx will report "
+            "(no live process) for slot columns. Queries fall back "
+            "to no-hit until then.");
+    }
+
     // Log the catalog so the game.log.txt carries a snapshot of which
     // VAs the live ResolveKnownMethods will look for. The trailing
     // [TMRealWalk-style probe] tag matches the M10 collision log so

@@ -43,6 +43,7 @@
 #include "walkercore/CameraState.h"
 #include "walkercore/FrameLoop.h"
 #include "walkercore/Log.h"
+#include "walkercore/PerFrame.h"
 #include "walkercore/PlayerState.h"
 #include "walkercore/WalkerFsm.h"
 #include "walkercore/WindowSubclass.h"
@@ -311,6 +312,33 @@ bool ImGuiOverlay::RenderFrameIfEnabled() {
     }
     ImGui::Text("walks: %d in / %d out   frames: %d",
                 walks_entered_, walks_exited_, frames_rendered_ + 1);
+
+    // M11.5 — first interactive widgets. Now that M11.4 (commit
+    // 61ebc23) installed the WndProc subclass, the ImGui Win32
+    // backend receives real mouse input from the game's WndProc
+    // chain. The buttons below are the simplest verification of
+    // that round-trip: clicking a button must call the corresponding
+    // dump function, the button_clicks_ counter must increment,
+    // and the game log must show the dump output (the user can
+    // compare button_clicks_ before / after a click).
+    //
+    // The widgets are read-only diagnostics — they never mutate
+    // game state, never trigger transitions, and never write to
+    // files. The dump functions are the same walker_dump_state /
+    // walker_dump_pxscene that F12 calls; the button is a
+    // discoverable UI surface for analysts who would rather click
+    // than reach for the keyboard.
+    ImGui::Separator();
+    if (ImGui::Button("Dump state now")) {
+        walker_dump_state();
+        ++button_clicks_;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Dump PxScene")) {
+        walker_dump_pxscene();
+        ++button_clicks_;
+    }
+    ImGui::Text("button clicks: %d", button_clicks_);
     ImGui::End();
 
     ImGui::Render();
@@ -360,6 +388,7 @@ void ImGuiOverlay::ResetForTesting() {
         g_overlay->walks_entered_ = 0;
         g_overlay->walks_exited_ = 0;
         g_overlay->frames_rendered_ = 0;
+        g_overlay->button_clicks_ = 0;
         g_overlay->enabled_ = false;
         g_overlay->supported_ = false;
         g_overlay->frame_loop_ = nullptr;

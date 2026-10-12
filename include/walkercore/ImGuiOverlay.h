@@ -146,6 +146,16 @@ public:
     static void ResetForTesting();
     static int TestRenderCount();
 
+    // M11.5 — counter incremented every time the user clicks an
+    // interactive widget in the overlay (currently: the "Dump state
+    // now" or "Dump PxScene" buttons). The render path exposes the
+    // current value in the overlay so a deploy-side analyst can
+    // confirm "yes, the WndProc subclass is routing click events
+    // to ImGui" by clicking the button and watching the counter
+    // bump in the same frame. The counter is per-DLL-load (reset
+    // by Shutdown via the ResetForTesting path).
+    int button_clicks() const { return button_clicks_; }
+
 private:
     bool enabled_ = false;
     bool supported_ = false;
@@ -155,6 +165,7 @@ private:
     int walks_entered_ = 0;
     int walks_exited_ = 0;
     int frames_rendered_ = 0;
+    int button_clicks_ = 0;
     std::string init_failure_;
 
     // Bump on Shutdown so the render path can detect "context was

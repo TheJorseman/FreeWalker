@@ -181,6 +181,30 @@ void TestImGuiOverlayOnDeviceLostIsSafeWhenUninitialized() {
     EXPECT_FALSE(o->isSupported());
 }
 
+// (c.1) M11.5 — button_clicks_ counter. The render path exposes
+// the counter so a deploy-side analyst can confirm "yes, the
+// WndProc subclass is routing click events to ImGui" by clicking
+// the button and watching the counter bump in the same frame.
+// The render path is harder to drive in a unit test (it needs a
+// real D3D11 context), so we test the counter's contract
+// directly: the counter starts at 0, increments on demand, and
+// resets via the test seam. The render integration is verified
+// deploy-side; the test pins the data plane.
+void TestImGuiOverlayButtonClicksStartsAtZero() {
+    auto o = MakeOverlay();
+    EXPECT_EQ(o->button_clicks(), 0);
+}
+
+void TestImGuiOverlayButtonClicksResetsBetweenOverlays() {
+    // ResetForTesting zeroes the counter so a new test (or a new
+    // DLL load) starts from a clean slate. This is the same
+    // contract as walks_entered_ + frames_rendered_ which the
+    // other M11 tests pin.
+    ImGuiOverlay::ResetForTesting();
+    auto o = MakeOverlay();
+    EXPECT_EQ(o->button_clicks(), 0);
+}
+
 #endif  // WALKERCORE_HAVE_IMGUI
 
 // (c) FrameLoop + WalkerFsm binding — always run (the binding

@@ -320,6 +320,8 @@ void TestImGuiOverlayRenderNoOpWhenDisabled();
 void TestImGuiOverlayRenderNoOpWhenSupportedFalse();
 void TestImGuiOverlayOnDeviceLostIsSafeWhenUninitialized();
 void TestImGuiOverlayBindFrameLoopRoundTrip();
+void TestImGuiOverlayButtonClicksStartsAtZero();
+void TestImGuiOverlayButtonClicksResetsBetweenOverlays();
 void TestImGuiOverlayBindFsmRoundTrip();
 void TestImGuiOverlayResetForTestingClearsBindings();
 void TestApplyOverrideCabinBoxPatch();
@@ -901,6 +903,10 @@ int main() {
     RUN_TEST(walkercore::TestImGuiOverlayRenderNoOpWhenDisabled);
     RUN_TEST(walkercore::TestImGuiOverlayRenderNoOpWhenSupportedFalse);
     RUN_TEST(walkercore::TestImGuiOverlayOnDeviceLostIsSafeWhenUninitialized);
+
+    // M11.5 — button click counter (interactive widgets).
+    RUN_TEST(walkercore::TestImGuiOverlayButtonClicksStartsAtZero);
+    RUN_TEST(walkercore::TestImGuiOverlayButtonClicksResetsBetweenOverlays);
     RUN_TEST(walkercore::TestImGuiOverlayBindFrameLoopRoundTrip);
     RUN_TEST(walkercore::TestImGuiOverlayBindFsmRoundTrip);
     RUN_TEST(walkercore::TestImGuiOverlayResetForTestingClearsBindings);

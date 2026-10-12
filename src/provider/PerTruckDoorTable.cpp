@@ -55,6 +55,57 @@ const TruckDoorConfigRow PerTruckDoorTable::kBuiltInRows_[] = {
     {"vehicle.volvo.vnl",
      {-0.50f, 0.65f, -0.30f,
       2.30f, 1.80f, 2.30f}},
+
+    // Peterbilt 389 — heritage long-hood. Driver door sits closer to
+    // the cabin centre than the 579 because the 389's nose is wider.
+    {"vehicle.peterbilt.389",
+     {-0.50f, 0.55f, -0.20f,
+      2.30f, 1.80f, 2.20f}},
+
+    // Kenworth T680 — aerodynamic mid-roof. The T680's nose is shorter
+    // than the W900 but its cabin is wider (sloped aero fenders).
+    // Door pivot is closer to the cabin anchor.
+    {"vehicle.kenworth.t680",
+     {-0.50f, 0.60f, -0.05f,
+      2.30f, 1.85f, 2.30f}},
+
+    // Kenworth T880 — set-back front axle version of the T680. The
+    // bumper sits further forward of the cabin anchor than the T680.
+    {"vehicle.kenworth.t880",
+     {-0.50f, 0.60f, 0.10f,
+      2.30f, 1.85f, 2.30f}},
+
+    // Freightliner Cascadia 2018 — the post-2018 refresh. The cabin is
+    // slightly taller (1.90 m) and the door pivot is the same as the
+    // pre-refresh Cascadia.
+    {"vehicle.freightliner.cascadia_2018",
+     {-0.50f, 0.60f, -0.20f,
+      2.30f, 1.90f, 2.30f}},
+
+    // Western Star 49X — modern aero long-hood. The 49X's nose is
+    // longer than the W900 (set-forward axle). Door pivot sits
+    // ~0.30 m forward of the cabin anchor.
+    {"vehicle.western_star.49x",
+     {-0.50f, 0.60f, 0.30f,
+      2.30f, 1.85f, 2.40f}},
+
+    // Western Star 4900 — older long-hood, similar to the W900 in
+    // proportions. Set-forward axle but smaller sleeper.
+    {"vehicle.western_star.4900",
+     {-0.50f, 0.60f, 0.20f,
+      2.30f, 1.80f, 2.20f}},
+
+    // International LT — aero mid-roof. Cabin is wider than tall
+    // because the LT's sleeper is shorter than the LoneStar's.
+    {"vehicle.international.lt",
+     {-0.50f, 0.55f, -0.10f,
+      2.30f, 1.80f, 2.30f}},
+
+    // International LoneStar — classic long-hood with a tall,
+    // distinctive sleeper. Cabin height 1.95 m and longer wheelbase.
+    {"vehicle.international.lone_star",
+     {-0.50f, 0.65f, 0.15f,
+      2.30f, 1.95f, 2.40f}},
 };
 
 const size_t PerTruckDoorTable::kBuiltInRowCount_ =

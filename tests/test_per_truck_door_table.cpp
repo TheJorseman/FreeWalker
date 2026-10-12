@@ -69,23 +69,62 @@ void TestPerTruckDoorTableBuiltInUnknownReturnsNull() {
 void TestPerTruckDoorTableBuiltInHasMultipleAtsRows() {
     // At least two rows for two distinct brands. The exact list
     // grows with each M5 commit; this guards against accidental
-    // table-replacement regressions.
+    // table-replacement regressions. Updated whenever a new truck
+    // row is appended to kBuiltInRows_ in PerTruckDoorTable.cpp.
     const PerTruckDoorTable &t = PerTruckDoorTable::BuiltIn();
     size_t hits = 0;
     const char *const kKnown[] = {
+        // Original six (pre-M5-expansion):
         "vehicle.volvo.vnl_2016",
         "vehicle.kenworth.w900",
         "vehicle.peterbilt.579",
         "vehicle.freightliner.cascadia",
         "vehicle.mack.anthem",
         "vehicle.volvo.vnl",
+        // Expansion: more common ATS trucks.
+        "vehicle.peterbilt.389",
+        "vehicle.kenworth.t680",
+        "vehicle.kenworth.t880",
+        "vehicle.freightliner.cascadia_2018",
+        "vehicle.western_star.49x",
+        "vehicle.western_star.4900",
+        "vehicle.international.lt",
+        "vehicle.international.lone_star",
     };
     for (size_t i = 0; i < sizeof(kKnown) / sizeof(kKnown[0]); ++i) {
         if (t.Find(kKnown[i]) != nullptr) {
             hits += 1;
         }
     }
-    EXPECT_EQ(hits, static_cast<size_t>(6));
+    EXPECT_EQ(hits, static_cast<size_t>(14));
+}
+
+void TestPerTruckDoorTableNewRowsAreFindable() {
+    // Per-truck-row sanity check for the most-recently-added models.
+    // Each row must have non-zero door offsets (otherwise the generic
+    // placeholder applies, defeating the purpose of the per-truck
+    // table) and a plausible cabin-size box.
+    const PerTruckDoorTable &t = PerTruckDoorTable::BuiltIn();
+    struct Sample { const char *id; float expected_cabin_y; };
+    const Sample kSamples[] = {
+        // Cascadia 2018 is 1.90 m (post-refresh).
+        {"vehicle.freightliner.cascadia_2018", 1.90f},
+        // Western Star 49X has the tallest sleeper at 1.85 m.
+        {"vehicle.western_star.49x", 1.85f},
+        // International LoneStar matches the Anthem at 1.95 m.
+        {"vehicle.international.lone_star", 1.95f},
+    };
+    for (size_t i = 0; i < sizeof(kSamples) / sizeof(kSamples[0]); ++i) {
+        const TruckDoorConfigOverride *ov = t.Find(kSamples[i].id);
+        EXPECT_TRUE(ov != nullptr);
+        if (ov == nullptr) continue;
+        // Door offsets must be non-zero so the override applies.
+        EXPECT_TRUE(ov->door_outward_x_m != 0.0f);
+        EXPECT_TRUE(ov->door_outward_y_m != 0.0f);
+        // Cabin height must match the expected value (regression guard
+        // against typos in the table).
+        EXPECT_NEAR(ov->cabin_size_y_m, kSamples[i].expected_cabin_y, 1e-5f);
+    }
 }
 
 void TestApplyOverrideNullIsNoOp() {

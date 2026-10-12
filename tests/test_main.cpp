@@ -250,6 +250,7 @@ void TestTruckDoorConfigFromStateOnlyCabinSetFallsBack();
 void TestPerTruckDoorTableBuiltInFindsKnownRow();
 void TestPerTruckDoorTableBuiltInUnknownReturnsNull();
 void TestPerTruckDoorTableBuiltInHasMultipleAtsRows();
+void TestPerTruckDoorTableNewRowsAreFindable();
 void TestApplyOverrideNullIsNoOp();
 void TestApplyOverrideDoorPatchIsSentinelAware();
 void TestApplyOverrideCabinBoxPatch();
@@ -740,6 +741,7 @@ int main() {
     RUN_TEST(walkercore::TestPerTruckDoorTableBuiltInFindsKnownRow);
     RUN_TEST(walkercore::TestPerTruckDoorTableBuiltInUnknownReturnsNull);
     RUN_TEST(walkercore::TestPerTruckDoorTableBuiltInHasMultipleAtsRows);
+    RUN_TEST(walkercore::TestPerTruckDoorTableNewRowsAreFindable);
     RUN_TEST(walkercore::TestApplyOverrideNullIsNoOp);
     RUN_TEST(walkercore::TestApplyOverrideDoorPatchIsSentinelAware);
     RUN_TEST(walkercore::TestApplyOverrideCabinBoxPatch);

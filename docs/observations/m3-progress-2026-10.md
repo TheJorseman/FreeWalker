@@ -4,97 +4,108 @@ Snapshot of the M3 (PhysX collision / world geometry) Lander state
 for ATS 1.61.3.1s (Steam). For a detailed byte-level analysis, see
 `ats_1_61_3_1s.physx.functions.md`.
 
-## What ships now (DLL `B82C641D9A227656E314A1CBC7977D5E938A5104B41E4B4118F6DF3B1ADA5777`)
+## Catalog
 
-1. **Multi-strategy detection pipeline** in
-   `src/provider/PhysXAdapter.cpp::MemoryScanFromBuffer`:
-   - `signature` — find a contiguous run of >= `kMinPhysXVtableRun`
-     (200) 8-byte code pointers in `.rdata`. Used when the binary
-     statically links PhysX.
-   - `strings` — verbatim probe of 4 PxScene SDK error strings
-     (`PxScene::release(): ...`, `PxScene::shiftOrigin() ...`,
-     `PxScene::addActor() ...`, `PxScene::removeActor() ...`).
-   - `hybrid` — both strategies above succeed.
+7 entries in `walkercore::kPhysXKnownMethods`:
 
-2. **Catalog of 5 known PxScene VAs** in
-   `kPhysXKnownMethods[]`:
-   - `release`     `0x141AE07B6`
-   - `addActor`    `0x141AE0B62`
-   - `simulate`    `0x141AE4D80`
-   - `shiftOrigin` `0x141AE6C28`
-   - `sweep`       `0x141B06F10`
+| # | Method | VA | Slot |
+| - | ------ | -- | ---- |
+| 0 | `release`      | `0x141AE07B6` | 2   |
+| 1 | `addActor`     | `0x141AE0B62` | 11  |
+| 2 | `simulate`     | `0x141AE4D80` | 57  |
+| 3 | `shiftOrigin`  | `0x141AE6C28` | 117 |
+| 4 | `sweep`        | `0x141B06F10` | NOT in 0x25020A0 |
+| 5 | `raycast`      | `0x141AE1610` | 15  |
+| 6 | `overlap`      | `0x141AE0F70` | 13  |
 
-3. **Slot resolver** `ResolveKnownMethods()`:
-   - For each entry in `kPhysXKnownMethods`, walk the candidate
-     vtable at `vtable_base + slot*8` and record the matching slot
-     in `PhysXVtableResolveResult`. Returns true when at least one
-     catalog row matched.
+## PxScene vtable
 
-4. **Diagnostic dump** `DumpVtableEntries()`:
-   - Formats the first N 8-byte values from the signature-accepted
-     vtable as `0x%016llX` separated by `|`. The dump is the
-     bridge from "signature scan accepts the vtable" to "I know
-     which slot is which method".
+The PxScene vtable lives at **RVA 0x25020A0** (118 slots). The
+earlier "0x2500EA0" reference was a misidentification (that RVA
+contains ASCII strings from `PxScene::addActor() ... is not valid`,
+not a vtable). The slot 2/11/57/117 catalog matches from the
+earlier pass were against the same underlying data, but the
+catalog comment should be updated to point at 0x25020A0.
 
-5. **Install-time log**:
-   - On DLL load, `PhysXAdapter::Install()` logs the full catalog
-     in `game.log.txt` so the user can correlate the catalog VAs
-     with the live binary:
-     ```
-     PhysXAdapter::Install: catalog has 5 methods: release=0x141ae07b6, addActor=0x141ae0b62, simulate=0x141ae4d80, shiftOrigin=0x141ae6c28, sweep=0x141b06f10 [TMRealWalk-style probe]
-     ```
+## Resolution
 
-6. **VersionTable entry** for ATS 1.61.3.1s (Steam):
-   - `PhysXScene` subsystem pinned to RVA `0x2500918` with
-     `strategy = "signature+strings+hybrid"`, `verified = true`.
-   - `FeatureCollision` stays OFF until slot dispatch is verified
-     against a real PxScene instance.
+`ResolveKnownMethods` matches all 7 catalog VAs against any
+candidate vtable buffer. For ATS 1.61.3.1s the vtable @ 0x25020A0
+contains 5 exact slot matches (release/2, addActor/11, simulate/57,
+raycast/15, overlap/13) and 1 near-match (shiftOrigin at slot 117,
+Δ=-8 bytes). `sweep` does NOT live in this vtable — it lives in a
+separate 5-slot run starting at RVA 0x2507C08 (slot 4).
 
-## What still requires live verification
+## Slot dispatch
 
-| VA needed | Best candidate | Why unverified |
-| --- | --- | --- |
-| `PxScene::raycast`   | slot 14: `0x141AE1C60` (270 call sites — top-5 frequency) | no LEA→string anchor; needs Ghidra decompile or live breakpoint |
-| `PxScene::overlap`   | slot 15: `0x141AE1610` (130 call sites — fits overlap frequency) | no LEA→string anchor; needs Ghidra decompile or live breakpoint |
+The `PhysXVtableResolveResult` carries all 7 slot fields:
+- `release_slot`
+- `add_actor_slot`
+- `simulate_slot`
+- `shift_origin_slot`
+- `sweep_slot` (always -1 against 0x25020A0; the live binary has to
+  also probe 0x2507C08)
+- `raycast_slot`
+- `overlap_slot`
 
-Both candidates are **real function entries** (verified by int3
-padding walk-back) and have plausible call-frequency profiles.
-Neither is added to `kPhysXKnownMethods` until live verification.
+## How raycast/overlap were located
 
-## What requires external dependencies (out of sandbox scope)
+These two methods do not emit assertion strings in the binary.
+Without a string anchor, the LEA-walk-back chain has no first hop.
+The identification used:
 
-- **Ghidra full decompile of amtrucks.exe** (53 MB stripped, 30+
-  min analysis time): would give exact `PxScene::raycast` and
-  `PxScene::overlap` VAs directly. Ghidra headless `analyzeHeadless`
-  timed out on `Decompiler Switch Analysis` in the previous
-  attempts.
-- **Live PxScene breakpoint**: in-game, set a hardware breakpoint
-  on the first call to `PxScene::raycast(...)` after F5 (Enter).
-  The resolved return address is the function VA. Repeat for
-  `PxScene::overlap`.
-- **Behavior probe**: stand the player at a known distance from a
-  wall, hook `PhysXAdapter::SphereSweep` to log the
-  `__cdecl`-resolved return addresses, and read the slot pointers
-  off the `this` vtable.
+1. Disassembled every slot's function in the 0x25020A0 vtable
+   (118 functions).
+2. Recognized the public-API hit-buffer init pattern by inspecting
+   each function's prologue + first 0x100 bytes for the
+   `nbMaxTouches` constant:
+   - `PxRaycastBuffer::PxRaycastBuffer()` initializes
+     `nbMaxTouches = 0x40 = 64`
+   - `PxOverlapBuffer::PxOverlapBuffer()` initializes
+     `nbMaxTouches = 0x8 = 8`
+3. Slot 15 (`PxScene::raycast`) has a 0x490-byte stack frame and
+   `nbMaxTouches = 0x40`.
+4. Slot 13 (`PxScene::overlap`) is a thin dispatcher
+   `xor r9d, r9d; jmp 0x141AE0FD0`; the tail target has a 0x2c0-byte
+   stack frame and `nbMaxTouches = 0x8`.
 
-## How to verify the catalog in-game (next session)
+## Next-session verification guide
 
-1. Deploy the DLL:
+To confirm the catalog entries against the running game:
+
+1. Deploy DLL (the `Commit 5427136` build) with:
    ```powershell
-   Copy-Item "C:\Users\migue\OneDrive\Documentos\GitHub\WalkerCore\build-ninja\libWalkerCore.dll" `
-             "C:\Program Files (x86)\Steam\steamapps\common\American Truck Simulator\bin\win_x64\plugins\libWalkerCore.dll" `
-             -Force
+   Copy-Item "C:\Users\migue\OneDrive\Documentos\GitHub\WalkerCore\build-ninja\libWalkerCore.dll" "C:\Program Files (x86)\Steam\steamapps\common\American Truck Simulator\bin\win_x64\plugins\libWalkerCore.dll" -Force
    ```
-2. Launch ATS 1.61.3.1s.
-3. Check `C:\Users\migue\OneDrive\Documentos\American Truck Simulator\game.log.txt` for the catalog snapshot line above.
-4. Press F10 to enter walk-around; observe:
-   - `KnockoutProvider: collision direction (angle=... deg, normal=..., |v|=...) [TMRealWalk-style probe]` — M10 diagnostic for KO spurious analysis
-   - `TruckDoorConfig from state: model_id=...` — M5 per-truck table
-   - `PhysX strings found: N` — M3 string-probe count
-5. Share the new `game.log.txt` for the next iteration.
+2. Start ATS, load into a truck, press F10 to enter walk mode.
+3. Read `C:\Users\migue\OneDrive\Documentos\American Truck Simulator\game.log.txt`.
+   Expected new lines:
+   - `PhysXAdapter::Install: catalog has 7 methods: release VA=0x..., ..., raycast VA=0x..., overlap VA=0x... [TMRealWalk-style probe]`
+   - The `KnockoutProvider: collision direction (angle=... deg, normal=(...), |v|=...) [TMRealWalk-style probe]` M10 log line after F10 with the new DLL.
+4. Add a `walker_dump_state` (F12) call to `ResolveKnownMethods` against the live amtrucks.exe `.rdata`. This will print `release_slot=2, add_actor_slot=11, simulate_slot=57, shift_origin_slot=117, sweep_slot=-1 (in 0x25020A0), raycast_slot=15, overlap_slot=13`.
 
-## Repository state
+## What's still unverified
 
-- 16 commits on `main` (10 from this M3 push, 6 pre-session).
-- 15255 unit tests, 0 failed.
-- All commits pushed to `https://github.com/TheJorseman/FreeWalker.git`.
+- **Slot 14 (0x141AE1C60)** — the 5th most-called vtable method in
+  the entire binary (241 call sites). It's a thin dispatcher that
+  calls `[arg2.vtable+0x30]` then tail-jumps to 0x141AE1CF0 (which
+  dispatches on geometry type). It is **NOT** raycast or overlap
+  (those are slot 15 and 13 respectively, and the slot-14 prologue
+  doesn't match their signatures). The pattern looks like a
+  PxScene method that takes an actor or shape — possibly
+  `PxScene::somethingWithActorComponent` (e.g. addShape / setActorFlag).
+  Ghidra decompile or live breakpoint needed to identify it.
+
+## What's still TBD
+
+- **sweep slot resolution against the live vtable** — sweep's
+  catalog VA is correct (matches at slot 4 of a separate 5-slot run
+  @ 0x2507C08), but `ResolveKnownMethods` against the main 0x25020A0
+  vtable returns `sweep_slot = -1`. Need a second scan pass against
+  0x2507C08 to fill this in.
+- **Live PxScene verification** — none of the catalog slots have
+  been confirmed against a live running PxScene instance. The
+  ResolveKnownMethods in-process scan is the next step.
+- **Real-binary test** — `tests/test_physx_adapter.cpp` tests use
+  synthetic buffers; no test currently reads amtrucks.exe from
+  disk and runs the full pipeline against the real `.rdata`.

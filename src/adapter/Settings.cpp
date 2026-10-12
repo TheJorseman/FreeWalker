@@ -412,6 +412,22 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     // is loaded. The migration is idempotent and cheap (one boolean
     // compare + one SaveToPath on the upgrade load only).
     bool migrated = false;
+    if (!current_.m2_game_free_camera_shim) {
+        // The shim synthesises Numpad-0 on F10 Walking entry so
+        // the SCS developer free camera activates. With it
+        // disabled, F10 only fires the FSM transition (which is
+        // invisible to the user). The user confirmed the dev
+        // free camera works manually via Numpad-0; flipping
+        // this default to `true` makes F10 produce a visible
+        // camera change out of the box.
+        WALKERCORE_LOG_INFO(
+            "Settings: [m2] game_free_camera_shim was false; "
+            "flipping to true (so F10 synth's Numpad-0 and the "
+            "SCS dev free camera activates — see game_free_"
+            "camera_shim log line on Walking entry).");
+        current_.m2_game_free_camera_shim = true;
+        migrated = true;
+    }
     if (current_.m2_d3d11_hook) {
         WALKERCORE_LOG_WARN(
             "Settings: [m2] d3d11_hook was true; forcing to false (ATS "

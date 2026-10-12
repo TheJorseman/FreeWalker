@@ -732,4 +732,95 @@ void TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues() {
     std::remove(path.c_str());
 }
 
+// -----------------------------------------------------------------------------
+// M2 game_free_camera_shim default flip + auto-migration.
+//
+// Rationale: the shim synthesises Numpad-0 on F10 Walking entry so the
+// SCS developer free camera activates — that's what makes F10 produce a
+// visible camera change for the user. With the shim disabled, F10 only
+// fires the FSM transition (invisible). Default was `false`, which made
+// the lander invisible out-of-the-box. Flip the default to `true` and
+// auto-migrate any pre-existing INI that still has `false` so the
+// upgrade is one-shot: load → migrate → save → done.
+// -----------------------------------------------------------------------------
+
+void TestIniM2GameFreeCameraShimDefaultIsTrue() {
+    // Fresh store (no INI file loaded) uses the code default. Pin that
+    // the new default is `true` — this is the M2 lander observable.
+    SettingsStore defaults;
+    EXPECT_TRUE(defaults.current().m2_game_free_camera_shim);
+}
+
+void TestIniM2GameFreeCameraShimAutoMigratesOldFalseToTrue() {
+    // A pre-existing INI with the OLD default of `false` for
+    // game_free_camera_shim gets auto-migrated to `true` on load
+    // and the migration persists to disk. After the migration the
+    // second load must NOT re-fire (idempotent).
+    const std::string path = MakeTempIniPath("m2_shim_migrate");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "game_free_camera_shim = false\n";
+    }
+
+    // First load — migration fires.
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_TRUE(reader.current().m2_game_free_camera_shim);
+
+    // The migration must have persisted the fix to disk.
+    {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const std::string content = ss.str();
+        EXPECT_TRUE(content.find("game_free_camera_shim = true") !=
+                    std::string::npos);
+    }
+
+    // Second load — already migrated, value stays true.
+    SettingsStore reader2;
+    EXPECT_TRUE(reader2.LoadFromPath(path));
+    EXPECT_TRUE(reader2.current().m2_game_free_camera_shim);
+
+    std::remove(path.c_str());
+}
+
+void TestIniM2GameFreeCameraShimExplicitTrueIsPreserved() {
+    // Explicit `game_free_camera_shim = true` in the INI must not
+    // be flipped or migrated — the new default matches the user
+    // intent. This guards against the migration accidentally
+    // running on every load (it would be expensive — SaveToPath
+    // touches disk and the polling reload fires per second).
+    const std::string path = MakeTempIniPath("m2_shim_explicit_true");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "game_free_camera_shim = true\n";
+    }
+
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_TRUE(reader.current().m2_game_free_camera_shim);
+
+    // Read the file back off disk — the migration should NOT have
+    // added a spurious "flipping to true" log line and the file
+    // should still contain the explicit `true` value (no extra
+    // whitespace, no rewriting).
+    {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const std::string content = ss.str();
+        EXPECT_TRUE(content.find("game_free_camera_shim = true") !=
+                    std::string::npos);
+    }
+
+    std::remove(path.c_str());
+}
+
 }  // namespace walkercore

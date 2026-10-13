@@ -30,45 +30,49 @@ struct KnockoutConfig {
     // a knock-out. Typical pedestrian-vs-car: ~10 m/s instant velocity
     // gain.
     //
-    // The previous default of 12.0 m/s was tuned to allow a 4.5 m/s run
-    // speed + a 9.81 m/s gravity-driven freefall combine to ~10.79 m/s
-    // without tripping, with 12 m/s as the headroom. Empirically, the
-    // in-game DLL on ATS 1.61.3.1s at build 3fbc149 (and the cap-only
-    // follow-ups) still produced spurious 12-38 m/s triggers within
-    // 30-575 ms of a Walking-mode entry from a prior Driving stint, even
-    // though the cap should keep the per-frame |dy| ≤ 0.164 m. The
-    // discrepancy between the cap-derived 10.79 m/s upper bound and the
-    // observed 12-38 m/s triggers suggests motion is reaching
-    // `player_.feet_position` from a path the FrameLoop cap doesn't
-    // cover — likely a leftover stale-tick interaction with the
-    // KnockoutProvider's per-frame tracking_ baseline across the FSM's
-    // Driving ↔ Transition → Walking cycle (the cap is on
-    // `vertical_velocity_` but the per-frame delta the Knockout
-    // heuristic reads is the integrated motion between two consecutive
-    // Tick() calls, which can span sub-frame states). Until the M10
-    // lander brings a real PhysX-derived collision normal, the safe
-    // remediation is to raise the threshold so the heuristic stops
-    // false-tripping while still catching genuine car impacts (real
-    // ped-vs-truck + ped-vs-trailer hits are 25-60 m/s instantaneous).
+    // The previous default of 25.0 m/s was raised as a workaround
+    // after the M11-velocity-cap fix: the in-game DLL on ATS
+    // 1.61.3.1s at build 3fbc149 still produced spurious 12-38 m/s
+    // triggers within 30-575 ms of a Walking-mode entry from a
+    // prior Driving stint, so the threshold was bumped to keep the
+    // heuristic from spamming false-positives in a workflow that
+    // doesn't have a real PxScene yet.
     //
-    // Bumped 12.0 → 25.0 with the M11-velocity-cap fix (commit 3fbc149)
-    // so the heuristic remains meaningful for true impacts without
-    // spamming false-positives in a workflow that doesn't have a real
-    // PxScene yet.
-    double velocity_change_threshold_mps = 25.0;
+    // Lowered 25.0 → 8.0 m/s with the M10-stub-fix commit because
+    // 25 m/s is well above real pedestrian-vs-car impacts (8 m/s is
+    // a 28.8 km/h hit — the lower end of "definitely knocked over"
+    // for an adult, and the threshold the M10 lander wants). The
+    // trade-off is that the 12-38 m/s bogus Y-clamp / FSM-snap
+    // spikes may briefly come back as spurious triggers while the
+    // M10 lander is still a stub. The log line emitted on every
+    // trigger is now the authoritative traceback (dist, dx, dy, dz,
+    // dt, vmax-derived, impact direction in TMRealWalk's
+    // `[physx] angle ... normal=...` format) so the analyst can
+    // tell at a glance whether the trigger is a real hit
+    // (|dx|, |dy|, |dz| roughly comparable to threshold * dt) or a
+    // spurious Y-clamp snap (one axis dominates). The M10 lander
+    // replaces this heuristic with a real PxScene-driven collision
+    // normal; this field stays as the "fallback threshold" knob
+    // until then.
+    double velocity_change_threshold_mps = 8.0;
     // Per-frame position delta above which we treat the move as a
     // programmatic reset (FSM snap to door / seat anchor, teleport,
     // spawn, etc.) and re-prime last_position_ without firing the
-    // knockout heuristic. Real pedestrian-vs-car collisions don't move
-    // a body more than ~1 m in a single 16 ms frame; anything above
-    // that is a snap. Defaults to 1.0 m / frame (~60 m/s instantaneous
-    // velocity — well above any genuine car impact, well below the
-    // "Position snapped back to cabin seat" deltas we observed in the
-    // hook-disabled build, which were 1.15 m–11.5 m per frame). The M10
-    // lander replaces this heuristic with a real PhysX-driven
-    // collision normal and can keep the same field semantics (it's a
-    // "snap re-prime threshold" guard, not a velocity check).
-    double teleport_reprime_distance_m = 1.0;
+    // knockout heuristic. Real pedestrian-vs-car collisions don't
+    // move a body more than ~1 m in a single 16 ms frame; anything
+    // above that is a snap. Bumped 1.0 → 5.0 m so the FSM snap
+    // (PlacePlayerAtDoor / PlacePlayerAtSeat) at the start of
+    // every Driving ↔ Walking transition (the observed 1.15 m –
+    // 11.5 m per-frame deltas) is caught as a snap and re-primed,
+    // rather than triggering knockout. The threshold needs to be
+    // well above the M11 velocity cap * dt (≈ 0.164 m + 0.075 m)
+    // and well above real pedestrian hit magnitudes (~5 m/s * dt =
+    // ~0.085 m), but well below the snap magnitudes we observed
+    // (1.15 m+). 5.0 m is a safe middle ground; the M10 lander
+    // can drop this back to 1.0 m once a real PxScene collision
+    // normal is available and we can distinguish "snap" from "hit"
+    // by inspecting the collision contact, not the position delta.
+    double teleport_reprime_distance_m = 5.0;
     // Recovery duration (seconds). Bumped 8.0 → 1.5 with the
     // M11-velocity-cap fix so a false-positive triggers a brief
     // 1.5-second KnockedOut mode flip rather than the previous 8-second

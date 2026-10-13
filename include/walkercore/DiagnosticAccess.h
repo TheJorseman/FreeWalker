@@ -35,6 +35,7 @@ struct TruckDoorConfig;
 class CouplingProvider;
 class CameraHijack;
 class GameFreeCameraShim;
+class DevCameraCvarPatcher;
 class PxSceneHook;
 class ImGuiOverlay;
 
@@ -152,6 +153,12 @@ void SetCoupling(const CouplingProvider *p);
 // toggles_dispatched counter, last_dispatch_ms, supported flag, and
 // enabled flag. Pass nullptr when the shim is destroyed.
 void SetGameFreeCameraShim(const GameFreeCameraShim *g);
+
+// Wire the M2 dev-camera cvar patcher so
+// walker_dump_dev_camera_cvar_patcher() can report the patch attempt
+// counters, the rebased cvar name + value VAs, and the before/after
+// cvar value bytes. Pass nullptr when the patcher is destroyed.
+void SetDevCameraCvarPatcher(const DevCameraCvarPatcher *p);
 
 // Wire the M2 long-term camera hijack so walker_dump_camera_hijack()
 // can report the install_attempts / dispatch_calls / install_error

@@ -370,22 +370,23 @@ void TestKnockoutTeleportReprime() {
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
-        // Snap 2.0 m in one frame (above the 1.0 m default teleport
+        // Snap 6.0 m in one frame (above the 5.0 m default teleport
         // threshold; matches the 1.15 m – 11.5 m deltas we observed
-        // during FSM transitions in the live build).
-        player.feet_position = Vec3{2.0, 0, 0};
+        // during FSM transitions in the live build, plus margin for
+        // any future snap that overshoots).
+        player.feet_position = Vec3{6.0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Steady at the new position — must remain not knocked out.
-        player.feet_position = Vec3{2.0, 0, 0};
+        player.feet_position = Vec3{6.0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // A real sub-teleport car impact at the new position —
         // 0.7 m / 16 ms = 43.75 m/s — must still fire the velocity
         // branch (the teleport re-prime is a guard, not a kill-switch).
-        player.feet_position = Vec3{2.7, 0, 0};
+        player.feet_position = Vec3{6.7, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
     }
@@ -703,9 +704,9 @@ void TestKnockoutPrimeResetsTrackingBaseline() {
 // reverts to false-positive spamming.
 void TestKnockoutConfigDefaultValues() {
     KnockoutConfig cfg;
-    EXPECT_NEAR(cfg.velocity_change_threshold_mps, 25.0, 1e-6);
+    EXPECT_NEAR(cfg.velocity_change_threshold_mps, 8.0, 1e-6);
     EXPECT_NEAR(cfg.recovery_seconds, 1.5, 1e-6);
-    EXPECT_NEAR(cfg.teleport_reprime_distance_m, 1.0, 1e-6);
+    EXPECT_NEAR(cfg.teleport_reprime_distance_m, 5.0, 1e-6);
     EXPECT_NEAR(cfg.fall_height_threshold_m, 4.0, 1e-6);
 }
 

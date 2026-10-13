@@ -28,11 +28,13 @@
 #include "walkercore/CameraState.h"
 #include "walkercore/D3D11Hook.h"
 #include "walkercore/D3D12Hook.h"
+#include "walkercore/DevCameraCvarPatcher.h"
 #include "walkercore/DiagnosticAccess.h"
 #include "walkercore/FrameLoop.h"
 #include "walkercore/FuelPump.h"
 #include "walkercore/GameFreeCameraShim.h"
 #include "walkercore/CameraHijack.h"
+#include "walkercore/DevCameraCvarPatcher.h"
 #include "walkercore/PxSceneHook.h"
 #include "walkercore/ImGuiOverlay.h"
 #include "walkercore/GameVersion.h"
@@ -226,6 +228,15 @@ walkercore::SettingsMenu *g_settings_menu = nullptr;
 // movement in the world. Disabled by default; flip the INI gate to
 // opt in.
 walkercore::GameFreeCameraShim *g_game_free_camera_shim = nullptr;
+
+// M2 lander: dev-camera cvar patcher. One-shot, in-memory patch of
+// amtrucks.exe's `g_developer` cvar from "0" to "1". Runs at
+// scs_telemetry_init time so the shim (and any future dev-camera
+// path) sees the gate already open. The patch is best-effort; if
+// the cvar location has moved or the page is not writable the
+// patcher logs a traceback and the user can fall back to
+// config.cfg.
+walkercore::DevCameraCvarPatcher *g_dev_cvar_patcher = nullptr;
 
 // M2 long-term camera hijack. MinHooks the camera state dispatcher
 // at RVA 0xC22F40 (function 0x140C22F40 in amtrucks.exe) so the
@@ -1009,6 +1020,30 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   walkercore::diagnostic_internal::SetGameFreeCameraShim(
       g_game_free_camera_shim);
 
+  // M2 lander: dev-camera cvar patcher. Honours the INI gate
+  // `[m2] dev_cvar_patcher` (default true). Runs the one-shot
+  // patch in scs_telemetry_init's caller context (we are not on a
+  // worker thread; the patch touches game memory but only the
+  // cvar value buffer + a single PAGE_EXECUTE_READWRITE upgrade
+  // around the write). The GameFreeCameraShim reads the patcher's
+  // last_result() so its F10 walking-entry log line surfaces the
+  // patched cvar VA + before/after values for the analyst.
+  g_dev_cvar_patcher = new walkercore::DevCameraCvarPatcher();
+  g_dev_cvar_patcher->SetEnabled(
+      g_settings != nullptr && g_settings->current().m2_dev_cvar_patcher);
+  g_dev_cvar_patcher->PatchOnce();
+  walkercore::diagnostic_internal::SetDevCameraCvarPatcher(
+      g_dev_cvar_patcher);
+  // Wire the patcher's outcome into the shim. The shim's next
+  // OnEnterWalking log line then reports whether the cvar was
+  // patched, skipped, or never discovered, with the rebased VA +
+  // before/after bytes for traceback. The shim never deletes the
+  // pointer (it just reads it); both objects outlive the shim's
+  // shim's last F10 because both are torn down in
+  // scs_telemetry_shutdown after the per-frame thread stops.
+  g_game_free_camera_shim->BindDevCameraPatchResult(
+      &g_dev_cvar_patcher->last_result());
+
   // M2 long-term camera hijack. Always allocate the object — even
   // when the gate is closed, walker_dump_camera_hijack() must surface
   // "(not initialized — gate closed)" instead of crashing. The
@@ -1373,6 +1408,15 @@ extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
   if (g_game_free_camera_shim != nullptr) {
     delete g_game_free_camera_shim;
     g_game_free_camera_shim = nullptr;
+  }
+  // M2 dev-camera cvar patcher. Mirror cleared first, then a plain
+  // delete (the patcher owns no Windows handles — the
+  // VirtualProtect that wrapped the one-byte cvar write restored
+  // the page protection before PatchOnce() returned).
+  walkercore::diagnostic_internal::SetDevCameraCvarPatcher(nullptr);
+  if (g_dev_cvar_patcher != nullptr) {
+    delete g_dev_cvar_patcher;
+    g_dev_cvar_patcher = nullptr;
   }
   walkercore::diagnostic_internal::SetCameraHijack(nullptr);
   if (g_camera_hijack != nullptr) {

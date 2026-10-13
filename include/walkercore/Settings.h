@@ -122,6 +122,19 @@ struct WalkerSettings {
     // the surface + ABI are wired in this commit).
     bool m11_imgui_overlay = false;
 
+    // M2 lander: dev-camera cvar patcher. Default `true` (enabled).
+    // When true, the DevCameraCvarPatcher scans amtrucks.exe's mapped
+    // memory for the `g_developer` cvar and patches it from "0" to
+    // "1" so any dev-camera toggle path (the SCS `free_camera_u`
+    // concommand, the dev UI button `o_im_freecam`, future in-process
+    // camera manager hookups) can take effect. The patch is one-shot
+    // per process and the user can opt out by setting `[m2]
+    // dev_cvar_patcher = false` in `WalkerCore.ini`. The patcher is
+    // independent of `m2_game_free_camera_shim`: users who disable the
+    // shim still want the cvar patched so any other dev-camera path
+    // can work. See `DevCameraCvarPatcher.h` for the full rationale.
+    bool m2_dev_cvar_patcher = true;
+
     // M3 lander: in-process MinHook on PxScene::addActor at RVA
     // 0x1AE0B62 in amtrucks.exe. The hook captures the live
     // PxScene instance pointer (waiting for the first addActor

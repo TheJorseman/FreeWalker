@@ -93,6 +93,7 @@ add_library(WalkerCore SHARED
     src/provider/CameraHijack.cpp
     src/provider/D3D11Hook.cpp
     src/provider/D3D12Hook.cpp
+    src/provider/DevCameraCvarPatcher.cpp
     src/provider/FuelPump.cpp
     src/provider/GameFreeCameraShim.cpp
     src/provider/InputHook.cpp

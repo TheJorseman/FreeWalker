@@ -13,7 +13,11 @@
 
 #include "walkercore/GameFreeCameraShim.h"
 
+#include "walkercore/DevCameraCvarPatcher.h"
 #include "walkercore/Log.h"
+
+#include <cstdio>
+#include <cstdint>
 
 #include <algorithm>
 #include <cstdint>
@@ -261,6 +265,10 @@ void GameFreeCameraShim::SetExitPressVk(unsigned int vk) {
     exit_press_vk_ = vk;
 }
 void GameFreeCameraShim::BindGameHwnd(HWND hwnd) { hwnd_ = hwnd; }
+void GameFreeCameraShim::BindDevCameraPatchResult(
+    const DevCameraCvarPatchResult *r) {
+    dev_cvar_patch_result_ = r;
+}
 
 void GameFreeCameraShim::ProbeGDeveloperFromConfig() {
     const std::string path = ProbeConfigPath();
@@ -276,33 +284,95 @@ void GameFreeCameraShim::ProbeGDeveloperFromConfig() {
 
 void GameFreeCameraShim::OnEnterWalking() {
     walks_entered_++;
+    // Compose a single, comprehensive traceback line for the F10
+    // Walking-entry event. The previous version split the log into
+    // three branches (disabled / unsupported / dispatched) which
+    // meant the analyst had to correlate 3 lines per F10 to figure
+    // out what happened. The new line covers all five states in one
+    // shot so the next session can grep game.log.txt for
+    // `GameFreeCameraShim: Walking entry` and get a self-explanatory
+    // line every time, regardless of whether the shim fired, the
+    // gate was off, the cvar was 0, etc.
+    const char *path_name =
+        last_dispatch_path_ == 2
+            ? "PostMessage"
+            : (last_dispatch_path_ == 1 ? "SendInput" : "none");
+    const char *gate_str = enabled_ ? "on" : "off";
+    const char *cvar_str = supported_ ? "1" : "0/missing";
+    const char *patch_outcome = "unbound";
+    char patch_cvar_buf[13] = "?";
+    uint64_t patch_value_va = 0;
+    if (dev_cvar_patch_result_ != nullptr) {
+        if (dev_cvar_patch_result_->patched) {
+            patch_outcome = "patched 0->1";
+        } else if (dev_cvar_patch_result_->skipped) {
+            patch_outcome = "skipped";
+        } else {
+            patch_outcome = "no-op";
+        }
+        // Show the rebased cvar value VA + the first 12 bytes of
+        // the value buffer (post-patch) so the analyst can confirm
+        // the patch landed.
+        patch_value_va = dev_cvar_patch_result_->cvar_value_va;
+        const char *src =
+            dev_cvar_patch_result_->cvar_value_after[0] != '\0'
+                ? dev_cvar_patch_result_->cvar_value_after
+                : dev_cvar_patch_result_->cvar_value_before;
+        std::snprintf(patch_cvar_buf, sizeof(patch_cvar_buf), "%.12s", src);
+    }
     if (!enabled_) {
         WALKERCORE_LOG_INFO(
-            "GameFreeCameraShim: Walking entry #%d (shim disabled — "
-            "set [m2] game_free_camera_shim = 1 to drive SCS free "
-            "camera from F10)",
-            walks_entered_);
+            "GameFreeCameraShim: Walking entry #%d (gate=%s, "
+            "config-cfg[probe]='%s', dev_cvar_patcher=%s cvar_va=0x%llX "
+            "value=%.12s, hwnd=0x%llX) — Set [m2] game_free_camera_shim "
+            "= true in WalkerCore.ini to send the dev free camera "
+            "toggle on F10. The dev_cvar_patcher independently flipped "
+            "g_developer '0' -> '1' in amtrucks.exe memory so any "
+            "future dev-camera path (the `free_camera_u` console "
+            "command, the dev UI button o_im_freecam, future "
+            "in-process camera manager hooks) works without editing "
+            "Documents\\American Truck Simulator\\config.cfg.)",
+            walks_entered_, gate_str, cvar_str, patch_outcome,
+            static_cast<unsigned long long>(patch_value_va), patch_cvar_buf,
+            static_cast<unsigned long long>(
+                reinterpret_cast<std::uintptr_t>(hwnd_)));
         return;
     }
     if (!supported_) {
         WALKERCORE_LOG_INFO(
-            "GameFreeCameraShim: Walking entry #%d — supported=false "
-            "(g_developer not '1' in config.cfg, or config not found). "
-            "F10 will NOT toggle the camera until the user enables "
-            "g_developer in the game's config.cfg.",
-            walks_entered_);
+            "GameFreeCameraShim: Walking entry #%d (gate=%s, "
+            "config-cfg[probe]='%s', dev_cvar_patcher=%s cvar_va=0x%llX "
+            "value=%.12s, hwnd=0x%llX) — The shim synthesised the "
+            "toggle VK but the game's controls.sii binds Numpad-0 to "
+            "the user's chosen action (the dev free camera is UI-"
+            "button only via o_im_freecam, no action-name binding in "
+            "the stock profile). Two ways forward: (a) add a binding "
+            "for the toggle VK in inputs.dat your kitchen <profile>\\"
+            "controls.sii that maps to a dev-camera action (or to "
+            "free_camera_u), then re-deploy, or (b) use the game's "
+            "dev console (`~` key) and type `free_camera_u` while "
+            "in the dev free camera context.)",
+            walks_entered_, gate_str, cvar_str, patch_outcome,
+            static_cast<unsigned long long>(patch_value_va), patch_cvar_buf,
+            static_cast<unsigned long long>(
+                reinterpret_cast<std::uintptr_t>(hwnd_)));
         return;
     }
     const int dispatched = TriggerToggle();
     WALKERCORE_LOG_INFO(
         "GameFreeCameraShim: Walking entry #%d -> dispatched %d key "
-        "event(s) (toggle VK=0x%X, exit press VK=0x%X, path=%s "
-        "hwnd=0x%X)",
-        walks_entered_, dispatched, toggle_vk_, exit_press_vk_,
-        last_dispatch_path_ == 2 ? "PostMessage"
-                                 : (last_dispatch_path_ == 1 ? "SendInput"
-                                                            : "none"),
-        last_postmessage_hwnd_diag_);
+        "event(s) (gate=%s, config-cfg[probe]='%s', dev_cvar_patcher=%s "
+        "cvar_va=0x%llX value=%.12s, toggle VK=0x%X, exit VK=0x%X, "
+        "path=%s hwnd=0x%llX) — The dev_cvar_patcher flipped "
+        "g_developer in memory before this dispatch; if the dev free "
+        "camera still does not activate, the game's controls.sii "
+        "binding for Numpad-0 routes the key to a different action "
+        "(see docs/observations/tmrealwalk-findings.md).",
+        walks_entered_, dispatched, gate_str, cvar_str, patch_outcome,
+        static_cast<unsigned long long>(patch_value_va), patch_cvar_buf,
+        toggle_vk_, exit_press_vk_, path_name,
+        static_cast<unsigned long long>(
+            reinterpret_cast<std::uintptr_t>(hwnd_)));
 }
 
 void GameFreeCameraShim::OnExitWalking() {

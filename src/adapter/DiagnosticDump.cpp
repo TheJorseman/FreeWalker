@@ -23,6 +23,7 @@
 #include "walkercore/CameraState.h"
 #include "walkercore/D3D11Hook.h"
 #include "walkercore/D3D12Hook.h"
+#include "walkercore/DevCameraCvarPatcher.h"
 #include "walkercore/DiagnosticAccess.h"
 #include "walkercore/FrameLoop.h"
 #include "walkercore/GameVersion.h"
@@ -96,6 +97,13 @@ const CouplingProvider *g_coupling = nullptr;
 // supported / enabled flags so a deploy-side analyst can confirm the
 // shim fired on F10.
 GameFreeCameraShim *g_game_free_camera_shim = nullptr;
+// M2 dev-camera cvar patcher. Wired by PluginEntry at
+// scs_telemetry_init time; null until then. Read by
+// walker_dump_dev_camera_cvar_patcher() to surface the patch
+// attempt counters, the rebased cvar name + value VAs, and the
+// before/after cvar value bytes so the analyst can confirm the
+// patch succeeded (or follow the traceback when it skipped).
+DevCameraCvarPatcher *g_dev_cvar_patcher = nullptr;
 // M2 long-term camera hijack (dispatcher MinHook). Wired by
 // PluginEntry at scs_telemetry_init time when the [m2] camera_hijack
 // gate is enabled; null until then. Read by walker_dump_camera_hijack()
@@ -224,6 +232,9 @@ void SetPhysX(const PhysXAdapter *p) { g_physx = p; }
 void SetCoupling(const CouplingProvider *p) { g_coupling = p; }
 void SetGameFreeCameraShim(const GameFreeCameraShim *g) {
     g_game_free_camera_shim = const_cast<GameFreeCameraShim *>(g);
+}
+void SetDevCameraCvarPatcher(const DevCameraCvarPatcher *p) {
+    g_dev_cvar_patcher = const_cast<DevCameraCvarPatcher *>(p);
 }
 void SetCameraHijack(const CameraHijack *h) {
     g_camera_hijack = const_cast<CameraHijack *>(h);
@@ -1340,6 +1351,60 @@ walker_game_free_camera_shim_set_enabled(int enabled) {
     g_game_free_camera_shim->SetEnabled(enabled != 0);
 }
 
+// --- M2 dev-camera cvar patcher ----------------------------------------
+
+extern "C" __declspec(dllexport) int
+walker_dev_camera_cvar_patcher_supported(void) {
+    using namespace walkercore;
+    if (g_dev_cvar_patcher == nullptr) return 0;
+    return g_dev_cvar_patcher->last_result().cvar_name_va != 0 ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) int
+walker_dev_camera_cvar_patcher_run_once(void) {
+    using namespace walkercore;
+    if (g_dev_cvar_patcher == nullptr) return 0;
+    const DevCameraCvarPatchResult r = g_dev_cvar_patcher->PatchOnce();
+    return r.patched ? 2 : (r.skipped ? 1 : 0);
+}
+
+extern "C" __declspec(dllexport) void
+walker_dump_dev_camera_cvar_patcher(void) {
+    using namespace walkercore;
+    WALKERCORE_LOG_INFO("--- WalkerCore dev-camera cvar patcher ---");
+    if (g_dev_cvar_patcher == nullptr) {
+        WALKERCORE_LOG_INFO("patcher             : (not initialized)");
+        WALKERCORE_LOG_INFO("--- end dev-camera cvar patcher ---");
+        return;
+    }
+    const DevCameraCvarPatcher *p = g_dev_cvar_patcher;
+    const DevCameraCvarPatchResult &r = p->last_result();
+    WALKERCORE_LOG_INFO("enabled             : %s",
+                        p->isEnabled() ? "true" : "false");
+    WALKERCORE_LOG_INFO("runs                : %d", p->runs());
+    WALKERCORE_LOG_INFO("patches             : %d", p->patches());
+    WALKERCORE_LOG_INFO("skips_already       : %d", p->skips_already_patched());
+    WALKERCORE_LOG_INFO("skips_disabled      : %d", p->skips_disabled());
+    WALKERCORE_LOG_INFO("skips_no_module     : %d", p->skips_no_module());
+    WALKERCORE_LOG_INFO("skips_sig_mismatch  : %d", p->skips_signature_mismatch());
+    WALKERCORE_LOG_INFO("skips_value_unread  : %d", p->skips_value_unreadable());
+    WALKERCORE_LOG_INFO("skips_protect_fail  : %d", p->skips_protect_failed());
+    WALKERCORE_LOG_INFO(
+        "cvar name VA        : 0x%llX (RVA 0x%llX)",
+        static_cast<unsigned long long>(r.cvar_name_va),
+        static_cast<unsigned long long>(p->name_rva()));
+    WALKERCORE_LOG_INFO(
+        "cvar value VA       : 0x%llX",
+        static_cast<unsigned long long>(r.cvar_value_va));
+    WALKERCORE_LOG_INFO("cvar value before   : '%.24s'", r.cvar_value_before);
+    WALKERCORE_LOG_INFO("cvar value after    : '%.24s'", r.cvar_value_after);
+    WALKERCORE_LOG_INFO(
+        "last outcome        : %s%s",
+        r.patched ? "patched" : (r.skipped ? "skipped" : "no-op"),
+        r.skipped ? " (see counters above)" : "");
+    WALKERCORE_LOG_INFO("--- end dev-camera cvar patcher ---");
+}
+
 // --- M3.5 PxScene runtime hook ----------------------------------------
 
 extern "C" __declspec(dllexport) int walker_pxscene_supported(void) {
@@ -1486,6 +1551,9 @@ extern "C" __declspec(dllexport) void walker_dump_build_info(void) {
         "walker_game_free_camera_shim_on_exit_walking",
         "walker_game_free_camera_shim_toggle_now",
         "walker_game_free_camera_shim_set_enabled",
+        "walker_dump_dev_camera_cvar_patcher",
+        "walker_dev_camera_cvar_patcher_supported",
+        "walker_dev_camera_cvar_patcher_run_once",
         "walker_pxscene_supported", "walker_pxscene_instance",
         "walker_dump_pxscene", "walker_imgui_overlay_supported",
         "walker_imgui_overlay_set_enabled", "walker_dump_imgui_overlay",

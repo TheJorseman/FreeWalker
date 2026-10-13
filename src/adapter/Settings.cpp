@@ -344,6 +344,13 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                 // Default 0. Set `true` to opt back in on a known-clean
                 // stack.
                 loaded.m2_d3d12_hook = bv;
+            } else if (lkey == "dev_cvar_patcher" && TryParseBool(value, &bv)) {
+                // M2 lander: enable the dev-camera cvar patcher.
+                // Default `true` so the patcher is in effect out of
+                // the box; the shim and the dev UI can rely on
+                // g_developer=1 in memory after the first
+                // scs_telemetry_init call.
+                loaded.m2_dev_cvar_patcher = bv;
             } else if (lkey == "camera_hijack_install" && TryParseBool(value, &bv)) {
                 // M2 long-term: in-process MinHook on the SCS camera
                 // state dispatcher at RVA 0xC22F40 in amtrucks.exe.
@@ -576,6 +583,7 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "d3d11_hook = " << (current_.m2_d3d11_hook ? "true" : "false") << "\n";
     f << "d3d12_hook = " << (current_.m2_d3d12_hook ? "true" : "false") << "\n";
     f << "camera_hijack_install = " << (current_.m2_camera_hijack_install ? "true" : "false") << "\n";
+    f << "dev_cvar_patcher = " << (current_.m2_dev_cvar_patcher ? "true" : "false") << "\n";
     f << "\n";
     f << "[m3]\n";
     f << "# PxScene::addActor MinHook install gate. Default 0 — the\n";

@@ -20,6 +20,7 @@ add_library(WalkerCoreTestLib STATIC
     ${CMAKE_SOURCE_DIR}/src/provider/CameraHijack.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/D3D11Hook.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/D3D12Hook.cpp
+    ${CMAKE_SOURCE_DIR}/src/provider/DevCameraCvarPatcher.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/FuelPump.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/GameFreeCameraShim.cpp
     ${CMAKE_SOURCE_DIR}/src/provider/InputHook.cpp
@@ -99,6 +100,7 @@ add_executable(WalkerCoreTests
     test_physx_adapter.cpp
     test_per_truck_door_table.cpp
     test_game_free_camera_shim.cpp
+    test_dev_camera_cvar_patcher.cpp
     test_px_scene_hook.cpp
     test_imgui_overlay.cpp
     test_window_subclass.cpp)

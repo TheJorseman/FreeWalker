@@ -50,6 +50,14 @@
 #include <windows.h>
 #endif
 
+// Forward declaration so the shim can read the patcher's last
+// result without depending on the patcher's full definition. The
+// definition is in DevCameraCvarPatcher.h; PluginEntry pulls both
+// in the same translation unit.
+namespace walkercore {
+struct DevCameraCvarPatchResult;
+}  // namespace walkercore
+
 namespace walkercore {
 
 class GameFreeCameraShim {
@@ -97,6 +105,14 @@ public:
     // (single text scan, ~64 KiB) and runs at most once per call.
     void ProbeGDeveloperFromConfig();
     bool isSupported() const { return supported_; }
+
+    // Bind the dev-camera cvar patcher's last result so the shim
+    // can include it in the F10 Walking-entry log line. Pointer is
+    // owned by the patcher; the shim never deletes or copies it.
+    // Pass nullptr to clear the binding (e.g. after shutdown).
+    // The patched / skipped / cvar-name / cvar-value fields appear
+    // in the next OnEnterWalking log line for traceback.
+    void BindDevCameraPatchResult(const DevCameraCvarPatchResult *r);
     // Test-only: force supported_ to a specific value so the unit
     // tests can exercise the dispatch path (TriggerToggle is a no-op
     // when supported_ is false). Not part of the runtime API — only
@@ -160,6 +176,7 @@ private:
     unsigned int exit_press_vk_ = 0;    // 0 = no separate exit press
     bool exiting_walking_ = false;
     HWND hwnd_ = nullptr;              // bound game window — gates dispatch
+    const DevCameraCvarPatchResult *dev_cvar_patch_result_ = nullptr;
     int last_dispatch_path_ = 0;       // 0 = none, 1 = SendInput
     unsigned int last_postmessage_hwnd_diag_ = 0;  // lower 32 bits of the HWND we last targeted
     // Echo-suppression: the keystrokes we SendInput come back to our

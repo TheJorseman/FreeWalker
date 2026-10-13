@@ -1201,6 +1201,12 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   // avoid a stale dereference.
   g_imgui_overlay->BindFrameLoop(g_frame_loop);
   g_imgui_overlay->BindFsm(g_fsm);
+  // M11: bind the in-game settings menu so the overlay's render
+  // path calls SettingsMenu::Render() once per frame. A null
+  // binding is a no-op. The pointer is borrowed — the lifetime is
+  // managed by PluginEntry; scs_telemetry_shutdown unbinds
+  // before delete below.
+  g_imgui_overlay->BindSettingsMenu(g_settings_menu);
   walkercore::diagnostic_internal::SetImGuiOverlay(g_imgui_overlay);
 
   // M7: door animator. Tweens the driver's door swing angle when the
@@ -1531,6 +1537,7 @@ extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
   if (g_imgui_overlay != nullptr) {
     g_imgui_overlay->BindFrameLoop(nullptr);
     g_imgui_overlay->BindFsm(nullptr);
+    g_imgui_overlay->BindSettingsMenu(nullptr);
     delete g_imgui_overlay;
     g_imgui_overlay = nullptr;
   }

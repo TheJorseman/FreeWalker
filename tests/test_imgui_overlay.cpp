@@ -254,4 +254,41 @@ void TestImGuiOverlayResetForTestingClearsBindings() {
     EXPECT_FALSE(o->fsm_bound());
 }
 
+// M11: bind the in-game settings menu so the overlay's render
+// path calls SettingsMenu::Render() each frame. The binding is
+// a borrowed pointer; the accessors are the canonical test seam.
+void TestImGuiOverlayBindSettingsMenuRoundTrip() {
+    auto o = MakeOverlay();
+    EXPECT_FALSE(o->settings_menu_bound());
+    // The pointer is a borrowed (non-owning) handle; the value
+    // itself is not dereferenced through the accessors, so an
+    // int* cast is a well-defined test fixture. The real
+    // SettingsMenu pointer lives in PluginEntry and is bound at
+    // scs_telemetry_init time.
+    int sentinel = 0;
+    o->BindSettingsMenu(reinterpret_cast<SettingsMenu *>(&sentinel));
+    EXPECT_TRUE(o->settings_menu_bound());
+    o->BindSettingsMenu(nullptr);
+    EXPECT_FALSE(o->settings_menu_bound());
+}
+
+void TestImGuiOverlayBindSettingsMenuIndependentFromOtherBindings() {
+    // Pin: the settings menu binding flag is independent of
+    // FrameLoop / WalkerFsm. A user can rebind the menu without
+    // touching the other pointers (e.g. swapping the menu
+    // implementation while keeping the live frame loop + fsm).
+    auto o = MakeOverlay();
+    int sentinel = 0;
+    o->BindFrameLoop(reinterpret_cast<FrameLoop *>(&sentinel));
+    o->BindFsm(reinterpret_cast<WalkerFsm *>(&sentinel));
+    o->BindSettingsMenu(reinterpret_cast<SettingsMenu *>(&sentinel));
+    EXPECT_TRUE(o->frame_loop_bound());
+    EXPECT_TRUE(o->fsm_bound());
+    EXPECT_TRUE(o->settings_menu_bound());
+    o->BindSettingsMenu(nullptr);
+    EXPECT_TRUE(o->frame_loop_bound());
+    EXPECT_TRUE(o->fsm_bound());
+    EXPECT_FALSE(o->settings_menu_bound());
+}
+
 }  // namespace walkercore

@@ -35,6 +35,7 @@
 // render_frame_if_enabled).
 
 #include "walkercore/ImGuiOverlay.h"
+#include "walkercore/SettingsMenu.h"
 
 #include <cstdio>
 #include <string>
@@ -362,6 +363,16 @@ bool ImGuiOverlay::RenderFrameIfEnabled() {
     }
     ImGui::Text("button clicks: %d", button_clicks_);
     ImGui::End();
+
+    // M11: hand the active ImGui frame to the in-game settings
+    // menu. SettingsMenu::Render() does the Begin/End block and
+    // the slider/bool/keybinding widgets; the overlay's only job
+    // is to call it inside our NewFrame/EndFrame window so the
+    // menu's draw commands land in the same ImGui::Render output
+    // as the status window above. A null binding is a no-op.
+    if (settings_menu_ != nullptr) {
+        settings_menu_->Render();
+    }
 
     ImGui::Render();
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());

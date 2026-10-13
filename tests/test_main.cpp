@@ -403,6 +403,10 @@ void TestImGuiOverlayButtonClicksStartsAtZero();
 void TestImGuiOverlayButtonClicksResetsBetweenOverlays();
 void TestImGuiOverlayBindFsmRoundTrip();
 void TestImGuiOverlayResetForTestingClearsBindings();
+// M11: bind the in-game settings menu so the overlay's render
+// path calls SettingsMenu::Render() each frame.
+void TestImGuiOverlayBindSettingsMenuRoundTrip();
+void TestImGuiOverlayBindSettingsMenuIndependentFromOtherBindings();
 void TestApplyOverrideCabinBoxPatch();
 void TestTruckDoorConfigAppliesOverride();
 
@@ -1063,6 +1067,8 @@ int main() {
     RUN_TEST(walkercore::TestImGuiOverlayBindFrameLoopRoundTrip);
     RUN_TEST(walkercore::TestImGuiOverlayBindFsmRoundTrip);
     RUN_TEST(walkercore::TestImGuiOverlayResetForTestingClearsBindings);
+    RUN_TEST(walkercore::TestImGuiOverlayBindSettingsMenuRoundTrip);
+    RUN_TEST(walkercore::TestImGuiOverlayBindSettingsMenuIndependentFromOtherBindings);
 
     // M9 SCS configuration event + CouplingProvider real-hook probes.
     RUN_TEST(walkercore::TestScsTelemetryProviderRegisterEventsNullIsSafe);

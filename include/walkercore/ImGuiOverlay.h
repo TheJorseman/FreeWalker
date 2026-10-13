@@ -137,8 +137,16 @@ public:
     // section when the bound pointer is null.
     void BindFrameLoop(class FrameLoop *loop) { frame_loop_ = loop; }
     void BindFsm(class WalkerFsm *fsm) { fsm_ = fsm; }
+    // M11: bind the in-game settings menu so the overlay's render
+    // path calls SettingsMenu::Render() once per frame. The menu
+    // owns its widget layout (sliders, bools, key bindings); the
+    // overlay is just the place where the draw call lands inside
+    // the active ImGui::NewFrame/EndFrame block. A null binding is
+    // a no-op (the overlay's status window is unaffected).
+    void BindSettingsMenu(class SettingsMenu *m) { settings_menu_ = m; }
     bool frame_loop_bound() const { return frame_loop_ != nullptr; }
     bool fsm_bound() const { return fsm_ != nullptr; }
+    bool settings_menu_bound() const { return settings_menu_ != nullptr; }
 
     // -- Test seams --------------------------------------------------------
     // Pure helpers exposed for the unit-test suite. Not part of
@@ -180,6 +188,10 @@ private:
     // managed by PluginEntry.
     class FrameLoop *frame_loop_ = nullptr;
     class WalkerFsm *fsm_ = nullptr;
+    // M11: bound settings menu (sibling borrow, not owned).
+    // SettingsMenu::Render() runs inside the overlay's ImGui frame
+    // each tick when the menu is open and this pointer is non-null.
+    class SettingsMenu *settings_menu_ = nullptr;
 };
 
 }  // namespace walkercore

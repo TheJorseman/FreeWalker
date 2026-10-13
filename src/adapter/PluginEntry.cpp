@@ -630,9 +630,15 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
       // bound consumer — push its gate by hand when the file changed.
       g_game_free_camera_shim->SetEnabled(
           g_settings->current().m2_game_free_camera_shim);
+      // M2: push the toggle VK too. Users editing
+      // dev_camera_toggle_vk in the INI expect the next F10 to
+      // dispatch the new key, not the boot-time value.
+      g_game_free_camera_shim->SetToggleVk(
+          g_settings->current().m2_dev_camera_toggle_vk);
       WALKERCORE_LOG_INFO(
-          "M2 shim: enabled=%d (after INI reload)",
-          g_game_free_camera_shim->isEnabled() ? 1 : 0);
+          "M2 shim: enabled=%d toggle_vk=0x%X (after INI reload)",
+          g_game_free_camera_shim->isEnabled() ? 1 : 0,
+          g_game_free_camera_shim->toggle_vk());
       // M11 ImGui overlay is also not a bound consumer; push
       // its gate by hand when the file changed.
       if (g_imgui_overlay != nullptr) {
@@ -1049,6 +1055,22 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   // this live via walker_game_free_camera_shim_set_enabled().
   g_game_free_camera_shim->SetEnabled(
       g_settings != nullptr && g_settings->current().m2_game_free_camera_shim);
+  // M2: honour the [m2] dev_camera_toggle_vk INI knob. SCS
+  // convention is VK_NUMPAD0 (0x60). Users whose controls.sii binds
+  // Numpad-0 to a non-camera action (e.g. dbglockpos) can re-point
+  // the shim to whichever key their profile actually binds to a
+  // free-camera action. Logged once at init so the analyst can
+  // confirm the dispatch target without grepping the INI.
+  g_game_free_camera_shim->SetToggleVk(
+      g_settings != nullptr
+          ? g_settings->current().m2_dev_camera_toggle_vk
+          : 0x60U);
+  WALKERCORE_LOG_INFO(
+      "GameFreeCameraShim: toggle VK = 0x%X (decimal %u; set "
+      "[m2] dev_camera_toggle_vk = 0xHH in WalkerCore.ini to "
+      "re-target the dispatch)",
+      g_game_free_camera_shim->toggle_vk(),
+      g_game_free_camera_shim->toggle_vk());
   g_game_free_camera_shim->ProbeGDeveloperFromConfig();
   // Bind the game window for the shim's PostMessage dispatch path.
   // FindGameHwnd() enumerates top-level windows owned by the current

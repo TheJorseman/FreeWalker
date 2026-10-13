@@ -351,6 +351,28 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                 // g_developer=1 in memory after the first
                 // scs_telemetry_init call.
                 loaded.m2_dev_cvar_patcher = bv;
+            } else if (lkey == "dev_camera_toggle_vk") {
+                // M2: virtual key the shim synthesises on every
+                // Walking entry. SCS convention is VK_NUMPAD0
+                // (0x60). Users whose controls.sii binds Numpad-0 to
+                // a non-camera action can re-point the shim to
+                // whichever key their profile actually binds to a
+                // free-camera action. Accepts decimal or 0x-prefixed
+                // hex. Range 0..255; values outside that are dropped
+                // to the default VK_NUMPAD0 so a typo in the INI
+                // does not produce a 16-bit SendInput that the
+                // keyboard driver silently drops.
+                char *end = nullptr;
+                const unsigned long parsed =
+                    strtoul(value.c_str(), &end, 0);
+                if (end != value && *end == '\0' && parsed <= 0xFF) {
+                    loaded.m2_dev_camera_toggle_vk = static_cast<unsigned int>(parsed);
+                } else {
+                    WALKERCORE_LOG_WARN(
+                        "Settings: [m2] dev_camera_toggle_vk='%s' is not a "
+                        "valid VK code (decimal 0..255 or 0xHH); keeping default "
+                        "VK_NUMPAD0 (0x60).", value);
+                }
             } else if (lkey == "camera_hijack_install" && TryParseBool(value, &bv)) {
                 // M2 long-term: in-process MinHook on the SCS camera
                 // state dispatcher at RVA 0xC22F40 in amtrucks.exe.
@@ -584,6 +606,13 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "d3d12_hook = " << (current_.m2_d3d12_hook ? "true" : "false") << "\n";
     f << "camera_hijack_install = " << (current_.m2_camera_hijack_install ? "true" : "false") << "\n";
     f << "dev_cvar_patcher = " << (current_.m2_dev_cvar_patcher ? "true" : "false") << "\n";
+    f << "# Virtual key the shim synthesises on every Walking entry.\n";
+    f << "# SCS convention is Numpad-0 (decimal 96 / 0x60). Users whose\n";
+    f << "# controls.sii binds Numpad-0 to a non-camera action can\n";
+    f << "# re-point the shim to whichever key their profile actually\n";
+    f << "# binds to a free-camera action. Accepts decimal or 0xHH.\n";
+    f << "# Default 0x60 (VK_NUMPAD0).\n";
+    f << "dev_camera_toggle_vk = 0x" << std::hex << current_.m2_dev_camera_toggle_vk << std::dec << "\n";
     f << "\n";
     f << "[m3]\n";
     f << "# PxScene::addActor MinHook install gate. Default 0 — the\n";

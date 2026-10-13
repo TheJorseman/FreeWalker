@@ -829,4 +829,114 @@ void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved() {
     std::remove(path.c_str());
 }
 
+// -----------------------------------------------------------------------------
+// M2 dev_camera_toggle_vk — virtual key the shim synthesises on every
+// Walking entry. SCS convention is VK_NUMPAD0 (0x60). Users whose
+// controls.sii binds Numpad-0 to a non-camera action (e.g.
+// `dbglockpos`) can re-point the shim to whichever key their profile
+// actually binds to a free-camera action. The parser accepts decimal
+// or 0x-prefixed hex; values outside 0..255 keep the default.
+// -----------------------------------------------------------------------------
+
+void TestIniM2DevCameraToggleVkDefaultIsVKNumpad0() {
+    // Fresh store (no INI file loaded) uses the code default
+    // VK_NUMPAD0 (0x60) — the SCS convention for the dev free
+    // camera toggle. Pin so a future change to the default is
+    // caught by the test.
+    SettingsStore defaults;
+    EXPECT_EQ(defaults.current().m2_dev_camera_toggle_vk, 0x60U);
+}
+
+void TestIniM2DevCameraToggleVkParsesHexAndDecimal() {
+    // The parser uses strtoul(..., 0) so both decimal and
+    // 0x-prefixed hex are accepted. Pin both, plus a couple of
+    // common SCS VKs (F1 = 0x70, backtick/tilde = 0xC0, F5 =
+    // 0x74) so a typo in the parser or strtoul radix is caught.
+    const std::string path = MakeTempIniPath("m2_toggle_vk_parse");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "dev_camera_toggle_vk = 0x70\n";   // F1
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x70U);
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "dev_camera_toggle_vk = 192\n";  // 0xC0 = `~`
+    }
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 192U);
+    std::remove(path.c_str());
+}
+
+void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault() {
+    // Values outside 0..255 must be rejected so a typo in the INI
+    // does not produce a 16-bit SendInput that the keyboard driver
+    // silently drops (or worse, fires a corrupt scan code). The
+    // fallback is the code default VK_NUMPAD0.
+    const std::string path = MakeTempIniPath("m2_toggle_vk_oor");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "dev_camera_toggle_vk = 65535\n";  // way out of range
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x60U);
+    std::remove(path.c_str());
+}
+
+void TestIniM2DevCameraToggleVkUnparseableKeepsDefault() {
+    // Non-numeric input must be rejected — strtoul returns 0 with
+    // end == start (no digits consumed) which our parser treats as
+    // invalid. The fallback is the code default VK_NUMPAD0.
+    const std::string path = MakeTempIniPath("m2_toggle_vk_bad");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "dev_camera_toggle_vk = not_a_vk\n";
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x60U);
+    std::remove(path.c_str());
+}
+
+void TestIniM2DevCameraToggleVkRoundTripsThroughSaveToPath() {
+    // SaveToPath writes the current value back out in 0xHH hex
+    // form. Reload must read the same value. Pin so the dump
+    // format and the parser agree.
+    const std::string path = MakeTempIniPath("m2_toggle_vk_roundtrip");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "dev_camera_toggle_vk = 0x70\n";  // F1
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x70U);
+
+    SettingsStore saver;
+    saver.SetCurrent(reader.current());
+    EXPECT_TRUE(saver.SaveToPath(path));
+
+    SettingsStore reader2;
+    EXPECT_TRUE(reader2.LoadFromPath(path));
+    EXPECT_EQ(reader2.current().m2_dev_camera_toggle_vk, 0x70U);
+
+    std::remove(path.c_str());
+}
+
 }  // namespace walkercore

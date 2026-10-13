@@ -66,6 +66,19 @@ struct WalkerSettings {
     // the M2 lander's worst-case mod stack. The M11 settings menu
     // can flip it at runtime via the exported ABI.
     bool m2_game_free_camera_shim = false;
+    // M2: virtual key the shim synthesises on every Walking entry
+    // to toggle the dev free camera. The SCS convention is
+    // VK_NUMPAD0 (0x60) — that's the default. Users whose
+    // controls.sii binds Numpad-0 to a non-camera action (e.g.
+    // `dbglockpos`) can re-point the shim to whichever key their
+    // profile actually binds to a free-camera action. The value is
+    // a Windows virtual-key code (decimal); for example
+    // `dev_camera_toggle_vk = 96` is Numpad-0,
+    // `dev_camera_toggle_vk = 112` is F1, `dev_camera_toggle_vk =
+    // 0xC0` is the `~` console key. The shim only fires when
+    // `m2_game_free_camera_shim` is also true; with the shim off,
+    // this knob has no effect.
+    unsigned int m2_dev_camera_toggle_vk = 0x60;  // VK_NUMPAD0
     // M2 long-term camera hijack gate. False by default — opt in via
     // `[m2] camera_hijack = 1`. When enabled, WalkerCore captures
     // amtrucks.exe's image base via GetModuleHandleA and MinHooks the

@@ -59,6 +59,13 @@ void TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues();
 void TestIniM2GameFreeCameraShimDefaultIsFalse();
 void TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse();
 void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved();
+// M2 dev_camera_toggle_vk — virtual key the shim synthesises on
+// every Walking entry. SCS convention is VK_NUMPAD0 (0x60).
+void TestIniM2DevCameraToggleVkDefaultIsVKNumpad0();
+void TestIniM2DevCameraToggleVkParsesHexAndDecimal();
+void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault();
+void TestIniM2DevCameraToggleVkUnparseableKeepsDefault();
+void TestIniM2DevCameraToggleVkRoundTripsThroughSaveToPath();
 void TestApplyAllPushesEveryFieldToEveryConsumer();
 void TestWalkerFsmInitialState();
 void TestWalkerFsmDrivingToWalking();
@@ -643,6 +650,12 @@ int main() {
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimDefaultIsFalse);
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse);
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimExplicitFalseIsPreserved);
+    // M2 dev_camera_toggle_vk.
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVKNumpad0);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkParsesHexAndDecimal);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkUnparseableKeepsDefault);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkRoundTripsThroughSaveToPath);
 
     // Regression guard for the dump_state_vk / mouse-button round-trip —
     // the user observed "F12 only gives me a screenshot" because the

@@ -42,7 +42,7 @@ The M-landers are:
 | M3 Lander | Real `IWorldGeometry` (PhysX SDK or memory scan) | **Catalog + slot dispatch + runtime scan done; live PxScene queries pending**. `kPhysXKnownMethods` carries 8 entries (release, addActor, simulate, shiftOrigin, sweep, raycast, overlap, **removeActor**) with absolute VAs from `scripts/physx-vta-scan/`. `ResolveKnownMethods` walks the vtable at RVA 0x25020A0 (ATS 1.61.3.1s, 118 slots) with a slot tolerance of 8 bytes and matches 7 of 8 in the main vtable (sweep lives in a separate 5-slot run at RVA 0x2507C08; removeActor=slot 14 was identified by tracing its `'PxScene::removeActor(): Actor'` error-path string). `PhysXAdapter::Install()` runs an in-memory scan against the live `amtrucks.exe` process (PE parser + `MemoryScanFromBufferWithTextRange` + `ResolveKnownMethods`) and caches the result in `PhysXAdapter::RuntimeCache`; `walker_dump_physx()` (F12 / programmatic) reports the live resolved slots. The on-disk real-binary test (`TestPhysXRealBinaryMatchesCatalog`) and the runtime-path mirror (`TestPhysXRealBinaryRuntimeScanPath`) prove the catalog matches the binary (gated by `WALKERCORE_REAL_BINARY_TEST_PATH`). Runtime `Raycast` / `SphereSweep` / `groundY` still fall back to no-hit because no live `PxScene` instance is wired — that requires hooking the game's PxScene global or RE of the SCS physics dispatcher. |
 | M5 Lander | Per-truck door geometry from real truck models | **Implemented (14 built-in rows)**. `PerTruckDoorTable::BuiltIn()` ships ATS 1.61 truck geometry (Volvo VNL 2016 / 2009, Kenworth W900/T680/T880, Peterbilt 579/389, Freightliner Cascadia / Cascadia 2018, Mack Anthem, Western Star 49X/4900, International LT/LoneStar). `TruckDoorConfigFromTruckState` matches the live `truck.placement.id` against the table and applies the per-truck offset delta on top of the generic cabin-derived placeholder. `walker_dump_per_truck_door()` reports the matched row + resolved geometry on F12. |
 | M7 Lander | Head tracker (FreeTrack + opentrack), shadow, light injection, door skeletal animation | **Partial — opentrack receiver done**. `OpentrackReceiver` listens on UDP port 4242 and pushes smoothed yaw/pitch/roll into `HeadTrackerProvider`. FreeTrack client linkage + shadow/flashlight injection still stubbed (require game memory scan or `light_source` global — see Lander contract below). |
-| M8 Lander | Real fuel-station prefab list + SCS fuel channels | Not yet started (RE of SCS `prefab/list_station` required; not yet wired because that RE needs a live debugging session against `amtrucks.exe`). |
+| M8 Lander | Real fuel-station prefab list + SCS fuel channels | **Partial — per-truck tank capacities from the SCS configuration event**. `ScsTelemetryProvider` parses `fuel.capacity` and `adblue.capacity` (config attributes delivered by `SCS_TELEMETRY_EVENT_configuration` alongside `hook_position`) and stores them in `TruckState::fuel_capacity_l` / `adblue_capacity_l`. `FuelProvider::Tick` replaces the honest-stub 600 L fuel / 50 L AdBlue defaults with the per-truck values so a 380 L day-cab cannot be over-filled. The real station prefab list (the SCS-internal `prefab/list_station` registry) is still RE-blocked — the SCS SDK does not expose a station prefab callback, and locating the game's internal prefab registry requires a live debugger against `amtrucks.exe`. Until that RE lands, the player must park the truck in the placeholder anchor spot (3.5 m truck-left, 1 m rear) to fuel. |
 | M9 Lander | Real trailer-attach API + per-trailer king-pin offsets | **Partial**. `CouplingProvider` tracks the live `hook_position` from the SCS configuration event and uses it to derive per-step waypoints (ApproachToKingPin / LowerLandingGear / ConnectAirLines / RaiseLandingGear) instead of fixed placeholders. `walker_dump_coupling()` reports the active step + progress + waypoint on F12. |
 | M10 Lander | Vehicle-impact normal from PhysX collision results | **Partial**. `KnockoutProvider::Tick` logs the per-angle collision direction (TMRealWalk-style probe line: `KnockoutProvider: collision direction (angle=... deg, normal=...)`). `walker_dump_knockout()` reports the live state + magnitude-normalized impact direction + config thresholds (vel-change, snap-re-prime, recovery, fall-height) on F12. The hook into `PhysXAdapter::SphereSweep`'s contact normal remains — M3 runtime queries must be live before the hook can replace the velocity-change heuristic. |
 | M4 Lander | Mouse-pump + WndProc subclass for input wiring | **Implemented**. `InputHook::OnRawInputData(const RAWINPUT&)` accumulates mouse motion / wheel / LMB+RMB into `last_` (data plane). `InputHook::OnRawInputMessage(LPARAM)` is the production path that calls `GetRawInputData` and forwards. `Sample()` now drains `mouse_dx` / `mouse_dy` / `wheel_delta` after the struct copy so per-frame motion doesn't accumulate across frames. New module `WindowSubclass` (`include/walkercore/WindowSubclass.h` + `src/provider/WindowSubclass.cpp`) installs a single WndProc shim on the game hwnd via `SetWindowLongPtrA + GWLP_WNDPROC`; the shim routes `WM_INPUT` to a registered sink (the InputHook's `OnRawInputMessage` trampoline with the InputHook instance as ctx) AND forwards every input message to `ImGui_ImplWin32_WndProcHandler` (no-op when no ImGui context is alive) AND chains to the original WndProc via `CallWindowProcA` (never swallows). The shim is installed by `ImGuiOverlay::InitializeForD3D11Device` after `ImGui_ImplWin32_Init` + `ImGui_ImplDX11_Init` succeed, uninstalled by `ImGuiOverlay::Shutdown` BEFORE `ImGui_ImplWin32_Shutdown` so the WndProc never forwards to a dead context. `InputHook::Install` registers the sink (safe even before the shim is installed — the sink is stored in module-local state); `InputHook::Uninstall` clears it if a shim is currently live. 27 new unit tests (11 RAWINPUT data plane + 16 WndProc state machine) pin motion / wheel / button edges / absolute-coordinate drop / keyboard raw-input drop / install-uninstall round-trip / sink routing / chain-to-original. Internal module (no ABI surface). |
@@ -427,11 +427,26 @@ channel or memory scan) to a `TruckDoorConfig`.
 **File to implement:** `src/provider/FuelPump.cpp`.
 
 - Replace the truck-local placeholder for the fuel-station anchor with a
-  real station prefab list (SCS publishes this as `prefab/list_station`).
-- Register SCS channels `truck.fuel.capacity`, `truck.fuel.amount`,
-  `truck.adblue.capacity`, `truck.adblue.amount` (already supported by
-  the SDK 1.15 we vendor). Read fuel amounts from telemetry instead of
-  the local `fuel_amount_l_` member.
+  real station prefab list. The SCS SDK does **not** publish a station
+  prefab callback (`prefab/list_station` is not a registered SDK event
+  or channel — only the in-game dev UI surfaces it). The real station
+  registry is an internal SCS prefab list embedded in `amtrucks.exe`;
+  locating it requires a live debugger against the game process (RE-
+  blocked until a debug session is available).
+- Tank capacities: **implemented (2ec6e97)**. `ScsTelemetryProvider` parses
+  the SCS configuration attributes `fuel.capacity` and `adblue.capacity`
+  (delivered by `SCS_TELEMETRY_EVENT_configuration` alongside
+  `hook_position` and `cabin_position`) and stores them in
+  `TruckState::fuel_capacity_l` / `adblue_capacity_l`. Validity gate
+  rejects zero/negative/out-of-range values so a misconfigured mod or a
+  future build reporting in mL cannot crash the fill rate. `FuelProvider
+  ::Tick` replaces the honest-stub 600 L fuel / 50 L AdBlue defaults
+  with the per-truck values; the fill rate clamps to the resolved
+  capacity. Symmetric `adblue_capacity_l()` accessor exposed alongside
+  the existing `tank_capacity_l()`.
+- SCS channels `truck.fuel.amount` and `truck.adblue` are already
+  registered (M1); the local `fuel_amount_l_` is synced from telemetry
+  on every Tick when the channel is live.
 
 ### M9 Lander — Trailer coupling
 

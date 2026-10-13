@@ -831,20 +831,22 @@ void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved() {
 
 // -----------------------------------------------------------------------------
 // M2 dev_camera_toggle_vk — virtual key the shim synthesises on every
-// Walking entry. SCS convention is VK_NUMPAD0 (0x60). Users whose
-// controls.sii binds Numpad-0 to a non-camera action (e.g.
-// `dbglockpos`) can re-point the shim to whichever key their profile
-// actually binds to a free-camera action. The parser accepts decimal
-// or 0x-prefixed hex; values outside 0..255 keep the default.
+// Walking entry. SCS hard-codes the dev free camera toggle to the `0`
+// key (above letters), gated by `g_developer=1` AND `g_console=1`
+// in config.cfg. The shim's default is VK_0 = 0x30 (top-row zero).
+// Users whose profile binds 0 to a non-camera action can
+// over-re-tie the shim via `[m2] dev_camera_toggle_vk = 0xHH` or by
+// adding `mix o_im_freecam \`keyboard.X?0\`` in controls.sii (which
+// the auto-detect picks up). The parser accepts decimal or
+// 0x-prefixed hex; values outside 0..255 keep the default.
 // -----------------------------------------------------------------------------
 
-void TestIniM2DevCameraToggleVkDefaultIsVKNumpad0() {
+void TestIniM2DevCameraToggleVkDefaultIsVK0() {
     // Fresh store (no INI file loaded) uses the code default
-    // VK_NUMPAD0 (0x60) — the SCS convention for the dev free
-    // camera toggle. Pin so a future change to the default is
-    // caught by the test.
+    // VK_0 (0x30) — the SCS hard-coded dev free camera toggle.
+    // Pin so a future change to the default is caught by the test.
     SettingsStore defaults;
-    EXPECT_EQ(defaults.current().m2_dev_camera_toggle_vk, 0x60U);
+    EXPECT_EQ(defaults.current().m2_dev_camera_toggle_vk, 0x30U);
 }
 
 void TestIniM2DevCameraToggleVkParsesHexAndDecimal() {
@@ -879,7 +881,7 @@ void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault() {
     // Values outside 0..255 must be rejected so a typo in the INI
     // does not produce a 16-bit SendInput that the keyboard driver
     // silently drops (or worse, fires a corrupt scan code). The
-    // fallback is the code default VK_NUMPAD0.
+    // fallback is the code default VK_0 (top-row zero).
     const std::string path = MakeTempIniPath("m2_toggle_vk_oor");
     std::remove(path.c_str());
 
@@ -890,14 +892,14 @@ void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault() {
     }
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));
-    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x60U);
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x30U);
     std::remove(path.c_str());
 }
 
 void TestIniM2DevCameraToggleVkUnparseableKeepsDefault() {
     // Non-numeric input must be rejected — strtoul returns 0 with
     // end == start (no digits consumed) which our parser treats as
-    // invalid. The fallback is the code default VK_NUMPAD0.
+    // invalid. The fallback is the code default VK_0 (top-row zero).
     const std::string path = MakeTempIniPath("m2_toggle_vk_bad");
     std::remove(path.c_str());
 
@@ -908,7 +910,7 @@ void TestIniM2DevCameraToggleVkUnparseableKeepsDefault() {
     }
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));
-    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x60U);
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x30U);
     std::remove(path.c_str());
 }
 
@@ -940,8 +942,8 @@ void TestIniM2DevCameraToggleVkRoundTripsThroughSaveToPath() {
 }
 
 void TestIniM2LegacyIniGetsSentinelPatchedInPlace() {
-    // A pre-M2.5 INI has `game_free_camera_shim = false` and
-    // `dev_camera_toggle_vk = 0x60` written without the
+    // A pre-M2.6 INI has `game_free_camera_shim = false` and
+    // `dev_camera_toggle_vk = 0x30` written without the
     // `# walkercore:managed:<key>` sentinel (those DLLs did not emit
     // it). On the first load with the M2.5 hotfix DLL, the
     // in-place sentinel patcher must insert the missing sentinels so
@@ -956,7 +958,7 @@ void TestIniM2LegacyIniGetsSentinelPatchedInPlace() {
         FileWriter w(path);
         w << "[m2]\n";
         w << "game_free_camera_shim = false\n";
-        w << "dev_camera_toggle_vk = 0x60\n";
+        w << "dev_camera_toggle_vk = 0x30\n";
     }
 
     SettingsStore reader;
@@ -1097,7 +1099,7 @@ void TestIniM2NoSentinelMeansExplicitTrue() {
 
 void TestIniM2SentinelForDevCameraToggleVk() {
     // Case 4: same sentinel contract for dev_camera_toggle_vk. The DLL
-    // writes `dev_camera_toggle_vk = 0x60` on every first-time defaults
+    // writes `dev_camera_toggle_vk = 0x30` on every first-time defaults
     // save (because that's the code default), and the
     // controls.sii auto-detect must remain alive on the next load — which
     // it can only do if the explicit flag is suppressed by the sentinel.
@@ -1107,12 +1109,12 @@ void TestIniM2SentinelForDevCameraToggleVk() {
     {
         FileWriter w(path);
         w << "[m2]\n";
-        w << "dev_camera_toggle_vk = 0x60\n";
+        w << "dev_camera_toggle_vk = 0x30\n";
         w << "# walkercore:managed:dev_camera_toggle_vk\n";
     }
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));
-    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x60U);
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x30U);
     EXPECT_FALSE(reader.current().m2_dev_camera_toggle_vk_explicit);
 
     std::remove(path.c_str());
@@ -1141,7 +1143,7 @@ void TestIniSaveToPathEmitsSentinelForDefaultValues() {
                     std::string::npos);
         EXPECT_TRUE(content.find("# walkercore:managed:game_free_camera_shim") !=
                     std::string::npos);
-        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x60") !=
+        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x30") !=
                     std::string::npos);
         EXPECT_TRUE(content.find("# walkercore:managed:dev_camera_toggle_vk") !=
                     std::string::npos);

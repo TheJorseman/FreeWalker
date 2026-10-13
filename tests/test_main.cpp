@@ -60,8 +60,10 @@ void TestIniM2GameFreeCameraShimDefaultIsFalse();
 void TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse();
 void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved();
 // M2 dev_camera_toggle_vk — virtual key the shim synthesises on
-// every Walking entry. SCS convention is VK_NUMPAD0 (0x60).
-void TestIniM2DevCameraToggleVkDefaultIsVKNumpad0();
+// every Walking entry. SCS hard-codes the dev free camera toggle to
+// the top-row `0` key (VK_0 = 0x30), gated by `g_developer=1` AND
+// `g_console=1` in config.cfg.
+void TestIniM2DevCameraToggleVkDefaultIsVK0();
 void TestIniM2DevCameraToggleVkParsesHexAndDecimal();
 void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault();
 void TestIniM2DevCameraToggleVkUnparseableKeepsDefault();
@@ -702,7 +704,7 @@ int main() {
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse);
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimExplicitFalseIsPreserved);
     // M2 dev_camera_toggle_vk.
-    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVKNumpad0);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVK0);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkParsesHexAndDecimal);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkUnparseableKeepsDefault);

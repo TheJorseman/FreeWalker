@@ -439,7 +439,7 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                 if (end != value && *end == '\0' && parsed <= 0xFF) {
                     loaded.m2_dev_camera_toggle_vk = static_cast<unsigned int>(parsed);
                     // M2.5: even if the value happens to equal the
-                    // default 0x60, the user has explicitly named the
+                    // default 0x30, the user has explicitly named the
                     // knob in the INI — set the explicit flag so the
                     // controls.sii auto-detect is skipped. The
                     // explicit-vs-default distinction matters because
@@ -451,9 +451,10 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                     // `# walkercore:managed:dev_camera_toggle_vk` was
                     // emitted). Same rationale as for
                     // game_free_camera_shim — pre-M2.5 DLLs wrote
-                    // `dev_camera_toggle_vk = 0x60` on every
-                    // SaveToPath, so without this exemption the
-                    // controls.sii auto-detect is dead on upgrade.
+                    // `dev_camera_toggle_vk = 0x60` (and the current
+                    // M2.6 DLLs write `0x30`) on every SaveToPath, so
+                    // without this exemption the controls.sii
+                    // auto-detect is dead on upgrade.
                     if (!auto_managed) {
                         loaded.m2_dev_camera_toggle_vk_explicit = true;
                     }
@@ -619,7 +620,9 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
 
     // M2.5 hotfix: in-place sentinel patch for legacy INIs. Users who
     // upgraded from a pre-M2.5 DLL have `game_free_camera_shim = false`
-    // (and/or `dev_camera_toggle_vk = 0x60`) in their INI without the
+    // (and/or `dev_camera_toggle_vk = 0x60` — the historical default
+    // that was hard-coded VK_NUMPAD0 before the RE-driven switch to
+    // VK_0 / 0x30) in their INI without the
     // `# walkercore:managed:<key>` sentinel — those DLLs did not emit
     // the sentinel. Without it, the loader treats the line as
     // user-written and sets `*_explicit = true`, which blocks the M2.5
@@ -674,7 +677,7 @@ void SettingsStore::PatchSentinelsForLegacyIni(const std::string &path) {
     };
     static const Target kTargets[] = {
         {"game_free_camera_shim", "false"},
-        {"dev_camera_toggle_vk", "0x60"},
+        {"dev_camera_toggle_vk", "0x30"},
     };
 
     // Read the entire file into memory. If the file does not exist
@@ -890,7 +893,7 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     // Same auto-managed sentinel as above — controls.sii auto-detect is
     // dead if the explicit flag is set, and the default-value line is
     // what pre-M2.5 DLLs wrote.
-    if (current_.m2_dev_camera_toggle_vk == 0x60u) {
+    if (current_.m2_dev_camera_toggle_vk == 0x30u) {
         f << "# walkercore:managed:dev_camera_toggle_vk\n";
     }
     f << "\n";

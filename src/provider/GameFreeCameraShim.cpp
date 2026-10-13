@@ -701,12 +701,20 @@ void GameFreeCameraShim::BindDevCameraPatchResult(
 // controls.sii. Called once from PluginEntry init after
 // ProbeGDeveloperFromConfig.
 //
-// The probe order is: dev_camera_toggle → walk_mode → free_camera.
-// dev_camera_toggle is the stock SCS action name the dev console
-// `free_camera_u` command routes through (see
-// docs/observations/tmrealwalk-cam-manager-re.md for the RE
-// provenance). walk_mode is the legacy action some profiles use.
-// free_camera is a third-party synonym we tolerate for completeness.
+// The probe order is: o_im_freecam (the only valid SCS action name in
+// this build for toggling the dev free camera via the action registry).
+// Earlier builds accepted `dev_camera_toggle` / `camdbg` /
+// `walk_mode` / `free_camera`; RE-confirmed zero hits for those names
+// in amtrucks.exe 1.61.3.1s — the SCS input parser rejects them as
+// "not valid object name". The dev free camera in this build is
+// toggled by the hard-coded `0` shortcut (intercepted before the
+// action registry, requires `g_developer=1` AND `g_console=1` in
+// config.cfg). The `o_im_freecam` action is exposed in the in-game
+// debug options menu and is still bindable via `mix o_im_freecam
+// \`keyboard.X?0\`` in controls.sii if the user prefers an explicit
+// binding over the hard-coded `0`.
+//
+// See docs/observations/dev-free-camera.md for the RE provenance.
 //
 // If `ini_overrides_default` is true, the INI knob already pinned
 // the VK explicitly and we MUST NOT clobber it — the user knows
@@ -772,10 +780,11 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
         WALKERCORE_LOG_WARN(
             "GameFreeCameraShim: controls.sii not found (no active "
             "profile / game not installed). Default toggle VK=0x%X "
-            "(Numpad-0) in effect; if your controls.sii binds a "
-            "different key to dev_camera_toggle / walk_mode / "
-            "free_camera, set [m2] dev_camera_toggle_vk = 0xHH in "
-            "WalkerCore.ini to override.",
+            "(top-row '0' / VK_0) in effect — this is the SCS hard-"
+            "coded dev free camera toggle when g_developer=1 AND "
+            "g_console=1 in config.cfg. If your controls.sii binds a "
+            "different key to o_im_freecam, set [m2] "
+            "dev_camera_toggle_vk = 0xHH in WalkerCore.ini to override.",
             toggle_vk_);
         return;
     }
@@ -787,26 +796,29 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
     // `<ERROR> Expecting string literal, found '"mix ...'`).
     //
     // Priority rationale (most-specific first):
-    //   1. dev_camera_toggle — the intuitive name most users add
-    //      when copying from a TMRealWalk-style tutorial. Stays
-    //      first for users who happen to bind it under a name the
-    //      SCS engine actually accepts in some build / mod.
-    //   2. camdbg — the actual stock SCS action name (camera +
-    //      debug) for toggling the dev free camera. RE-confirmed
-    //      from the CVar `g_debug_camera` registration in
-    //      `amtrucks.exe` (RVA region around `g_developer`). The
-    //      SCS input parser rejects `dev_camera_toggle` as
-    //      "not valid object name" (game.log) so without this
-    //      entry WalkerCore's dispatch silently hits the wrong
-    //      action and the dev camera never activates.
-    //   3. walk_mode — legacy action name some third-party mods
-    //      expose for compatibility.
-    //   4. free_camera — synonym tolerated for completeness.
+    //   1. o_im_freecam — the only valid SCS action name for
+    //      toggling the dev free camera in amtrucks.exe 1.61.3.1s.
+    //      RE-confirmed: zero hits for `dev_camera_toggle` /
+    //      `camdbg` / `walk_mode` / `free_camera` in the binary;
+    //      the SCS input parser rejects them as "not valid object
+    //      name". The dev free camera in this build is otherwise
+    //      toggled only by the hard-coded `0` shortcut (which
+    //      requires `g_developer=1` AND `g_console=1` in
+    //      config.cfg). WalkerCore's default dispatch VK is `0x30`
+    //      (top-row zero) so the shim works out of the box even
+    //      without a controls.sii binding.
+    //
+    //      The `o_im_freecam` action is exposed in the in-game
+    //      debug options menu and is bindable via
+    //      `mix o_im_freecam \`keyboard.X?0\`` in controls.sii.
+    //      If the user adds such a line, WalkerCore's auto-detect
+    //      picks up the binding and dispatches that key instead of
+    //      the hard-coded `0`.
     const char *hit_action = nullptr;
     std::string token;
     bool detected_typo = false;
     for (const char *action :
-         {"dev_camera_toggle", "camdbg", "walk_mode", "free_camera"}) {
+         {"o_im_freecam"}) {
         bool action_typo = false;
         token = ReadControlsSiiKeyForActionWithDiagForTesting(
             path, std::string(action), &action_typo);
@@ -832,8 +844,8 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
             // we surface the corrected line explicitly.
             WALKERCORE_LOG_WARN(
                 "GameFreeCameraShim: controls.sii at %s has a "
-                "MALFORMED binding for dev_camera_toggle / walk_mode "
-                "/ free_camera (escaped backticks `\\`` instead of "
+                "MALFORMED binding for o_im_freecam "
+                "(escaped backticks `\\`` instead of "
                 "plain `` ` ``). The SCS parser REJECTED the line at "
                 "game load (game.log shows `<ERROR> Expecting string "
                 "literal, found '\"mix ...'`) and the binding never "
@@ -842,8 +854,7 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
                 "with this exact text (plain backticks, no backslash):",
                 path.c_str(), path.c_str());
             WALKERCORE_LOG_WARN(
-                "    mix dev_camera_toggle `keyboard.f11?0 | "
-                "semantical.dev_camera_toggle?0`");
+                "    mix o_im_freecam `keyboard.f11?0`");
             WALKERCORE_LOG_WARN(
                 "    (alternative keys: keyboard.f10, keyboard.num5, "
                 "keyboard.numpad5 — pick one that does not collide "
@@ -853,15 +864,17 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
         }
         WALKERCORE_LOG_WARN(
             "GameFreeCameraShim: controls.sii at %s has NO binding "
-            "for dev_camera_toggle / walk_mode / free_camera. Default "
-            "toggle VK=0x%X (Numpad-0) in effect — your profile binds "
-            "Numpad-0 to dbglockpos so the synthesised key will be "
-            "ignored. Add this line to %s and reload the save / "
-            "restart the game:",
+            "for o_im_freecam. Default toggle VK=0x%X (top-row '0' "
+            "/ VK_0) in effect — this is the SCS hard-coded dev free "
+            "camera toggle that requires g_developer=1 AND "
+            "g_console=1 in config.cfg. No controls.sii binding is "
+            "required for the shim to work; the inline syntax handles "
+            "the dispatch out of the box. To use a different key, "
+            "add this line to %s and reload the save / restart the "
+            "game:",
             path.c_str(), toggle_vk_, path.c_str());
         WALKERCORE_LOG_WARN(
-            "    mix dev_camera_toggle `keyboard.f11?0 | "
-            "semantical.dev_camera_toggle?0`");
+            "    mix o_im_freecam `keyboard.f11?0`");
         WALKERCORE_LOG_WARN(
             "    (alternative keys: keyboard.f10, keyboard.num5, "
             "keyboard.numpad5 — pick one that does not collide with "
@@ -880,7 +893,7 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
             "GameFreeCameraShim: controls.sii at %s binds %s to %s, "
             "but that SCS token is not in the Win32 VK lookup table "
             "(the shim only synthesises keyboard.* tokens). Default "
-            "toggle VK=0x%X (Numpad-0) in effect. To use this "
+            "toggle VK=0x%X (top-row '0' / VK_0) in effect. To use this "
             "binding, map it to a keyboard key in controls.sii or set "
             "[m2] dev_camera_toggle_vk = 0xHH in WalkerCore.ini to "
             "force a specific VK.",
@@ -951,10 +964,9 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
             "until you enable the shim. Set [m2] "
             "game_free_camera_shim = true in WalkerCore.ini (or "
             "open the settings menu with Ctrl+F10 and flip the M2 "
-            "toggle). The dev_cvar_patcher already flipped "
-            "g_developer to 1 in memory, so once the shim is "
-            "enabled, the next F10 press will activate the dev "
-            "free camera via the bound key.",
+            "toggle). g_developer=1 is already set in config.cfg, so "
+            "once the shim is enabled, the next F10 press will "
+            "activate the dev free camera via the bound key.",
             token.c_str(), vk);
     }
 }
@@ -1021,12 +1033,11 @@ void GameFreeCameraShim::OnEnterWalking() {
             "config-cfg[probe]='%s', dev_cvar_patcher=%s cvar_va=0x%llX "
             "value=%.12s, hwnd=0x%llX) — Set [m2] game_free_camera_shim "
             "= true in WalkerCore.ini to send the dev free camera "
-            "toggle on F10. The dev_cvar_patcher independently flipped "
-            "g_developer '0' -> '1' in amtrucks.exe memory so any "
-            "future dev-camera path (the `free_camera_u` console "
-            "command, the dev UI button o_im_freecam, future "
-            "in-process camera manager hooks) works without editing "
-            "Documents\\American Truck Simulator\\config.cfg.)",
+            "toggle on F10. config.cfg already has g_developer=1, so "
+            "any dev-camera path (the hard-coded '0' shortcut, the dev "
+            "UI button o_im_freecam, future in-process camera manager "
+            "hooks) works without editing Documents\\American Truck "
+            "Simulator\\config.cfg.)",
             walks_entered_, gate_str, cvar_str, patch_outcome,
             static_cast<unsigned long long>(patch_value_va), patch_cvar_buf,
             static_cast<unsigned long long>(
@@ -1038,15 +1049,18 @@ void GameFreeCameraShim::OnEnterWalking() {
             "GameFreeCameraShim: Walking entry #%d (gate=%s, "
             "config-cfg[probe]='%s', dev_cvar_patcher=%s cvar_va=0x%llX "
             "value=%.12s, hwnd=0x%llX) — The shim synthesised the "
-            "toggle VK but the game's controls.sii binds Numpad-0 to "
-            "the user's chosen action (the dev free camera is UI-"
-            "button only via o_im_freecam, no action-name binding in "
-            "the stock profile). Two ways forward: (a) add a binding "
-            "for the toggle VK in inputs.dat your kitchen <profile>\\"
-            "controls.sii that maps to a dev-camera action (or to "
-            "free_camera_u), then re-deploy, or (b) use the game's "
-            "dev console (`~` key) and type `free_camera_u` while "
-            "in the dev free camera context.)",
+            "toggle VK but g_developer was not detected as '1' in "
+            "config.cfg. The dev free camera is gated by g_developer "
+            "(also g_console=1 for the '~' console). Without it the "
+            "hard-coded '0' shortcut is ignored. Add `uset "
+            "g_developer \"1\"` to Documents\\American Truck "
+            "Simulator\\config.cfg and reload the save. Two ways "
+            "forward: (a) bind o_im_freecam to a keyboard key in "
+            "<profile>\\controls.sii via "
+            "`mix o_im_freecam \\`keyboard.X?0\\``, then re-deploy, "
+            "or (b) use the game's dev console (`~` key) and the "
+            "in-game debug options menu to toggle the dev camera "
+            "manually.)",
             walks_entered_, gate_str, cvar_str, patch_outcome,
             static_cast<unsigned long long>(patch_value_va), patch_cvar_buf,
             static_cast<unsigned long long>(
@@ -1077,11 +1091,12 @@ void GameFreeCameraShim::OnEnterWalking() {
         "event(s) (gate=%s, config-cfg[probe]='%s', dev_cvar_patcher=%s "
         "cvar_va=0x%llX value=%.12s, toggle VK=0x%X [%s], "
         "auto-detected-key=%s, controls-sii-path=%s, exit VK=0x%X, "
-        "path=%s hwnd=0x%llX) — The dev_cvar_patcher flipped "
-        "g_developer in memory before this dispatch; if the dev free "
-        "camera still does not activate, the game's controls.sii "
-        "binding for the synthesised key may route the dispatch to a "
-        "different action (see docs/observations/tmrealwalk-findings.md).",
+        "path=%s hwnd=0x%llX) — SendInput dispatched. If the dev "
+        "free camera still does not activate, the toggle VK may be "
+        "absorbed by another application (ReShade / OptiScaler / "
+        "Steam overlay) or the dev camera shortcut may require an "
+        "additional gate (g_console=1 for the hard-coded '0' shortcut; "
+        "see docs/observations/dev-free-camera.md).",
         walks_entered_, dispatched, gate_str, cvar_str, patch_outcome,
         static_cast<unsigned long long>(patch_value_va), patch_cvar_buf,
         toggle_vk_, vk_source,
@@ -1208,8 +1223,12 @@ int GameFreeCameraShim::TriggerToggle() {
         total += SynthKey(exit_press_vk_, hwnd_, last_dispatch_path_,
                           last_postmessage_hwnd_diag_);
     }
-    // Stage 2 (always): toggle the SCS free camera. VK_NUMPAD0 is
-    // the SCS convention for "fly mode" toggle.
+    // Stage 2 (always): toggle the SCS dev free camera. VK_0 (0x30) is
+    // the SCS hard-coded shortcut for the dev free camera when
+    // g_developer=1 AND g_console=1 in config.cfg. The shim works
+    // out of the box without a controls.sii binding; if the user
+    // adds `mix o_im_freecam \`keyboard.X?0\`` in controls.sii,
+    // the auto-detect at DLL init overrides `toggle_vk_` to X.
     total += SynthKey(toggle_vk_, hwnd_, last_dispatch_path_,
                       last_postmessage_hwnd_diag_);
     toggles_dispatched_++;

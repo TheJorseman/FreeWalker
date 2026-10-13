@@ -2,11 +2,11 @@
 
 Esta guía asume ATS 1.61.3.1s (Steam) + ReShade + OptiScaler (DLSS5) + DXVK como stack objetivo, igual que el stack del autor. Para ETS2 el flujo es paralelo.
 
-> **TL;DR.** El plugin ya hace lo que sabe hacer. Para que **la cámara se mueva visiblemente** al pulsar F10 hay tres pasos que **el usuario debe completar a mano**:
+> **TL;DR.** El plugin ya hace lo que sabe hacer. Para que **la cámara se mueva visiblemente** al pulsar F10 hay dos pasos que **el usuario debe completar a mano** (el tercero es automático):
 >
 > 1. **Copiar `libWalkerCore.dll` a `bin\win_x64\plugins\`** (una vez por versión del juego).
 > 2. **Añadir una línea a `<profile>\controls.sii`** que enlace un tecla a la acción `dev_camera_toggle`.
-> 3. **Activar el shim en WalkerCore.ini** (`[m2] game_free_camera_shim = true`) o desde el menú in-game (Ctrl+F10).
+> 3. **Activar el shim — AUTOMÁTICO.** El smart-default auto-enable del M2.5 detecta el binding en controls.sii + `g_developer=1` y flipea `game_free_camera_shim` de `false → true` por su cuenta. Si prefieres controlarlo a mano, pon `[m2] game_free_camera_shim = true` en WalkerCore.ini (o ábrelo desde Ctrl+F10).
 
 ---
 
@@ -75,7 +75,19 @@ Si **no** ves esa línea, el juego no cargó el plugin. Razones comunes:
 
 ## 3. Habilitar el shim (M2 GameFreeCameraShim)
 
-Edita `%APPDATA%\WalkerCore\WalkerCore.ini`:
+**Automático desde M2.5 smart-default.** WalkerCore auto-detecta el binding `dev_camera_toggle` en controls.sii y flipea `game_free_camera_shim` de `false → true` por sí solo cuando se cumplen tres condiciones:
+
+1. El INI **no** ha nombrado explícitamente `[m2] game_free_camera_shim = ...` (si lo has puesto a `false` a propósito, respetamos tu elección).
+2. Hay un binding `dev_camera_toggle` / `walk_mode` / `free_camera` en controls.sii.
+3. `g_developer=1` está en `config.cfg`.
+
+Si las tres se cumplen, verás en game.log:
+
+```
+[INF] GameFreeCameraShim: smart-default auto-enable (binding=keyboard.f11, VK=0x7A, g_developer=1, INI=[m2] game_free_camera_shim untouched). The shim will now dispatch the toggle key on every F10 transition. To disable, set [m2] game_free_camera_shim = false in WalkerCore.ini.
+```
+
+**Si quieres controlarlo a mano**, edita `%APPDATA%\WalkerCore\WalkerCore.ini`:
 
 ```ini
 [m2]

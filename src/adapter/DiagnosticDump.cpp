@@ -1251,6 +1251,24 @@ extern "C" __declspec(dllexport) void walker_dump_game_free_camera_shim(void) {
                             : "none");
     WALKERCORE_LOG_INFO("postmessage_target  : 0x%X",
                         s->last_postmessage_target_diag());
+    // M2.5: surface the controls.sii auto-detect state. The user
+    // can press F12 to confirm the right key was picked up
+    // (auto-detected-key vs the default VK_NUMPAD0), the controls.sii
+    // path that was probed, and whether the INI overrode the
+    // auto-detect via [m2] dev_camera_toggle_vk. These three lines
+    // are the cross-reference surface that resolves the
+    // "the shim fired but my Numpad-0 didn't toggle the dev camera"
+    // support question in one screen.
+    WALKERCORE_LOG_INFO("ini_overrides_vk    : %s",
+                        bool_str(s->ini_overrides_toggle_vk()));
+    WALKERCORE_LOG_INFO("auto_detected_key   : %s",
+                        s->auto_detected_key_name().empty()
+                            ? "<none in controls.sii>"
+                            : s->auto_detected_key_name().c_str());
+    WALKERCORE_LOG_INFO("controls_sii_path   : %s",
+                        s->auto_detected_controls_sii_path().empty()
+                            ? "<not found>"
+                            : s->auto_detected_controls_sii_path().c_str());
     WALKERCORE_LOG_INFO("--- end game-free-camera shim ---");
 }
 

@@ -762,6 +762,29 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
         "GameFreeCameraShim: auto-detected %s=%s (VK 0x%X) in "
         "%s — adopted as the toggle VK (was 0x%X default Numpad-0).",
         hit_action, token.c_str(), vk, path.c_str(), prev_vk);
+    // M2.5 follow-up: when we adopted a real binding, the user has
+    // done the right thing (added the controls.sii line). But the
+    // shim's `enabled_` gate is still independent — the user must
+    // also set `[m2] game_free_camera_shim = true` in WalkerCore.ini
+    // (or via the in-game settings menu) for the dispatch to fire.
+    // Without this hint the next F10 silently does not toggle the
+    // dev camera and the user is left wondering why the auto-detect
+    // log line appeared but nothing happened on screen. The hint is
+    // only emitted when the shim is currently OFF — if the user has
+    // already enabled it, repeating the message would be noise.
+    if (!enabled_) {
+        WALKERCORE_LOG_WARN(
+            "GameFreeCameraShim: shim is currently DISABLED. The "
+            "auto-detected binding (%s, VK 0x%X) will NOT dispatch "
+            "until you enable the shim. Set [m2] "
+            "game_free_camera_shim = true in WalkerCore.ini (or "
+            "open the settings menu with Ctrl+F10 and flip the M2 "
+            "toggle). The dev_cvar_patcher already flipped "
+            "g_developer to 1 in memory, so once the shim is "
+            "enabled, the next F10 press will activate the dev "
+            "free camera via the bound key.",
+            token.c_str(), vk);
+    }
 }
 
 void GameFreeCameraShim::ProbeGDeveloperFromConfig() {

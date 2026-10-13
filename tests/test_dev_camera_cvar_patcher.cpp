@@ -278,4 +278,163 @@ void TestDevCameraCvarPatcherCountersAfterSuccessfulPatch() {
     EXPECT_EQ(p->last_result().cvar_value_va, img.value_va);
 }
 
+// ===========================================================================
+// Synthetic layouts for the extended probe.
+//
+// The pre-M7.2 patcher (HEAD pre-b99ba24's dev branch) only checked
+// offset 8 from the matched pointer for the value field. ATS
+// 1.61.3.1s's actual SCS CVar struct puts the value field at
+// offset 24 (with the hash-chain pointer at +8 and the type tag
+// at +16). The probe now walks offsets {8, 16, 24, 32, 40}.
+// These tests pin each.
+//
+// We also exercise the wider scan window (32 KiB vs the historical
+// 8 KiB) by placing the struct further from the name pointer than
+// the old window allowed.
+// ===========================================================================
+
+// SCS CVar struct layout variant A: value at offset 24 (the real ATS
+// 1.61.3.1s layout per RE). The struct is laid as:
+//   offset 0:  pointer to name (matched)
+//   offset 8:  pointer to next in hash chain (8 bytes)
+//   offset 16: type tag (uint32 + 4 padding)
+//   offset 24: value buffer "0\0"
+//   (offset 32+ would be min/max bounds, docstring ptr.)
+struct ScratchCvarImageValueAt24 {
+    std::vector<char> bytes;
+    uint64_t name_offset;
+    uint64_t struct_offset;
+    uint64_t name_va;
+    uint64_t value_va;
+
+    static constexpr size_t kBytes = 4096;
+
+    ScratchCvarImageValueAt24() {
+        bytes.assign(kBytes, 0);
+        name_offset = 16;
+        const char *name = "g_developer";
+        std::memcpy(&bytes[name_offset], name, std::strlen(name) + 1);
+        for (size_t i = 0; i < 5; ++i) {
+            bytes[name_offset + std::strlen(name) + 1 + i] = '\0';
+        }
+        struct_offset = 48;
+        name_va = reinterpret_cast<uint64_t>(&bytes[name_offset]);
+        std::memcpy(&bytes[struct_offset], &name_va, sizeof(name_va));
+        // Skip the hash-chain ptr at +8 and the type tag at +16
+        // (we leave them zero, which the patcher treats as "not a
+        // value field" — the heuristic correctly skips those).
+        bytes[struct_offset + 24] = '0';
+        bytes[struct_offset + 25] = '\0';
+        value_va = reinterpret_cast<uint64_t>(&bytes[struct_offset + 24]);
+    }
+};
+
+void TestDevCameraCvarPatcherProbesValueAtStructOffset24() {
+    ScratchCvarImageValueAt24 img;
+    auto p = MakePatcher();
+    p->SetNameRva(0);
+    p->SetModuleBaseForTesting(img.name_va);
+    const DevCameraCvarPatchResult r = p->PatchOnce();
+    EXPECT_TRUE(r.patched);
+    EXPECT_FALSE(r.skipped);
+    EXPECT_EQ(r.cvar_name_va, img.name_va);
+    EXPECT_EQ(r.cvar_value_va, img.value_va);
+    EXPECT_STREQ(r.cvar_value_before, "0");
+    EXPECT_STREQ(r.cvar_value_after, "1");
+    EXPECT_EQ(p->patches(), 1);
+    EXPECT_EQ(img.bytes[img.struct_offset + 24], '1');
+    EXPECT_EQ(img.bytes[img.struct_offset + 25], '\0');
+}
+
+// Probe the wider scan window. The struct sits at +16 KiB from the
+// name pointer — outside the historical 8 KiB window but inside the
+// new 32 KiB window. The patcher must still find it.
+struct ScratchCvarImageValueFar {
+    std::vector<char> bytes;
+    uint64_t name_offset;
+    uint64_t struct_offset;
+    uint64_t name_va;
+    uint64_t value_va;
+
+    // 40 KiB. The struct lives 16 KiB after the name pointer —
+    // well past the historical 8 KiB window, well inside the new
+    // 32 KiB.
+    static constexpr size_t kBytes = 40 * 1024;
+
+    ScratchCvarImageValueFar() {
+        bytes.assign(kBytes, 0);
+        name_offset = 16;
+        const char *name = "g_developer";
+        std::memcpy(&bytes[name_offset], name, std::strlen(name) + 1);
+        // Pad name with zeros up to 16 bytes so the signature
+        // matches.
+        for (size_t i = 0; i < 5; ++i) {
+            bytes[name_offset + std::strlen(name) + 1 + i] = '\0';
+        }
+        // Struct 16 KiB later: offset 0 = pointer to name,
+        // offset 8 = "0\0".
+        struct_offset = 16 * 1024;
+        name_va = reinterpret_cast<uint64_t>(&bytes[name_offset]);
+        std::memcpy(&bytes[struct_offset], &name_va, sizeof(name_va));
+        bytes[struct_offset + 8] = '0';
+        bytes[struct_offset + 9] = '\0';
+        value_va = reinterpret_cast<uint64_t>(&bytes[struct_offset + 8]);
+    }
+};
+
+void TestDevCameraCvarPatcherWiderScanWindowFindsFarStruct() {
+    ScratchCvarImageValueFar img;
+    auto p = MakePatcher();
+    p->SetNameRva(0);
+    p->SetModuleBaseForTesting(img.name_va);
+    const DevCameraCvarPatchResult r = p->PatchOnce();
+    EXPECT_TRUE(r.patched);
+    EXPECT_FALSE(r.skipped);
+    EXPECT_EQ(r.cvar_value_va, img.value_va);
+    EXPECT_STREQ(r.cvar_value_before, "0");
+    EXPECT_STREQ(r.cvar_value_after, "1");
+    EXPECT_EQ(p->patches(), 1);
+}
+
+// Same as the +24 case but value lives at +32 (the heuristic's
+// fifth probe offset). Pins the loop's later offsets work too.
+struct ScratchCvarImageValueAt32 {
+    std::vector<char> bytes;
+    uint64_t name_offset;
+    uint64_t struct_offset;
+    uint64_t name_va;
+    uint64_t value_va;
+
+    static constexpr size_t kBytes = 4096;
+
+    ScratchCvarImageValueAt32() {
+        bytes.assign(kBytes, 0);
+        name_offset = 16;
+        const char *name = "g_developer";
+        std::memcpy(&bytes[name_offset], name, std::strlen(name) + 1);
+        for (size_t i = 0; i < 5; ++i) {
+            bytes[name_offset + std::strlen(name) + 1 + i] = '\0';
+        }
+        struct_offset = 48;
+        name_va = reinterpret_cast<uint64_t>(&bytes[name_offset]);
+        std::memcpy(&bytes[struct_offset], &name_va, sizeof(name_va));
+        // Value lives at offset 32 instead of 8 (e.g., the SCS
+        // struct has four pointer slots before the value).
+        bytes[struct_offset + 32] = '0';
+        bytes[struct_offset + 33] = '\0';
+        value_va = reinterpret_cast<uint64_t>(&bytes[struct_offset + 32]);
+    }
+};
+
+void TestDevCameraCvarPatcherProbesValueAtStructOffset32() {
+    ScratchCvarImageValueAt32 img;
+    auto p = MakePatcher();
+    p->SetNameRva(0);
+    p->SetModuleBaseForTesting(img.name_va);
+    const DevCameraCvarPatchResult r = p->PatchOnce();
+    EXPECT_TRUE(r.patched);
+    EXPECT_EQ(r.cvar_value_va, img.value_va);
+    EXPECT_EQ(img.bytes[img.struct_offset + 32], '1');
+}
+
 }  // namespace walkercore

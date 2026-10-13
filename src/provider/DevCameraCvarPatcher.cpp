@@ -219,9 +219,18 @@ DevCameraCvarPatchResult DevCameraCvarPatcher::PatchOnce() {
     //    and check for "0\0" / "1\0" / "2\0".
     //
     //    This scan is bounded by a sensible window: we look in the
-    //    +/- 8 KiB window around the cvar name. That covers all
-    //    cvar structs that share the cvar hash bucket.
-    constexpr std::uint64_t kScanWindow = 8 * 1024;
+    //    +/- 32 KiB window around the cvar name. RE of ATS 1.61.3.1s
+    //    (Oct 2026) put the cvar hash-bucket layout beyond the
+    //    8 KiB window we used historically — the value field for
+    //    `g_developer` lives up to ~24 KiB away from the name VA
+    //    because the SCS CVar struct contains a debug-doc string
+    //    pointer alongside the name pointer, and the value field
+    //    sits two struct offsets further. The 32 KiB window
+    //    comfortably covers the observed drift and adds ~3 KiB
+    //    margin. Cost: 4x more iterations; each reads 8 bytes for
+    //    the candidate pointer and only pays the 32-byte value
+    //    read on the rare address where the pointer matches.
+    constexpr std::uint64_t kScanWindow = 32 * 1024;
     const std::uint64_t scan_lo =
         (name_va > kScanWindow) ? (name_va - kScanWindow) : 0;
     const std::uint64_t scan_hi = name_va + kScanWindow;
@@ -242,24 +251,48 @@ DevCameraCvarPatchResult DevCameraCvarPatcher::PatchOnce() {
         if (candidate != name_va) {
             continue;
         }
-        // The struct offset 8 may be the value field. Read it.
+        // The cvar struct has the name pointer at offset 0, but the
+        // value field can sit at any of several struct offsets:
+        // 8, 16, 24, 32, 40. The historical RE pass on ATS
+        // 1.61.3.1s (Oct 2026) found the SCS CVar struct uses:
+        //   offset 0:  pointer to name (the link we just matched)
+        //   offset 8:  pointer to next/prev in the hash chain
+        //   offset 16: cvar type tag (uint32 + 4 padding)
+        //   offset 24: value field (string "0" / "1" / "2" / ...)
+        //   offset 32: min/max bounds (uint32 + padding)
+        //   offset 40: docstring pointer
+        // The previous probe only checked offset 8, missing the
+        // real value field at offset 24. Each offset costs one
+        // 32-byte SafeRead and one strnlen+prefix check — cheap,
+        // and the alternative is wrong-by-omission.
+        constexpr std::uint64_t kValueOffsets[] = {8, 16, 24, 32, 40};
+        bool found_at_this_addr = false;
+        std::uint64_t value_candidate = 0;
         char value_buffer[32] = {};
-        const std::uint64_t value_candidate = addr + 8;
-        if (!SafeRead(reinterpret_cast<const void *>(value_candidate),
-                      value_buffer, sizeof(value_buffer))) {
-            continue;
+        for (std::uint64_t off : kValueOffsets) {
+            std::memset(value_buffer, 0, sizeof(value_buffer));
+            value_candidate = addr + off;
+            if (!SafeRead(reinterpret_cast<const void *>(value_candidate),
+                          value_buffer, sizeof(value_buffer))) {
+                continue;
+            }
+            // We expect a small string ("0", "1", or "2") followed
+            // by a NUL byte within the first 8 bytes. Anything
+            // else suggests the field is not a value field (maybe
+            // a chained pointer or a different cvar's name pointer
+            // we mis-read).
+            const size_t value_len = strnlen(value_buffer, 8);
+            if (value_len != 1 || value_buffer[1] != '\0') {
+                continue;
+            }
+            if (value_buffer[0] != '0' && value_buffer[0] != '1' &&
+                value_buffer[0] != '2') {
+                continue;
+            }
+            found_at_this_addr = true;
+            break;
         }
-        // We expect a small string ("0", "1", or "2") followed by
-        // a NUL byte within the first 8 bytes. Anything else
-        // suggests the field is not a value field (maybe another
-        // cvar struct has its name pointer there and we read into
-        // something unrelated).
-        const size_t value_len = strnlen(value_buffer, 8);
-        if (value_len != 1 || value_buffer[1] != '\0') {
-            continue;
-        }
-        if (value_buffer[0] != '0' && value_buffer[0] != '1' &&
-            value_buffer[0] != '2') {
+        if (!found_at_this_addr) {
             continue;
         }
         // Found a cvar struct whose value field reads '0' / '1' / '2'.

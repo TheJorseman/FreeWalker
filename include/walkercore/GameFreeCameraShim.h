@@ -311,22 +311,29 @@ private:
     int walks_entered_ = 0;
     int toggles_dispatched_ = 0;
     int last_dispatch_ms_ = 0;
-    unsigned int toggle_vk_ = 0x30;     // VK_0 (top-row zero) — SCS dev free
-                                         // camera toggle when g_developer=1 AND
-                                         // g_console=1 (see config.cfg).
-                                         // VK_NUMPAD0 (0x60) does NOT toggle the
-                                         // dev free camera; it routes through the
-                                         // regular interior-camera cycle. The
-                                         // game's action registry has no
-                                         // 'dev_camera_toggle' / 'camdbg' / etc.
-                                         // entry for the free camera in this
-                                         // build — confirmed by RE: zero hits
-                                         // for those names in amtrucks.exe. The
-                                         // dev free camera is reached via the
-                                         // hard-coded '0' shortcut (intercepted
-                                         // before the action registry) plus
-                                         // `g_console=1`. See
-                                         // docs/observations/dev-free-camera.md.
+    unsigned int toggle_vk_ = 0x7A;     // VK_F11 — SCS dev free camera
+                                         // toggle in amtrucks.exe 1.61.3.1s
+                                         // (verified live Oct 2026: pressing
+                                         // F11 with g_developer=1 AND
+                                         // g_console=1 takes the camera to
+                                         // the dev free-roaming view, debug
+                                         // overlay and all). Earlier
+                                         // defaults VK_NUMPAD0 (0x60) and
+                                         // VK_0 (0x30, top-row zero) were
+                                         // RE guesses that turned out wrong
+                                         // on user live-verify. The SCS
+                                         // input parser has no
+                                         // 'dev_camera_toggle' / 'camdbg'
+                                         // / 'walk_mode' / 'free_camera'
+                                         // action entry for this build
+                                         // (zero hits in amtrucks.exe
+                                         // strings). The dev free camera
+                                         // shortcut is intercepted before
+                                         // the action registry, so even
+                                         // the user's `menustereo` binding
+                                         // for F11 is bypassed in dev mode.
+                                         // See docs/observations/
+                                         // dev-free-camera.md.
     unsigned int exit_press_vk_ = 0;    // 0 = no separate exit press
     bool exiting_walking_ = false;
     // M2.5: set by PluginEntry when [m2] dev_camera_toggle_vk was
@@ -334,7 +341,7 @@ private:
     // literal). When true, AutoDetectToggleVkFromControlsSii skips the
     // controls.sii probe and the INI value wins. When false, the shim
     // auto-detects from controls.sii if a binding is found and falls
-    // back to the hard-coded default 0x30 (top-row '0') otherwise.
+    // back to the hard-coded default 0x7A (VK_F11) otherwise.
     bool ini_overrides_toggle_vk_ = false;
     // M2.5 follow-up: did the INI explicitly set
     // `game_free_camera_shim = ...`? Set by PluginEntry before

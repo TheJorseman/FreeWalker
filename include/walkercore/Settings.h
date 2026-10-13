@@ -79,33 +79,47 @@ struct WalkerSettings {
     // m2_dev_camera_toggle_vk_explicit.
     bool m2_game_free_camera_shim_explicit = false;
     // M2: virtual key the shim synthesises on every Walking entry
-    // to toggle the dev free camera. The default is VK_0 (top-row
-    // zero = 0x30), the SCS hard-coded dev free camera shortcut
-    // when `g_developer=1` AND `g_console=1` in config.cfg. Note:
-    // earlier versions defaulted to VK_NUMPAD0 (0x60) — that key
-    // does NOT toggle the dev free camera in amtrucks.exe 1.61.3.1s
-    // (RE-confirmed: zero hits for the supposed SCS action names
+    // to toggle the dev free camera. The default is VK_F11 (0x7A).
+    // Live verification on amtrucks.exe 1.61.3.1s (ATS 1.61.3.1s
+    // Steam build, Oct 2026) shows that pressing F11 when
+    // `g_developer=1` AND `g_console=1` are set in config.cfg takes
+    // the camera to the dev free-roaming view (camera 0 — the
+    // driver-exit camera with a debug overlay showing world-space
+    // position). Earlier versions defaulted to VK_NUMPAD0 (0x60)
+    // and then VK_0 (0x30, top-row zero) — neither actually
+    // toggles the dev free camera in this build (RE-confirmed:
+    // zero hits for the supposed SCS action names
     // `dev_camera_toggle` / `camdbg` / `walk_mode` / `free_camera`
-    // in the binary). VK_0 is intercepted before the action
-    // registry, so no controls.sii binding is required. The value
-    // is a Windows virtual-key code (decimal); for example
-    // `dev_camera_toggle_vk = 48` is top-row zero,
-    // `dev_camera_toggle_vk = 112` is F1, `dev_camera_toggle_vk =
-    // 0xC0` is the `~` console key. The shim only fires when
+    // in the binary, and the top-row `0` shortcut was a static-
+    // analysis guess that turned out wrong on user live-verify).
+    // Note: F11 is the SCS dev free-camera toggle in this build
+    // even though the user's controls.sii currently binds
+    // `keyboard.f11` to the `menustereo` action — the SCS dev
+    // shortcut intercepts F11 before the action registry, so the
+    // menustereo binding is a no-op in dev mode while the dev cam
+    // toggle wins. The value is a Windows virtual-key code
+    // (decimal); for example `dev_camera_toggle_vk = 122` is F11,
+    // `dev_camera_toggle_vk = 112` is F1, `dev_camera_toggle_vk
+    // = 0xC0` is the `~` console key. The shim only fires when
     // `m2_game_free_camera_shim` is also true; with the shim off,
     // this knob has no effect.
-    unsigned int m2_dev_camera_toggle_vk = 0x30;  // VK_0 (top-row zero)
+    unsigned int m2_dev_camera_toggle_vk = 0x7A;  // VK_F11
     // M2.5: did the INI explicitly set `dev_camera_toggle_vk` (any
-    // value, including the default 0x30)? When true, the
+    // value, including the default 0x7A)? When true, the
     // GameFreeCameraShim's controls.sii auto-detect is skipped — the
     // user has signalled "I know what I want, leave me alone". When
     // false (key was not present in the INI), the shim auto-probes
     // the user's controls.sii for `o_im_freecam` and adopts the
     // first keyboard.* binding it finds. The flag is distinct from
     // the value itself because a user can explicitly set
-    // `dev_camera_toggle_vk = 0x30` (top-row zero) and that is still
-    // an explicit override even though it happens to match the
-    // default.
+    // `dev_camera_toggle_vk = 0x7A` (VK_F11) and that is still an
+    // explicit override even though it happens to match the
+    // default. M2.7 also adds a one-shot in-memory migration in
+    // LoadFromPath: a sentinel-managed INI whose value still reads
+    // as the legacy M2.6 default (0x30 = VK_0) — written by a
+    // pre-M2.7 DLL — is snapped to the current code default
+    // (0x7A = VK_F11) and flagged for re-save so the round-trip
+    // cleans itself up on the next successful boot.
     bool m2_dev_camera_toggle_vk_explicit = false;
     // M2 long-term camera hijack gate. False by default — opt in via
     // `[m2] camera_hijack = 1`. When enabled, WalkerCore captures

@@ -61,9 +61,12 @@ void TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse();
 void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved();
 // M2 dev_camera_toggle_vk — virtual key the shim synthesises on
 // every Walking entry. SCS hard-codes the dev free camera toggle to
-// the top-row `0` key (VK_0 = 0x30), gated by `g_developer=1` AND
-// `g_console=1` in config.cfg.
-void TestIniM2DevCameraToggleVkDefaultIsVK0();
+// the F11 key (VK_F11 = 0x7A), gated by `g_developer=1` AND
+// `g_console=1` in config.cfg. (M2.7 default after the live
+// dev-free-camera-shortcut change; earlier defaults VK_NUMPAD0
+// 0x60 and VK_0 0x30 were RE-driven guesses that did not work in
+// amtrucks.exe 1.61.3.1s.)
+void TestIniM2DevCameraToggleVkDefaultIsVKF11();
 void TestIniM2DevCameraToggleVkParsesHexAndDecimal();
 void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault();
 void TestIniM2DevCameraToggleVkUnparseableKeepsDefault();
@@ -704,7 +707,7 @@ int main() {
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse);
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimExplicitFalseIsPreserved);
     // M2 dev_camera_toggle_vk.
-    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVK0);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVKF11);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkParsesHexAndDecimal);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkUnparseableKeepsDefault);

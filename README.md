@@ -96,7 +96,7 @@ Si pasa, excluir `bin\win_x64\plugins\` del juego en el antivirus.
 
 | Tecla | Acción |
 |---|---|
-| **F10** | Toggle walk mode (Driving ↔ Walking). Cuando el shim está activo y `g_developer = 1` en el `config.cfg` del juego, sintetiza la tecla bindeada en `controls.sii` a una acción de toggle reconocida (`dev_camera_toggle` → `camdbg` → `walk_mode` → `free_camera`; default Numpad-0 si no hay binding) para tomar la SCS free camera. M2.5: el shim se auto-activa cuando detecta el binding + `g_developer=1` — no requiere editar `WalkerCore.ini`. **Recomendado:** `mix camdbg \`keyboard.f8?0\`` en controls.sii — `camdbg` es la acción SCS válida; F8 evita la colisión con `bugreport*` / `menustereo` que sufre F11 en el perfil stock. |
+| **F10** | Toggle walk mode (Driving ↔ Walking). Cuando el shim está activo y `g_developer = 1` en el `config.cfg` del juego, sintetiza la tecla F11 (default M2.7) al entrar a Walking para que el SCS dev free camera tome el control. Live-verified Oct 2026: F11 (con `g_developer=1` AND `g_console=1`) es el toggle real del dev free cam en amtrucks.exe 1.61.3.1s — no `0` ni `Numpad-0` como se asumió en versiones M2.5/M2.6. M2.5: el shim se auto-activa cuando detecta un binding a `o_im_freecam` en `controls.sii` (la única acción SCS válida confirmada por RE); si tu profile no la tiene, pon `game_free_camera_shim = true` en `WalkerCore.ini` y el shim usará el default F11. **Recomendado:** `mix o_im_freecam \`keyboard.f8?0\`` en controls.sii + shim auto-enable — F8 evita colisión con `bugreport*` / `menustereo` que sufren F11 en el perfil stock. |
 | **Ctrl + F10** | Abre / cierra el menú de settings en juego. |
 | **F** | Interact (entrar / salir de cab, fuel, coupling). |
 | **F12** | Dump completo de estado a `game.log.txt` (todos los `walker_dump_*`). |
@@ -119,7 +119,7 @@ están en `include/walkercore/InputHook.h:33-50`.
 
 | Sección | Key | Default | Descripción |
 |---|---|---|---|
-| `[m2]` | `game_free_camera_shim` | `false` (M2.5: smart-default auto-flips a `true` cuando binding + `g_developer=1`) | Cuando activo, F10 sintetiza la tecla bindeada a `camdbg` (o `dev_camera_toggle` / `walk_mode` / `free_camera` por orden de prioridad) en `controls.sii` (default Numpad-0; configurable vía `[m2] dev_camera_toggle_vk`) para que el SCS developer free camera (`g_developer 1`) haga el toggle. Auto-detecta `g_developer` en `OneDrive\Documentos\American Truck Simulator\config.cfg` (también es_ES / OneDrive Personal) y auto-detecta el binding del usuario en `controls.sii`. |
+| `[m2]` | `game_free_camera_shim` | `false` (M2.5: smart-default auto-flips a `true` cuando binding a `o_im_freecam` + `g_developer=1`) | Cuando activo, F10 sintetiza VK_F11 (0x7A, default M2.7 — verificado live en ATS 1.61.3.1s) o el `keyboard.X` bindeado a `o_im_freecam` en `controls.sii` (la única acción SCS válida por RE), configurable vía `[m2] dev_camera_toggle_vk = 0xHH`. Auto-detecta `g_developer` en `OneDrive\Documentos\American Truck Simulator\config.cfg` (también es_ES / OneDrive Personal) y auto-detecta el binding del usuario en `controls.sii`. M2.7 migration: INIs viejos con `dev_camera_toggle_vk = 0x30` o `0x60` se reescriben automáticamente a `0x7A` en el primer boot. |
 | `[m11]` | `imgui_overlay` | `false` | OFF por defecto. Cuando `true`, overlay ImGui sobre el swap chain con state en vivo + 2 botones (Dump state / Dump PxScene) + PxScene live status. |
 
 ## Referencias

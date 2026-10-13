@@ -160,31 +160,37 @@ Driving → Walking — splits into two paths:
 **MVP path (use today): `GameFreeCameraShim`.** Default-off with
 **M2.5 smart-default auto-enable**. On every Driving → Walking
 transition the shim synthesises a configurable VK press+release (default
-`VK_NUMPAD0` = `0x60`; overridable via `[m2] dev_camera_toggle_vk = 0xHH`,
+`VK_F11` = `0x7A` since M2.7; overridable via `[m2] dev_camera_toggle_vk = 0xHH`,
 auto-detected from `controls.sii`) so the SCS developer free camera takes
-over (assuming `g_developer "1"` is already in the game's `config.cfg` —
-which it is on this host, see `game.log.txt:350`). The shim's
-`g_developer` probe auto-reads the game's config and only fires keys when
-detected; otherwise it logs an advisory instead of synthesising keys.
+over (assuming `g_developer "1"` AND `g_console "1"` are both in the
+game's `config.cfg`). The shim's `g_developer` probe auto-reads the
+game's config and only fires keys when detected; otherwise it logs an
+advisory instead of synthesising keys.
 
-> **Action name priority is `dev_camera_toggle > camdbg > walk_mode >
-> free_camera`.** The shim tries `dev_camera_toggle` first for compatibility
-> with TMRealWalk-style tutorials, but that name is **not a valid SCS input
-> object** — the SCS 1.3+ parser rejects it with `[inp] "dev_camera_toggle"
-> is not valid object name`. `camdbg` (camera + debug) is the real action
-> that toggles the `g_debug_camera` CVar; recommended binding key is F8
-> (F11 collides with `bugreport*` / `menustereo` in the stock profile and
-> gets silently dropped).
+> **Live verification (Oct 2026, ATS 1.61.3.1s).** Pressing F11 with
+> `g_developer=1` AND `g_console=1` takes the camera to the dev free
+> roam view (debug overlay showing world-space position). Pressing
+> `0` (top-row zero) or Numpad-0 — the M2.5/M2.6 defaults — does
+> **nothing** to the dev cam. The `o_im_freecam` UI token (in-game
+> debug options menu) toggles the same view via the action registry.
 
-**Smart-default auto-enable (M2.5).** When three gates all pass, the
-shim flips itself from `false` to `true` automatically on DLL load:
+> **Action probe is `o_im_freecam` only (M2.7).** Earlier versions
+> probed `dev_camera_toggle` / `camdbg` / `walk_mode` / `free_camera`
+> — RE of `amtrucks.exe` 1.61.3.1s shows zero hits for any of those
+> names as valid SCS input objects; the parser rejects them with
+> `[inp] "<name>" is not valid object name` and the key press is
+> silently dropped. `o_im_freecam` is the only confirmed-valid action
+> for the dev free camera in this build.
+
+**Smart-default auto-enable (M2.5 + M2.7).** When three gates all pass,
+the shim flips itself from `false` to `true` automatically on DLL load:
   1. The INI did **not** name `[m2] game_free_camera_shim = ...` (the
      `m2_game_free_camera_shim_explicit` flag is false — the user has
      not vetted the value).
-  2. A `dev_camera_toggle` / `camdbg` / `walk_mode` / `free_camera`
-     binding is present in the user's `controls.sii` (auto-detected via
-     `ControlsSiiParser` + `ScsKeyNameToVkForTesting` lookup table —
-     covers F1-F12, numpad, modifiers, cursor keys, single letters).
+  2. An `o_im_freecam` binding is present in the user's `controls.sii`
+     (auto-detected via `ControlsSiiParser` +
+     `ScsKeyNameToVkForTesting` lookup table — covers F1-F12, numpad,
+     modifiers, cursor keys, single letters).
   3. `g_developer = 1` (or `2`) is present in `config.cfg`
      (`g_developer` probe via OneDrive- and locale-aware candidate
      enumeration).
@@ -197,14 +203,21 @@ via `[m2] game_free_camera_shim = false` — the explicit flag gates the
 smart-default path so a user who has vetted `false` is not surprised by
 a silent re-enable.
 
-**Controls binding auto-detect (M2.5).** At DLL init the shim scans the
-active profile's `controls.sii` (OneDrive- + locale-aware path probe,
-parallels the `g_developer` probe) for the first `keyboard.*` token bound
-to one of `dev_camera_toggle` / `camdbg` / `walk_mode` / `free_camera`
-(in that priority order). The detected key becomes the dispatch VK
+**Controls binding auto-detect (M2.5 + M2.7).** At DLL init the shim
+scans the active profile's `controls.sii` (OneDrive- + locale-aware path
+probe, parallels the `g_developer` probe) for the first `keyboard.*`
+token bound to `o_im_freecam`. The detected key becomes the dispatch VK
 unless the user explicitly pinned a value in the INI
 (`m2_dev_camera_toggle_vk_explicit=true`). Falls back to the default
-`0x60` when no binding is found.
+`0x7A` (VK_F11) when no binding is found.
+
+**M2.7 INI migration.** On `LoadFromPath`, a sentinel-managed
+`dev_camera_toggle_vk` value matching any historical default
+(`0x30` = M2.6's VK_0, `0x60` = M2.5's VK_NUMPAD0) is snapped to the
+current code default `0x7A` (= VK_F11) and re-saved. The migration is
+one-shot per INI lifetime because the post-migration value matches the
+new code default and the legacy-patch loop re-emits the sentinel
+comment so future loads stay suppressed.
 
 ABI: `walker_game_free_camera_shim_set_enabled`, `_supported`,
 `_on_enter_walking`, `_on_exit_walking`, `_toggle_now`,

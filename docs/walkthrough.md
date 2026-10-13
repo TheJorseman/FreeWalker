@@ -6,9 +6,9 @@ Esta guía asume ATS 1.61.3.1s (Steam) + ReShade + OptiScaler (DLSS5) + DXVK com
 >
 > 1. **Copiar `libWalkerCore.dll` a `bin\win_x64\plugins\`** (una vez por versión del juego).
 > 2. **Activar el shim — MANUAL o AUTOMÁTICO.** Opción A: pon `[m2] game_free_camera_shim = true` en `%APPDATA%\WalkerCore\WalkerCore.ini` (recomendado). Opción B: añade `mix o_im_freecam \`keyboard.f8?0\`` al final de tu `controls.sii` y el smart-default auto-enable del M2.5 lo activará solo cuando `g_developer=1` esté en `config.cfg`.
-> 3. **`g_developer=1` + `g_console=1`** en `Documents\American Truck Simulator\config.cfg` — sin estos dos cvars a `1`, presionar F10 (o F11) no activa el dev free camera aunque el shim dispare bien.
+> 3. **`g_developer=1` + `g_console=1`** en `Documents\American Truck Simulator\config.cfg` — sin estos dos cvars a `1`, el dev free camera del SCS no se activa aunque el shim dispatche correctamente.
 >
-> Verificación: `PathFreeCameraU` = `SendInput F11` (default M2.7 — VK_0x7A) → cámara salta al dev free-roaming view con overlay de debug mostrando tu posición world-space.
+> Verificación: entrando a Walking con `game_free_camera_shim = true` + `g_console=1` + `o_im_freecam` binding, el SendInput del shim debería llevar el dev free camera a la vista correcta. **Nota Oct 2026**: la verificación previa que decía "F11 presses salta a dev free cam con overlay" fue invalidada por una live-test del user que observó "F11 me lleva a camera 0" — el comportamiento en este build no es lo que se creía. Por eso el default M2.7 sigue siendo 0x7A pero se recomienda al user fijar `dev_camera_toggle_vk = 0x77` (F8) en el INI y bindear `o_im_freecam \`keyboard.f8?0\`` en controls.sii — el F8 evita el binding nativo de F11 y va por la pipeline de input normal.
 
 ---
 
@@ -26,11 +26,11 @@ Funcionalidad que **funciona end-to-end sin tocar nada**:
 - **SettingsMenu + ImGuiOverlay** exponen widgets reales (M11 lander) — sliders de movimiento, sliders de cámara, head-tracker toggle, key bindings.
 - **OpentrackReceiver + HeadTrackerProvider** listos para opentrack/TrackIR (M7).
 - **DiagnosticDump (F12)** muestra todos los contadores, los estados internos, los providers y las matrices de cámara.
-- **GameFreeCameraShim M2.7** sintetiza VK_F11 (0x7A, default) al entrar a Walking si el shim está activo + `g_developer=1` AND `g_console=1`. El default legacy M2.5/2.6 era VK_0/Numpad-0 (0x30/0x60) — ninguno de esos toggles el dev free camera en `amtrucks.exe` 1.61.3.1s. El switch a F11 está verificado live Oct 2026.
+- **GameFreeCameraShim M2.7** sintetiza VK_F11 (0x7A, default) al entrar a Walking si el shim está activo + `g_developer=1` AND `g_console=1`. El default legacy M2.5/2.6 era VK_0/Numpad-0 (0x30/0x60) — ninguno de esos toggles el dev free camera en `amtrucks.exe` 1.61.3.1s. La verificación live del switch a F11 fue invalidada por observación posterior del user (Oct 2026): "F11 me lleva a camera 0" en vez de dev free cam — el comportamiento real es ambiguo. Por eso la recomendación actual es fijar el user `dev_camera_toggle_vk = 0x77` (F8) en el INI y bindear `o_im_freecam \`keyboard.f8?0\`` en `controls.sii`.
 
 Funcionalidad que **funciona pero el efecto visual no es inmediato**:
 
-- **GameFreeCameraShim** envía F11 a `amtrucks.exe` cuando entramos a `Walking`. El envío es correcto (SendInput contra el HWND del juego) — pero sin `g_developer=1` AND `g_console=1` en `config.cfg` el SCS dev shortcut se ignora y la cámara no se desbloquea.
+- **GameFreeCameraShim** envía el `toggle_vk_` (default VK_F11 = 0x7A) a `amtrucks.exe` cuando entramos a `Walking`. El envío es correcto (SendInput contra el HWND del juego) — pero sin `g_developer=1` AND `g_console=1` en `config.cfg` el SCS dev shortcut se ignora y la cámara no se desbloquea. **Recomendación**: usar `dev_camera_toggle_vk = 0x77` (F8) en el INI y bindear `o_im_freecam \`keyboard.f8?0\`` en `controls.sii` — F8 evita la interacción nativa de F11 con `cam 0` cycling.
 
 Funcionalidad que **está bloqueada por el mod stack**:
 
@@ -107,7 +107,7 @@ El smart-default detecta un binding a `o_im_freecam` en `controls.sii` + `g_deve
    Eso bindea F8 a `o_im_freecam` — la única acción SCS válida confirmada por RE del parser de input (`dev_camera_toggle` / `camdbg` / `walk_mode` / `free_camera` no existen como objetos válidos en amtrucks.exe 1.61.3.1s).
 3. Reinicia ATS.
 
-> **Por qué F8 y no F11.** F11 está bindeado en tu perfil activo (`415453`) a `menustereo` — el SCS dev shortcut intercepta F11 antes del action registry, pero en configuraciones con mod stack (ReShade + OptiScaler), F11 puede llegar al juego con pérdida de foco. F8 es la primera function key libre por scan de tu `controls.sii`, sin colisiones.
+> **Por qué F8 y no F11.** F8 es la primera function key libre por scan de tu `controls.sii`, sin colisiones. F11 nativo en este build tiene un efecto no controlado (cycles a camera 0), y aunque el shim dispare SendInput(F11), el receiver SCS tiene prioridad nativa sobre la action registry. F8 va por la pipeline de input normal sin colisión.
 
 ---
 

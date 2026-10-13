@@ -412,20 +412,28 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     // is loaded. The migration is idempotent and cheap (one boolean
     // compare + one SaveToPath on the upgrade load only).
     bool migrated = false;
-    if (!current_.m2_game_free_camera_shim) {
-        // The shim synthesises Numpad-0 on F10 Walking entry so
-        // the SCS developer free camera activates. With it
-        // disabled, F10 only fires the FSM transition (which is
-        // invisible to the user). The user confirmed the dev
-        // free camera works manually via Numpad-0; flipping
-        // this default to `true` makes F10 produce a visible
-        // camera change out of the box.
-        WALKERCORE_LOG_INFO(
-            "Settings: [m2] game_free_camera_shim was false; "
-            "flipping to true (so F10 synth's Numpad-0 and the "
-            "SCS dev free camera activates — see game_free_"
-            "camera_shim log line on Walking entry).");
-        current_.m2_game_free_camera_shim = true;
+    if (current_.m2_game_free_camera_shim) {
+        // The shim is currently no-op for the stock ATS 1.61.x
+        // profile: Numpad-0 is bound to `dbglockpos` (debug lock
+        // position), not to the dev free camera toggle. The dev
+        // free camera is UI-button only (`o_im_freecam`) with no
+        // default key binding. Users who want this shim to work
+        // must bind Numpad-0 to the dev free camera action in
+        // their active profile's controls.sii AND have a clean DI8
+        // keyboard pipeline (no ReShade + OptiScaler + RenoDX + DXVK
+        // mod stack on top of DXGI exclusive fullscreen). Flip
+        // back to false so the shim doesn't spam dispatch log
+        // lines that accomplish nothing.
+        WALKERCORE_LOG_WARN(
+            "Settings: [m2] game_free_camera_shim was true; forcing "
+            "to false (the stock ATS 1.61.x profile binds Numpad-0 "
+            "to `dbglockpos`, not to the dev free camera toggle — "
+            "the shim dispatches SendInput Numpad-0 which the game "
+            "ignores. Bind Numpad-0 to the dev free camera action "
+            "in your active profile's controls.sii AND set "
+            "[m2] game_free_camera_shim = true in this INI to opt "
+            "back in).");
+        current_.m2_game_free_camera_shim = false;
         migrated = true;
     }
     if (current_.m2_d3d11_hook) {

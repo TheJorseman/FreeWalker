@@ -49,16 +49,23 @@ struct WalkerSettings {
     // developer free camera takes over (assuming `g_developer` is "1"
     // in the game's config.cfg). Default `false` so out-of-the-box
     // M2 lander: when true, the F10 (Driving -> Walking) transition
-    // also synthesises a Numpad-0 keypress (via PostMessage to the
-    // bound game HWND) so the SCS developer free camera takes over
-    // — that's what makes "F10 produces a visible camera change"
-    // work for the user. Requires `uset g_developer "1"` in the
-    // game's config.cfg (the user already has it). Default `true`
-    // because F10 -> free-camera-toggle is the core M2 lander
-    // observable; without the shim, F10 only does the FSM
-    // transition (which the user can't see). The M11 settings menu
+    // also synthesises a Numpad-0 keypress via SendInput so the SCS
+    // developer free camera takes over. Requires `uset g_developer
+    // "1"` in the game's config.cfg AND a binding from Numpad-0
+    // to the dev free camera toggle action in the active profile's
+    // controls.sii — by default ATS 1.61.x does NOT bind any key
+    // to the dev free camera (it's UI-button only via
+    // `o_im_freecam`), so this shim is effectively a no-op for the
+    // stock profile. Default `false` so users on the stock profile
+    // don't see SendInput dispatch log lines that accomplish
+    // nothing. Users who want the shim to work must (a) bind
+    // Numpad-0 to the dev free camera action in controls.sii, and
+    // (b) set this gate to `true`. Even then, mod stacks that wrap
+    // DI8 keyboard (ReShade + OptiScaler + RenoDX + DXVK) can
+    // discard SendInput events on the foreground lock — verified on
+    // the M2 lander's worst-case mod stack. The M11 settings menu
     // can flip it at runtime via the exported ABI.
-    bool m2_game_free_camera_shim = true;
+    bool m2_game_free_camera_shim = false;
     // M2 long-term camera hijack gate. False by default — opt in via
     // `[m2] camera_hijack = 1`. When enabled, WalkerCore captures
     // amtrucks.exe's image base via GetModuleHandleA and MinHooks the

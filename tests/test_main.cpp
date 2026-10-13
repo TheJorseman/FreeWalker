@@ -56,9 +56,9 @@ void TestIniM2CameraHijackInstallParseAndRoundTrip();
 void TestIniM3PxSceneHookInstallParseAndRoundTrip();
 void TestIniM2CameraHijackInstallAutoMigratesOldTrueValues();
 void TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues();
-void TestIniM2GameFreeCameraShimDefaultIsTrue();
-void TestIniM2GameFreeCameraShimAutoMigratesOldFalseToTrue();
-void TestIniM2GameFreeCameraShimExplicitTrueIsPreserved();
+void TestIniM2GameFreeCameraShimDefaultIsFalse();
+void TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse();
+void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved();
 void TestApplyAllPushesEveryFieldToEveryConsumer();
 void TestWalkerFsmInitialState();
 void TestWalkerFsmDrivingToWalking();
@@ -618,9 +618,9 @@ int main() {
     RUN_TEST(walkercore::TestIniM3PxSceneHookInstallParseAndRoundTrip);
     RUN_TEST(walkercore::TestIniM2CameraHijackInstallAutoMigratesOldTrueValues);
     RUN_TEST(walkercore::TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues);
-    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimDefaultIsTrue);
-    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimAutoMigratesOldFalseToTrue);
-    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimExplicitTrueIsPreserved);
+    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimDefaultIsFalse);
+    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse);
+    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimExplicitFalseIsPreserved);
 
     // Regression guard for the dump_state_vk / mouse-button round-trip —
     // the user observed "F12 only gives me a screenshot" because the

@@ -503,7 +503,12 @@ void TestIniM2D3DHookGatesParseAndDefault() {
     EXPECT_FALSE(defaults.current().m2_d3d12_hook);
 
     // Parse `true` for both (the user opting back in on a clean
-    // stack), plus the existing m2 knobs, in one shot.
+    // stack), plus the existing m2 knobs, in one shot. Note the
+    // `game_free_camera_shim = true` line gets auto-migrated to
+    // `false` because the stock ATS 1.61.x profile binds Numpad-0
+    // to `dbglockpos`, not to the dev free camera toggle — see
+    // Settings.cpp rationale. The migration makes the test pass
+    // `false` for that gate.
     {
         FileWriter w(path);
         w << "[m2]\n";
@@ -514,7 +519,7 @@ void TestIniM2D3DHookGatesParseAndDefault() {
     }
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));
-    EXPECT_TRUE(reader.current().m2_game_free_camera_shim);
+    EXPECT_FALSE(reader.current().m2_game_free_camera_shim);
     EXPECT_FALSE(reader.current().m2_camera_hijack);
     // The auto-migration forces the gates to false regardless of
     // what the user typed — see the rationale in Settings.cpp. The
@@ -735,25 +740,27 @@ void TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues() {
 // -----------------------------------------------------------------------------
 // M2 game_free_camera_shim default flip + auto-migration.
 //
-// Rationale: the shim synthesises Numpad-0 on F10 Walking entry so the
-// SCS developer free camera activates — that's what makes F10 produce a
-// visible camera change for the user. With the shim disabled, F10 only
-// fires the FSM transition (invisible). Default was `false`, which made
-// the lander invisible out-of-the-box. Flip the default to `true` and
-// auto-migrate any pre-existing INI that still has `false` so the
-// upgrade is one-shot: load → migrate → save → done.
+// Stock ATS 1.61.x profiles bind Numpad-0 to `dbglockpos` (debug
+// lock position), NOT to the dev free camera toggle. The dev free
+// camera is UI-button only (`o_im_freecam`) with no default key
+// binding. So the shim — even when enabled — dispatches SendInput
+// Numpad-0 to a key that does nothing for the dev free camera.
+// Default flipped to `false` so users on the stock profile don't
+// see dispatch log lines that accomplish nothing. The auto-migrate
+// flips `true` legacy values back to `false` and persists.
 // -----------------------------------------------------------------------------
 
-void TestIniM2GameFreeCameraShimDefaultIsTrue() {
-    // Fresh store (no INI file loaded) uses the code default. Pin that
-    // the new default is `true` — this is the M2 lander observable.
+void TestIniM2GameFreeCameraShimDefaultIsFalse() {
+    // Fresh store (no INI file loaded) uses the code default. Pin
+    // that the new default is `false` — the shim is a no-op on
+    // the stock ATS 1.61.x profile and should be off by default.
     SettingsStore defaults;
-    EXPECT_TRUE(defaults.current().m2_game_free_camera_shim);
+    EXPECT_FALSE(defaults.current().m2_game_free_camera_shim);
 }
 
-void TestIniM2GameFreeCameraShimAutoMigratesOldFalseToTrue() {
-    // A pre-existing INI with the OLD default of `false` for
-    // game_free_camera_shim gets auto-migrated to `true` on load
+void TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse() {
+    // A pre-existing INI with the previous default of `true` for
+    // game_free_camera_shim gets auto-migrated to `false` on load
     // and the migration persists to disk. After the migration the
     // second load must NOT re-fire (idempotent).
     const std::string path = MakeTempIniPath("m2_shim_migrate");
@@ -762,13 +769,13 @@ void TestIniM2GameFreeCameraShimAutoMigratesOldFalseToTrue() {
     {
         FileWriter w(path);
         w << "[m2]\n";
-        w << "game_free_camera_shim = false\n";
+        w << "game_free_camera_shim = true\n";
     }
 
     // First load — migration fires.
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));
-    EXPECT_TRUE(reader.current().m2_game_free_camera_shim);
+    EXPECT_FALSE(reader.current().m2_game_free_camera_shim);
 
     // The migration must have persisted the fix to disk.
     {
@@ -776,47 +783,46 @@ void TestIniM2GameFreeCameraShimAutoMigratesOldFalseToTrue() {
         std::stringstream ss;
         ss << f.rdbuf();
         const std::string content = ss.str();
-        EXPECT_TRUE(content.find("game_free_camera_shim = true") !=
+        EXPECT_TRUE(content.find("game_free_camera_shim = false") !=
                     std::string::npos);
     }
 
-    // Second load — already migrated, value stays true.
+    // Second load — already migrated, value stays false.
     SettingsStore reader2;
     EXPECT_TRUE(reader2.LoadFromPath(path));
-    EXPECT_TRUE(reader2.current().m2_game_free_camera_shim);
+    EXPECT_FALSE(reader2.current().m2_game_free_camera_shim);
 
     std::remove(path.c_str());
 }
 
-void TestIniM2GameFreeCameraShimExplicitTrueIsPreserved() {
-    // Explicit `game_free_camera_shim = true` in the INI must not
-    // be flipped or migrated — the new default matches the user
-    // intent. This guards against the migration accidentally
+void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved() {
+    // Explicit `game_free_camera_shim = false` in the INI must
+    // not be flipped or rewritten — the new default matches the
+    // user intent. This guards against the migration accidentally
     // running on every load (it would be expensive — SaveToPath
     // touches disk and the polling reload fires per second).
-    const std::string path = MakeTempIniPath("m2_shim_explicit_true");
+    const std::string path = MakeTempIniPath("m2_shim_explicit_false");
     std::remove(path.c_str());
 
     {
         FileWriter w(path);
         w << "[m2]\n";
-        w << "game_free_camera_shim = true\n";
+        w << "game_free_camera_shim = false\n";
     }
 
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));
-    EXPECT_TRUE(reader.current().m2_game_free_camera_shim);
+    EXPECT_FALSE(reader.current().m2_game_free_camera_shim);
 
     // Read the file back off disk — the migration should NOT have
-    // added a spurious "flipping to true" log line and the file
-    // should still contain the explicit `true` value (no extra
-    // whitespace, no rewriting).
+    // fired (the explicit `false` matches the code default), so
+    // the file content is preserved as-is.
     {
         std::ifstream f(path);
         std::stringstream ss;
         ss << f.rdbuf();
         const std::string content = ss.str();
-        EXPECT_TRUE(content.find("game_free_camera_shim = true") !=
+        EXPECT_TRUE(content.find("game_free_camera_shim = false") !=
                     std::string::npos);
     }
 

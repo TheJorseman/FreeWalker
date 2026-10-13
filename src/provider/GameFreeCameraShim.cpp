@@ -982,10 +982,16 @@ void GameFreeCameraShim::OnEnterWalking() {
     // `GameFreeCameraShim: Walking entry` and get a self-explanatory
     // line every time, regardless of whether the shim fired, the
     // gate was off, the cvar was 0, etc.
-    const char *path_name =
-        last_dispatch_path_ == 2
-            ? "PostMessage"
-            : (last_dispatch_path_ == 1 ? "SendInput" : "none");
+    //
+    // `last_dispatch_path_` is updated by `SynthKey` (called from
+    // `TriggerToggle` below) — so we MUST re-read it AFTER the
+    // dispatch to log the path the dispatch actually took. The
+    // previous version computed `path_name` here at the top of the
+    // function, which always showed `path=none` even when SendInput
+    // fired successfully. That bug masked the real failure mode
+    // from the user (the dispatch IS reaching the game; the game's
+    // action registry is the layer that decides whether the key
+    // does anything useful).
     const char *gate_str = enabled_ ? "on" : "off";
     const char *cvar_str = supported_ ? "1" : "0/missing";
     const char *patch_outcome = "unbound";
@@ -1048,6 +1054,14 @@ void GameFreeCameraShim::OnEnterWalking() {
         return;
     }
     const int dispatched = TriggerToggle();
+    // Read `last_dispatch_path_` AFTER `TriggerToggle` so the log
+    // reflects the path the dispatch actually took. SynthKey sets
+    // this to 1 (SendInput) on success, 0 (none) on hwnd-null or
+    // vk-zero early-return.
+    const char *path_name =
+        last_dispatch_path_ == 2
+            ? "PostMessage"
+            : (last_dispatch_path_ == 1 ? "SendInput" : "none");
     // M2.5: include the auto-detected controls.sii binding (or the
     // INI override marker) in the F10 Walking-entry log so the user
     // can verify which key is actually being dispatched. Without this

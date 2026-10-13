@@ -553,19 +553,56 @@ std::string ProbeConfigPath() {
 std::string ProbeActiveControlsSiiPath() {
 #if defined(_WIN32)
     char mydocs[MAX_PATH] = {};
+    std::string mydocs_str;
     if (SUCCEEDED(::SHGetFolderPathA(nullptr, CSIDL_MYDOCUMENTS, nullptr,
                                       SHGFP_TYPE_CURRENT, mydocs))) {
+        mydocs_str = mydocs;
         static const char *const stems[] = {
             "American Truck Simulator",
             "Euro Truck Simulator 2",
         };
         for (const char *stem : stems) {
-            std::string p = std::string(mydocs) + "\\" + stem +
-                            "\\controls.sii";
+            // Single-profile install: <Documents>/<game>/controls.sii
+            std::string p = mydocs_str + "\\" + stem + "\\controls.sii";
             FILE *f = std::fopen(p.c_str(), "rb");
             if (f) {
                 std::fclose(f);
                 return p;
+            }
+            // Multi-profile install: <Documents>/<game>/profiles/<id>/controls.sii
+            // The first controls.sii found under profiles/ is treated as the
+            // "active" one. We do not parse profile.sii (binary blob in 1.61.x)
+            // — the only safe portable approach is to enumerate. Most users
+            // have exactly one profile and the probe picks that one. Users
+            // with multiple profiles get the first one alphabetically; if
+            // that's wrong, the auto-detect still works for the binding that
+            // exists there and the user can override via INI if needed.
+            const std::string profiles_dir = mydocs_str + "\\" + stem +
+                                            "\\profiles";
+            WIN32_FIND_DATAA fd{};
+            const std::string pattern = profiles_dir + "\\*";
+            HANDLE h = ::FindFirstFileA(pattern.c_str(), &fd);
+            if (h != INVALID_HANDLE_VALUE) {
+                do {
+                    if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                        continue;
+                    }
+                    // Skip "." and ".." entries.
+                    if (fd.cFileName[0] == '.' &&
+                        (fd.cFileName[1] == '\0' ||
+                         (fd.cFileName[1] == '.' && fd.cFileName[2] == '\0'))) {
+                        continue;
+                    }
+                    const std::string candidate = profiles_dir + "\\" +
+                                                 fd.cFileName + "\\controls.sii";
+                    FILE *g = std::fopen(candidate.c_str(), "rb");
+                    if (g) {
+                        std::fclose(g);
+                        ::FindClose(h);
+                        return candidate;
+                    }
+                } while (::FindNextFileA(h, &fd));
+                ::FindClose(h);
             }
         }
     }

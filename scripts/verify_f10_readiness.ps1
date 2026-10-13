@@ -120,11 +120,28 @@ if (Test-Path $DeployedDll) {
 
 Section '2. controls.sii auto-detect probe'
 Emit ('Search root: ' + $ProfileDir)
-$controlsSii = Join-Path $ProfileDir 'controls.sii'
+# Multi-profile installs put controls.sii under <ProfileDir>/profiles/<id>/.
+# Walk the profiles dir for any controls.sii (the runtime does the same
+# via GameFreeCameraShim::ProbeActiveControlsSii — picks the first one
+# that exists).
+$controlsSiiCandidates = @(
+    (Join-Path $ProfileDir 'controls.sii')
+)
+$profilesDir = Join-Path $ProfileDir 'profiles'
+if (Test-Path $profilesDir) {
+    Get-ChildItem -LiteralPath $profilesDir -Directory -EA SilentlyContinue |
+        ForEach-Object {
+            $controlsSiiCandidates += (Join-Path $_.FullName 'controls.sii')
+        }
+}
+$controlsSii = $null
+foreach ($c in $controlsSiiCandidates) {
+    if (Test-Path $c) { $controlsSii = $c; break }
+}
 $bindingFound = $false
 $bindingKey = ''
 $bindingLine = 0
-if (Test-Path $controlsSii) {
+if ($controlsSii) {
     Emit ('Found: ' + $controlsSii)
     $lines = Get-Content -LiteralPath $controlsSii -EA SilentlyContinue
     for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -160,7 +177,9 @@ if (Test-Path $controlsSii) {
         Emit '          numpad, modifiers, single letters, cursor keys.)'
     }
 } else {
-    Emit ('controls.sii NOT FOUND at ' + $controlsSii)
+    Emit ('controls.sii NOT FOUND in any candidate under ' + $ProfileDir)
+    Emit '         Probed:'
+    foreach ($c in $controlsSiiCandidates) { Emit ('           - ' + $c) }
     Emit '         Check that $ProfileDir is correct (the script defaults to OneDrive\Documentos\American Truck Simulator).'
     Emit '         Common alternates: OneDrive\Documents\American Truck Simulator, Documents\American Truck Simulator.'
 }
@@ -189,24 +208,39 @@ if (Test-Path $configCfg) {
 }
 
 Section '4. WalkerCore.ini shim-enable probe (gate 1 of 3)'
+# M2.5 hotfix: the M2.5-managed sentinel `# walkercore:managed:<key>`
+# suppresses the `*_explicit` flag. A line that LOOKS user-written but
+# has the sentinel right below it is auto-managed — the smart-default
+# can still flip it. We mirror that logic in this probe.
 $iniExplicit = $false
 $iniShimValue = ''
+$iniShimManaged = $false
 if (Test-Path $RoamingIni) {
     Emit ('Found: ' + $RoamingIni)
     $content = Get-Content -LiteralPath $RoamingIni -EA SilentlyContinue
     $inM2 = $false
+    $prev = ''
     foreach ($line in $content) {
-        if ($line -match '^\s*\[m2\]\s*$') { $inM2 = $true; continue }
-        if ($line -match '^\s*\[') { $inM2 = $false; continue }
+        $trimmed = $line.Trim()
+        # Sentinel marker: appears on a line of its own, inside [m2].
+        if ($inM2 -and $trimmed -match '^#\s*walkercore:managed:game_free_camera_shim\s*$') {
+            $iniShimManaged = $true
+        }
+        if ($line -match '^\s*\[m2\]\s*$') { $inM2 = $true; $prev = ''; continue }
+        if ($line -match '^\s*\[') { $inM2 = $false; $prev = ''; continue }
         if ($inM2 -and $line -match '^\s*game_free_camera_shim\s*=\s*(.+?)\s*$') {
             $iniShimValue = $Matches[1].Trim()
             $iniExplicit = $true
         }
+        $prev = $line
     }
-    if ($iniExplicit) {
-        Emit ('[m2] game_free_camera_shim = {0} (EXPLICIT in INI -> smart-default SKIPPED)' -f $iniShimValue)
+    if (-not $iniExplicit) {
+        Emit '[m2] game_free_camera_shim: NOT PRESENT -> smart-default auto-enable is allowed'
+    } elseif ($iniShimManaged) {
+        Emit ('[m2] game_free_camera_shim = {0} + sentinel -> auto-managed (smart-default ALLOWED)' -f $iniShimValue)
+        $iniExplicit = $false  # override: sentinel wins
     } else {
-        Emit '[m2] game_free_camera_shim: NOT EXPLICIT -> smart-default auto-enable is allowed'
+        Emit ('[m2] game_free_camera_shim = {0} (EXPLICIT in INI -> smart-default SKIPPED)' -f $iniShimValue)
     }
 } else {
     Emit ('WalkerCore.ini NOT FOUND at ' + $RoamingIni)

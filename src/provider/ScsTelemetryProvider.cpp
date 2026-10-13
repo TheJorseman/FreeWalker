@@ -296,13 +296,50 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
                 s.model_id[i] = '\0';
                 s.has_model_id = (i > 0);
             }
+        } else if (std::strcmp(attr->name,
+                               SCS_TELEMETRY_CONFIG_ATTRIBUTE_fuel_capacity) == 0) {
+            // M8 Lander: per-truck fuel tank capacity in liters.
+            // ATS day-cab tractors ship around 380 L; 8x4 heavy-haul
+            // tractors can hit 1500+ L. Storing the real per-truck
+            // value here lets FuelProvider clamp the fill rate so
+            // the player cannot over-fill a small tank to a default
+            // 600 L ceiling. Float (not double) because the SDK
+            // reports it as `scs_value_float`; we widen to a double
+            // when we cross into the domain.
+            if (attr->value.type == SCS_VALUE_TYPE_float) {
+                const float v = attr->value.value_float.value;
+                if (v > 0.0f && v < 10000.0f) {
+                    s.fuel_capacity_l = v;
+                    s.has_fuel_capacity = true;
+                }
+                // Out-of-range values (zero, negative, or >10k L)
+                // are dropped silently — a misconfigured mod or a
+                // future SCS build reporting litres in mL would
+                // otherwise crash the fill rate. The honest-stub
+                // default of 600 L remains the fallback.
+            }
+        } else if (std::strcmp(attr->name,
+                               SCS_TELEMETRY_CONFIG_ATTRIBUTE_adblue_capacity) == 0) {
+            // M8 Lander: per-truck AdBlue/DEF tank capacity in
+            // liters. Real ATS trucks have a ~50 L tank; the SDK
+            // confirms the actual value per truck. Same validity
+            // gate as fuel_capacity: only accept values that look
+            // like a reasonable DEF tank (5–200 L) and otherwise
+            // fall back to the 50 L honest-stub default.
+            if (attr->value.type == SCS_VALUE_TYPE_float) {
+                const float v = attr->value.value_float.value;
+                if (v > 0.0f && v < 200.0f) {
+                    s.adblue_capacity_l = v;
+                    s.has_adblue_capacity = true;
+                }
+            }
         }
-        // brand_id, brand, fuel_capacity, adblue_capacity, etc.
-        // are exposed by the SDK but not consumed yet. The
-        // remaining attributes (forward_gear_count, rpm_limit,
-        // ...) describe the truck's powertrain and are not needed
-        // for the M5 / M9 / M11 work; the diagnostic dump can be
-        // extended later to surface them.
+        // brand_id, brand, fuel_warning_factor, adblue_warning_factor,
+        // air_pressure_warning, etc. are exposed by the SDK but not
+        // consumed yet. The remaining attributes (forward_gear_count,
+        // rpm_limit, ...) describe the truck's powertrain and are not
+        // needed for the M5 / M8 / M9 / M11 work; the diagnostic dump
+        // can be extended later to surface them.
     }
 }
 

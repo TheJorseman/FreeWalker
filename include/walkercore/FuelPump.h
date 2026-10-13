@@ -72,12 +72,23 @@ public:
     void SetFuelAmount(double l) { fuel_amount_l_ = l; }
     double adblue_amount_l() const { return adblue_amount_l_; }
     void SetAdblueAmount(double l) { adblue_amount_l_ = l; }
+    // M8 Lander: AdBlue/DEF tank capacity. Mirrors the SCS
+    // configuration event's `adblue.capacity` when delivered;
+    // honest-stub default is 50 L. Symmetric with the fuel
+    // capacity accessor above.
+    double adblue_capacity_l() const { return adblue_capacity_l_; }
+    void SetAdblueCapacity(double l) { adblue_capacity_l_ = l; }
 
 private:
     FuelPumpConfig cfg_;
     FuelStationState station_;
     bool fueling_ = false;
+    // M8 Lander: real per-truck tank capacities from the SCS
+    // configuration event. Defaults are the honest-stub fallbacks
+    // (600 L fuel, 50 L adblue) until the SDK delivers the per-
+    // truck value.
     double tank_capacity_l_ = 600.0;
+    double adblue_capacity_l_ = 50.0;
     double fuel_amount_l_ = 0.0;
     double adblue_amount_l_ = 0.0;
 };

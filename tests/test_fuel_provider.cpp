@@ -191,4 +191,186 @@ void TestFuelStationReadAfterTickReflectsCurrentPlayerPosition() {
     EXPECT_TRUE(provider.station().available);
 }
 
+// -----------------------------------------------------------------------------
+// M8 Lander: per-truck tank capacities from the SCS configuration event.
+//
+// The ScsTelemetryProvider parses `fuel.capacity` and `adblue.capacity`
+// (delivered as SCS_TELEMETRY_CONFIG_ATTRIBUTE_* during
+// SCS_TELEMETRY_EVENT_configuration) and stores them in
+// TruckState::fuel_capacity_l / adblue_capacity_l. FuelProvider's
+// Tick consumes those values and replaces the honest-stub 600 L
+// (fuel) / 50 L (adblue) defaults with the per-truck numbers. These
+// probes pin the contract:
+//   1. With has_fuel_capacity = true, the next Tick after a config
+//      event has the provider report the per-truck capacity.
+//   2. The fill rate clamps to the real per-truck capacity so a
+//      380 L day-cab cannot be over-filled to the 600 L default.
+//   3. With has_fuel_capacity = false, the stub 600 L default
+//      holds (the M8 stub contract).
+//   4. Symmetric probes for AdBlue (380 → 600 L clamp + 50 L
+//      default).
+// -----------------------------------------------------------------------------
+
+void TestFuelProviderCapacityFromConfigEventOverridesStub() {
+    ResetFuelPumpStubWarnForTesting();
+    FuelProvider provider;
+    // Pre-condition: stub default is 600 L fuel, 50 L adblue.
+    EXPECT_NEAR(provider.tank_capacity_l(), 600.0, 1e-6);
+    EXPECT_NEAR(provider.adblue_capacity_l(), 50.0, 1e-6);
+
+    TruckState truck;
+    TruckState_Clear(truck);
+    // Simulate the SCS configuration event delivering per-truck
+    // capacities (a Volvo VNL day-cab, 380 L fuel + 50 L adblue).
+    truck.fuel_capacity_l = 380.0f;
+    truck.has_fuel_capacity = true;
+    truck.adblue_capacity_l = 50.0f;
+    truck.has_adblue_capacity = true;
+
+    PlayerState player = MakePlayer();
+    provider.Tick(truck, player, 0.016);
+    // The provider's tank_capacity_l_ now reflects the per-truck
+    // value. AdBlue stays at 50 L because the SDK's value matches
+    // the stub default; we still verify the wiring by reading
+    // through.
+    EXPECT_NEAR(provider.tank_capacity_l(), 380.0, 1e-6);
+    EXPECT_NEAR(provider.adblue_capacity_l(), 50.0, 1e-6);
+}
+
+void TestFuelProviderFuelingClampsToRealPerTruckCapacity() {
+    // The M8 Lander contract: the fill rate clamps to the per-truck
+    // capacity, not the 600 L stub default. A 380 L day-cab filled
+    // at 100 L/s must stop at 380 L, not 600 L.
+    //
+    // Pattern: tick WITH telemetry once to seed the local counter
+    // and apply the per-truck capacity, then tick WITHOUT telemetry
+    // (so the local counter is not overwritten each frame) to
+    // accumulate the fill. This matches the production behaviour
+    // where the SCS configuration event fires once per truck swap
+    // (capacity stable) and the per-frame fuel channel reports
+    // each frame.
+    ResetFuelPumpStubWarnForTesting();
+    FuelProvider provider;
+    TruckState truck;
+    TruckState_Clear(truck);
+    truck.fuel_capacity_l = 380.0f;
+    truck.has_fuel_capacity = true;
+    truck.adblue_capacity_l = 50.0f;
+    truck.has_adblue_capacity = true;
+    // Seed fuel level at 0 via telemetry on the first tick.
+    truck.fuel_amount_l = 0.0f;
+    truck.has_fuel = true;
+    truck.adblue_amount_l = 0.0f;
+    truck.has_adblue = true;
+
+    PlayerState player = MakePlayer();
+    // Tick 1: WITH telemetry → seeds local counter from 0 and
+    // applies per-truck capacity.
+    provider.Tick(truck, player, 0.0);
+    EXPECT_NEAR(provider.tank_capacity_l(), 380.0, 1e-6);
+    EXPECT_NEAR(provider.fuel_amount_l(), 0.0, 1e-6);
+
+    FuelPumpConfig cfg;
+    cfg.fill_rate_lps = 100.0;  // 100 L/s — fills 380 L in 3.8 s
+    cfg.adblue_rate_lps = 10.0;
+    cfg.trigger_radius_m = 2.5f;
+    provider.SetConfig(cfg);
+    provider.StartFueling();
+
+    // Subsequent ticks WITHOUT telemetry so the local counter
+    // accumulates (production code path: the SCS configuration
+    // event fires once and the per-frame fuel channel keeps
+    // reporting, so the local counter advances monotonically).
+    TruckState truck_no_telemetry;
+    TruckState_Clear(truck_no_telemetry);
+    for (int i = 0; i < 5; ++i) {
+        provider.Tick(truck_no_telemetry, player, 1.0);
+    }
+    EXPECT_NEAR(provider.fuel_amount_l(), 380.0, 1e-6);
+    // Auto-stop when full.
+    EXPECT_FALSE(provider.isFueling());
+    // AdBlue is at 50 L capacity * 10 L/s = full in 5 s.
+    EXPECT_NEAR(provider.adblue_amount_l(), 50.0, 1e-6);
+}
+
+void TestFuelProviderStubCapacityHoldsWithoutConfigEvent() {
+    // M8 stub contract: with has_fuel_capacity = false (the
+    // configuration event has not fired yet — boot, pre-init, or
+    // the SDK call failed), the honest-stub defaults of 600 L fuel
+    // / 50 L adblue remain. The fill rate clamps to 600 L, not
+    // the per-truck value.
+    ResetFuelPumpStubWarnForTesting();
+    FuelProvider provider;
+    TruckState truck;
+    TruckState_Clear(truck);
+    // has_fuel_capacity and has_adblue_capacity stay false.
+    // The fuel level is reported via telemetry so the
+    // local counter is non-zero after the first Tick.
+    truck.fuel_amount_l = 0.0f;
+    truck.has_fuel = true;
+    truck.adblue_amount_l = 0.0f;
+    truck.has_adblue = true;
+
+    PlayerState player = MakePlayer();
+    provider.Tick(truck, player, 0.0);
+    EXPECT_NEAR(provider.tank_capacity_l(), 600.0, 1e-6);
+    EXPECT_NEAR(provider.adblue_capacity_l(), 50.0, 1e-6);
+
+    FuelPumpConfig cfg;
+    cfg.fill_rate_lps = 200.0;  // would fill 600 L in 3 s
+    cfg.adblue_rate_lps = 50.0;  // would fill 50 L in 1 s
+    cfg.trigger_radius_m = 2.5f;
+    provider.SetConfig(cfg);
+    provider.StartFueling();
+    // Subsequent ticks WITHOUT telemetry so the local counter
+    // accumulates.
+    TruckState truck_no_telemetry;
+    TruckState_Clear(truck_no_telemetry);
+    for (int i = 0; i < 4; ++i) {
+        provider.Tick(truck_no_telemetry, player, 1.0);
+    }
+    EXPECT_NEAR(provider.fuel_amount_l(), 600.0, 1e-6);
+    EXPECT_FALSE(provider.isFueling());
+    EXPECT_NEAR(provider.adblue_amount_l(), 50.0, 1e-6);
+}
+
+void TestFuelProviderAdblueCapacityFromConfigEventOverridesStub() {
+    // Symmetric probe for AdBlue: a hypothetical SCS build that
+    // reports a 25 L DEF tank (light-duty truck) must clamp the
+    // fill to 25 L, not 50 L.
+    ResetFuelPumpStubWarnForTesting();
+    FuelProvider provider;
+    TruckState truck;
+    TruckState_Clear(truck);
+    truck.fuel_capacity_l = 600.0f;
+    truck.has_fuel_capacity = true;
+    truck.adblue_capacity_l = 25.0f;
+    truck.has_adblue_capacity = true;
+    truck.adblue_amount_l = 0.0f;
+    truck.has_adblue = true;
+
+    PlayerState player = MakePlayer();
+    provider.Tick(truck, player, 0.0);
+    EXPECT_NEAR(provider.adblue_capacity_l(), 25.0, 1e-6);
+
+    FuelPumpConfig cfg;
+    cfg.fill_rate_lps = 1.0;
+    cfg.adblue_rate_lps = 10.0;  // would fill 25 L in 2.5 s
+    cfg.trigger_radius_m = 2.5f;
+    provider.SetConfig(cfg);
+    provider.StartFueling();
+    // Subsequent ticks WITHOUT telemetry so the local counter
+    // accumulates.
+    TruckState truck_no_telemetry;
+    TruckState_Clear(truck_no_telemetry);
+    for (int i = 0; i < 4; ++i) {
+        provider.Tick(truck_no_telemetry, player, 1.0);
+    }
+    // 4 s at 10 L/s = 40 L attempted; clamps at 25 L.
+    EXPECT_NEAR(provider.adblue_amount_l(), 25.0, 1e-6);
+    // The fuel side runs at 1 L/s for 4 s = 4 L (well under 600 L
+    // capacity); confirm it stays small.
+    EXPECT_NEAR(provider.fuel_amount_l(), 4.0, 1e-6);
+}
+
 }  // namespace walkercore

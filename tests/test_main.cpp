@@ -409,6 +409,12 @@ void TestFuelProviderSyncFromTelemetry();
 void TestFuelProviderRetainsLocalWhenTelemetryMissing();
 void TestFuelProviderFuelingAdvancesAfterTelemetry();
 void TestFuelStationReadAfterTickReflectsCurrentPlayerPosition();
+// M8 Lander: per-truck tank capacities from the SCS configuration
+// event (`fuel.capacity` / `adblue.capacity`).
+void TestFuelProviderCapacityFromConfigEventOverridesStub();
+void TestFuelProviderFuelingClampsToRealPerTruckCapacity();
+void TestFuelProviderStubCapacityHoldsWithoutConfigEvent();
+void TestFuelProviderAdblueCapacityFromConfigEventOverridesStub();
 void TestDiagnosticDumpSafeBeforeInit();
 void TestDiagnosticDumpReportsScsVersion();
 void TestDiagnosticDumpMirrorsFsmLabel();
@@ -1084,6 +1090,12 @@ int main() {
     RUN_TEST(walkercore::TestFuelProviderRetainsLocalWhenTelemetryMissing);
     RUN_TEST(walkercore::TestFuelProviderFuelingAdvancesAfterTelemetry);
     RUN_TEST(walkercore::TestFuelStationReadAfterTickReflectsCurrentPlayerPosition);
+    // M8 Lander: per-truck tank capacities from the SCS
+    // configuration event.
+    RUN_TEST(walkercore::TestFuelProviderCapacityFromConfigEventOverridesStub);
+    RUN_TEST(walkercore::TestFuelProviderFuelingClampsToRealPerTruckCapacity);
+    RUN_TEST(walkercore::TestFuelProviderStubCapacityHoldsWithoutConfigEvent);
+    RUN_TEST(walkercore::TestFuelProviderAdblueCapacityFromConfigEventOverridesStub);
 
     // Diagnostic dump (walker_dump_state).
     RUN_TEST(walkercore::TestDiagnosticDumpSafeBeforeInit);

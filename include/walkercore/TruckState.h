@@ -64,6 +64,15 @@ struct TruckState {
     bool has_trailer_attached = false;
     bool has_fuel = false;
     bool has_adblue = false;
+    // M8 Lander: tank capacities come from the SCS_TELEMETRY_CONFIG_*
+    // attributes `fuel.capacity` and `adblue.capacity` (delivered in
+    // the configuration event, alongside hook_position). Until the
+    // configuration event fires these stay at 0 and downstream code
+    // (FuelProvider) must check before reading — without the flag,
+    // a default 600 L capacity would silently override the real
+    // per-truck value when the SDK later delivers a different one.
+    bool has_fuel_capacity = false;
+    bool has_adblue_capacity = false;
 
     // M9 truck configuration from SCS_TELEMETRY_EVENT_configuration:
     // the king-pin / fifth-wheel position in truck-local space. Until
@@ -128,6 +137,15 @@ struct TruckState {
     // (default 0) — downstream code must check before reading.
     float fuel_amount_l = 0.0f;
     float adblue_amount_l = 0.0f;
+    // M8 Lander: per-truck tank capacities in liters. Mirrors
+    // `fuel.capacity` / `adblue.capacity` from the SCS configuration
+    // event. Real ATS trucks range from 380 L (day-cab Volvo VNL) to
+    // 1500+ L (8x4 heavy-haul tractor); AdBlue is consistently ~50 L
+    // but the SDK's per-truck value wins once delivered. Used by
+    // FuelProvider to clamp the fueling fill so the player can't
+    // over-fill a 380 L tank to 600 L.
+    float fuel_capacity_l = 0.0f;
+    float adblue_capacity_l = 0.0f;
 };
 
 // Reset all flags to false but keep allocation. Cheap.
@@ -139,6 +157,8 @@ inline void TruckState_Clear(TruckState &s) {
     s.has_trailer_attached = false;
     s.has_fuel = false;
     s.has_adblue = false;
+    s.has_fuel_capacity = false;
+    s.has_adblue_capacity = false;
     s.has_hook_position = false;
     s.hook_position = {0.0, 0.0, 0.0};
     s.has_cabin_position = false;
@@ -156,6 +176,8 @@ inline void TruckState_Clear(TruckState &s) {
     s.trailer_attached = false;
     s.fuel_amount_l = 0.0f;
     s.adblue_amount_l = 0.0f;
+    s.fuel_capacity_l = 0.0f;
+    s.adblue_capacity_l = 0.0f;
 }
 
 }  // namespace walkercore

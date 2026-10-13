@@ -130,7 +130,7 @@
     wire aún. Spec en `docs/observations/tmrealwalk-findings.md`.
 
 ## M8 — Fuel + station prefab
-- ⚠️ Mayor: `FuelPump` lee capacidades per-truck vía configuration event (real). Pero la posición de estaciones (gas station, service area) sigue siendo un placeholder truck-local. El RE del registry `prefab/list_station` en `amtrucks.exe` no se ha hecho — RE-bloqueado.
+- ⚠️ Mayor: `FuelPump` lee capacidades per-truck vía configuration event (real). Pero la posición de estaciones (gas station, service area) sigue siendo un placeholder truck-local. **RE-bloqueado este ciclo**: requiere `open_binary(amtrucks.exe)` + `search_strings("prefab/list_station")` en REA. Ghidra no está configurado en este host Windows (`GHIDRA_INSTALL_DIR` unset), Hopper requiere macOS, IDA requiere `REA_IDA_MCP_CONFIG`. Sin provider de análisis, el RE nativo no es factible desde este ciclo. Spec para el próximo ciclo con REA disponible: escanear por las strings `prefab`, `list_station`, `gas_station`, `service_area` en `amtrucks.exe`; localizar el registro SCS internal; identificar la primitiva de lookup `prefab::find_station(truck_pos) → station_world_pos`. Una vez encontrada, escribir un MiniHook o memory-scanner para inyectar el lookup en `FuelProvider::Tick` y reemplazar el placeholder truck-local con el lookup real.
 - ⚠️ Mayor: `AdBlue` (DEF) pump stub igual que diesel — capacidades reales, posición stub.
 
 ## M9 — Trailer coupling

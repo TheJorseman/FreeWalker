@@ -167,13 +167,22 @@ which it is on this host, see `game.log.txt:350`). The shim's
 `g_developer` probe auto-reads the game's config and only fires keys when
 detected; otherwise it logs an advisory instead of synthesising keys.
 
+> **Action name priority is `dev_camera_toggle > camdbg > walk_mode >
+> free_camera`.** The shim tries `dev_camera_toggle` first for compatibility
+> with TMRealWalk-style tutorials, but that name is **not a valid SCS input
+> object** — the SCS 1.3+ parser rejects it with `[inp] "dev_camera_toggle"
+> is not valid object name`. `camdbg` (camera + debug) is the real action
+> that toggles the `g_debug_camera` CVar; recommended binding key is F8
+> (F11 collides with `bugreport*` / `menustereo` in the stock profile and
+> gets silently dropped).
+
 **Smart-default auto-enable (M2.5).** When three gates all pass, the
 shim flips itself from `false` to `true` automatically on DLL load:
   1. The INI did **not** name `[m2] game_free_camera_shim = ...` (the
      `m2_game_free_camera_shim_explicit` flag is false — the user has
      not vetted the value).
-  2. A `dev_camera_toggle` / `walk_mode` / `free_camera` binding is
-     present in the user's `controls.sii` (auto-detected via
+  2. A `dev_camera_toggle` / `camdbg` / `walk_mode` / `free_camera`
+     binding is present in the user's `controls.sii` (auto-detected via
      `ControlsSiiParser` + `ScsKeyNameToVkForTesting` lookup table —
      covers F1-F12, numpad, modifiers, cursor keys, single letters).
   3. `g_developer = 1` (or `2`) is present in `config.cfg`
@@ -191,8 +200,9 @@ a silent re-enable.
 **Controls binding auto-detect (M2.5).** At DLL init the shim scans the
 active profile's `controls.sii` (OneDrive- + locale-aware path probe,
 parallels the `g_developer` probe) for the first `keyboard.*` token bound
-to `dev_camera_toggle`. The detected key becomes the dispatch VK unless
-the user explicitly pinned a value in the INI
+to one of `dev_camera_toggle` / `camdbg` / `walk_mode` / `free_camera`
+(in that priority order). The detected key becomes the dispatch VK
+unless the user explicitly pinned a value in the INI
 (`m2_dev_camera_toggle_vk_explicit=true`). Falls back to the default
 `0x60` when no binding is found.
 

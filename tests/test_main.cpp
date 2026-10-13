@@ -127,6 +127,13 @@ void TestKnockoutRecoveryResetsLastPositionBaseline();
 void TestKnockoutPrimeResetsTrackingBaseline();
 void TestKnockoutConfigDefaultValues();
 void TestKnockoutPathologicalDtGuards();
+// M10 Lander: ||player.velocity|| as the trigger metric (replaces
+// the legacy dist/dt formula that misread position glitches as
+// 50-100 m/s impacts).
+void TestKnockoutTriggerUsesIntegratedVelocityNotDistDt();
+void TestKnockoutTriggerFiresOnIntegratedVelocityOnly();
+void TestKnockoutTriggerUsesMagnitudeAcrossAxes();
+void TestKnockoutStationaryPlayerNeverTriggers();
 void TestDoorAnimEasing();
 void TestDoorAnimProviderEveryFieldHasObservableEffect();
 void TestDoorAnimWiringInitialStateNotAnimating();
@@ -803,6 +810,11 @@ int main() {
     RUN_TEST(walkercore::TestKnockoutPrimeResetsTrackingBaseline);
     RUN_TEST(walkercore::TestKnockoutConfigDefaultValues);
     RUN_TEST(walkercore::TestKnockoutPathologicalDtGuards);
+    // M10 Lander: ||player.velocity|| as the trigger metric.
+    RUN_TEST(walkercore::TestKnockoutTriggerUsesIntegratedVelocityNotDistDt);
+    RUN_TEST(walkercore::TestKnockoutTriggerFiresOnIntegratedVelocityOnly);
+    RUN_TEST(walkercore::TestKnockoutTriggerUsesMagnitudeAcrossAxes);
+    RUN_TEST(walkercore::TestKnockoutStationaryPlayerNeverTriggers);
     RUN_TEST(walkercore::TestDoorAnimEasing);
     RUN_TEST(walkercore::TestDoorAnimProviderEveryFieldHasObservableEffect);
     RUN_TEST(walkercore::TestDoorAnimWiringInitialStateNotAnimating);

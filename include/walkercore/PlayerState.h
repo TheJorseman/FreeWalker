@@ -46,6 +46,19 @@ struct PlayerState {
     // from this + head_offset.
     Vec3 feet_position;
 
+    // M10 lander: integrated 3-D velocity (m/s) the FrameLoop's
+    // PhaseIntegrateMovement computed for the last tick. The
+    // KnockoutProvider reads ||velocity|| as the impact-velocity
+    // metric — this is the actual integrated velocity (walk +
+    // strafe + gravity / jump), not dist/dt, so a single-frame
+    // position glitch (e.g. cabin-entry snap, save-load teleport)
+    // does not fire a spurious KO. The FrameLoop's hard-floor
+    // clamp + vy-cap together bound |vy| at vertical_velocity_max_mps
+    // * dt, so a healthy integrated read is at most
+    // sqrt(walk² + vertical_velocity_max_mps²) ≈ 11.3 m/s.
+    // Default 0; reset to 0 in PlayerState_Reset.
+    Vec3 velocity;
+
     // World-space orientation: yaw (around Y) and pitch (around X).
     // Pitch is clamped to ~[-89°, +89°] to avoid gimbal lock at the
     // poles. Roll is always zero — we don't roll the walker.
@@ -69,6 +82,7 @@ struct PlayerState {
 // Reset to a known standing-on-ground state.
 inline void PlayerState_Reset(PlayerState &p) {
     p.feet_position = {0.0, 0.0, 0.0};
+    p.velocity = {0.0, 0.0, 0.0};
     p.yaw_radians = 0.0f;
     p.pitch_radians = 0.0f;
     p.eye_height = 1.65f;

@@ -377,6 +377,24 @@ void FrameLoop::PhaseIntegrateMovement(double dt) {
     player_.feet_position.z += static_cast<double>(vz) * dt;
     player_.feet_position.y += static_cast<double>(vertical_velocity_) * dt;
 
+    // M10: record the integrated 3-D velocity the KnockoutProvider
+    // (called AFTER RunOnce in walker_per_frame_tick) reads via
+    // FrameLoop::player_velocity(). The decomposition into (vx, vy,
+    // vz) means ||v|| is the actual integrated speed, not
+    // dist/dt — a single-frame position glitch (cabin-entry snap,
+    // save-load teleport, world-streaming jump) cannot push
+    // ||v|| above walk-speed + vy_max because the inputs are
+    // clamped before the integration. Bounded by:
+    //   ||v|| ≤ sqrt(walk² + vy_max²) ≤ sqrt(5² + 9.81²) ≈ 11.0 m/s
+    // for a healthy Walking frame. The KO threshold (now 8 m/s) is
+    // tighter than this bound; a real impact (vehicle hit) that
+    // moves the player faster than the cap would have to bypass
+    // PhaseIntegrateMovement, which is the same bypass that
+    // already gates the legacy dist/dt check.
+    player_velocity_ = {static_cast<double>(vx),
+                       static_cast<double>(vertical_velocity_),
+                       static_cast<double>(vz)};
+
     // Hard floor clamp. Until M3 lander ships real PhysX ground collision
     // (PxScene::sphereCast live), PhaseResolveCollision's vertical sweep
     // returns no-hit every frame and the integrator would otherwise drop

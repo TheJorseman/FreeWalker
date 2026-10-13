@@ -135,6 +135,13 @@ public:
     // canonical write path through RunOnce.
     CameraState &camera() { return camera_; }
     const InputState &lastInput() const { return last_input_; }
+    // M10: the last-frame integrated 3-D player velocity (m/s).
+    // PhaseIntegrateMovement fills this every tick from the
+    // walk+strafe+gravity decomposition. The KnockoutProvider
+    // (called AFTER RunOnce in walker_per_frame_tick) reads
+    // ||player_velocity_|| to detect real high-speed impacts
+    // without false positives from dist/dt position glitches.
+    Vec3 player_velocity() const { return player_velocity_; }
 
 private:
     // Per-frame phases. They use the bound providers and the input sample
@@ -167,6 +174,13 @@ private:
 
     uint64_t last_frame_us_ = 0;   // for dt calculation
     double vertical_velocity_ = 0.0; // m/s, +up
+    // M10: 3-D integrated player velocity (m/s) the
+    // PhaseIntegrateMovement sets each tick. Exposed via
+    // player_velocity() so downstream consumers (currently just
+    // KnockoutProvider, see the M10 lander) can read ||v|| without
+    // computing dist/dt. Bounded by the same vy-cap as
+    // vertical_velocity_ plus the horizontal walk / run speed.
+    Vec3 player_velocity_ = {0.0, 0.0, 0.0};
     bool grounded_ = true;          // last groundY probe succeeded
     double head_bob_phase_ = 0.0;   // accumulated bob phase (radians, double for precision)
     double lateral_bob_m_ = 0.0;    // applied to camera eye after AdoptPlayer

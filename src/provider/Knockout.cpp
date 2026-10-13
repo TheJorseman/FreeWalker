@@ -118,22 +118,12 @@ void KnockoutProvider::Tick(PlayerState &player, double dt) {
     // scheduler preemption of sleep_until; >250 ms from post-suspend
     // resume), but any other call path — D3D Present hook, manual
     // external driver, future tick source — can reach Tick() with an
-    // arbitrary dt. The arithmetic in this function divides by dt
-    // (the velocity computation at the bottom: `velocity = dist /
-    // dt`) so an unreasonable dt MUST NOT reach it. The 1 ms lower
-    // bound matches PerFrameThread's source-side guard; the 250 ms
-    // upper bound absorbs a 4-frame @60 Hz stall without resetting
-    // the baseline on every normal hitch (a normal hitch is below
-    // this and the next valid dt naturally absorbs the difference).
-    //
-    // Both branches re-prime last_position_ so the next valid Tick
-    // computes against the post-disturbance coordinate instead of
-    // the pre-disturbance reference. tracking_ is preserved (set to
-    // whatever it was); the next valid dt will either hit the
-    // !tracking_ first-frame path (if it was false) or compute
-    // velocity from "now" against the just-set last_position_ (if
-    // it was true). Either way, the baseline is fresh and a spurious
-    // trigger is impossible.
+    // arbitrary dt. The M10 lander switched from dist/dt to
+    // ||player.velocity|| so dt is no longer in the trigger
+    // arithmetic, but the guard remains as a safety net (it
+    // prevents any future regression that re-introduces dt in the
+    // calculation from being able to fire a spurious KO on a
+    // 4-second post-suspend dt).
     if (dt < 0.001 || dt > 0.250) {
         last_position_ = player.feet_position;
         return;
@@ -150,25 +140,32 @@ void KnockoutProvider::Tick(PlayerState &player, double dt) {
         return;
     }
 
-    // Squared displacement — we compare dist² against (threshold × dt)²
-    // so the threshold check needs no sqrt. The actual sqrt is only
-    // computed inside the rare trigger branch (high-impact collision),
-    // where we also need the magnitude to normalise the impact
-    // direction vector. In steady state the player is not being hit by
-    // a vehicle, so dist² stays well below the threshold² and the
-    // sqrt is never taken.
+    // M10 lander: use the integrated 3-D player velocity
+    // (FrameLoop::PhaseIntegrateMovement fills player.velocity every
+    // tick) instead of dist/dt. The dist/dt formula is the source of
+    // the spurious-95-m/s KO problem:
+    //   - Single-frame position glitches (FSM `PlacePlayerAtDoor` /
+    //     `PlacePlayerAtSeat` snap, save-load teleport, world-
+    //     streaming jump) land in the dist measurement.
+    //   - dt is small (~13 ms) because the per-frame conductor runs
+    //     on time, not on demand.
+    //   - dist/dt therefore reads as 50-100 m/s, well above the
+    //     8 m/s threshold, even though the player's actual
+    //     integrated velocity is < 1 m/s.
+    // The integrated velocity is bounded by walk+vy_max every
+    // healthy frame, so it cannot exceed ~11.3 m/s without an
+    // external force (vehicle impact, fall from height) actually
+    // being applied. A real high-impact collision bypasses the
+    // integrator's clamps via the same code path the dist/dt
+    // formula is reaching for; using ||v|| here keeps the same
+    // trigger coverage while eliminating the false positive.
     //
-    // Teleport re-prime: any per-frame delta larger than
-    // cfg_.teleport_reprime_distance_m is treated as a programmatic
-    // position reset (FSM `PlacePlayerAtDoor` / `PlacePlayerAtSeat`
-    // snaps the feet_position to a world anchor at the start of every
-    // cabin transition; we observed 1.15 m – 11.5 m per-frame deltas
-    // during Driving ↔ Walking transitions, which dwarf the 12 m/s
-    // velocity threshold after even a single 16 ms tick). The right
-    // response is "this was never a car crash — re-prime the baseline
-    // and wait for the next frame", not "knock the player out". The
-    // computed dist² is already available, so this check is just an
-    // extra comparison.
+    // The teleport re-prime remains as a defence-in-depth: even
+    // though ||v|| stays bounded, an in-flight hard-correction
+    // (e.g. the SDK resets the player to a checkpoint after a
+    // fall) would still need a clean re-prime so the next
+    // collision comparison is against the post-correction
+    // baseline.
     const double dx = player.feet_position.x - last_position_.x;
     const double dy = player.feet_position.y - last_position_.y;
     const double dz = player.feet_position.z - last_position_.z;
@@ -181,32 +178,45 @@ void KnockoutProvider::Tick(PlayerState &player, double dt) {
         last_position_ = player.feet_position;
         return;
     }
-    const double dist_threshold_sq = (cfg_.velocity_change_threshold_mps * dt) *
-                                     (cfg_.velocity_change_threshold_mps * dt);
 
-    if (dist_sq >= dist_threshold_sq) {
-        const double dist = sqrt(dist_sq);
-        const double velocity = dist / dt;
+    // Compute the actual impact velocity as the magnitude of the
+    // integrated 3-D velocity. The dist measurement is kept for
+    // the diagnostic log (the impact_direction vector still needs
+    // dx/dy/dz normalisation); the trigger decision is now
+    // solely on ||player.velocity|| vs the configured threshold.
+    const double vx = player.velocity.x;
+    const double vy = player.velocity.y;
+    const double vz = player.velocity.z;
+    const double speed_sq = vx * vx + vy * vy + vz * vz;
+    const double speed = sqrt(speed_sq);
+    if (speed >= cfg_.velocity_change_threshold_mps) {
+        // dist_sq has already been checked for the teleport re-
+        // prime, so dist is well-defined and non-zero here (the
+        // player either is moving or has not been teleported).
+        // Use dist as a stable normal denominator even when the
+        // trigger came from ||v||, because the impact direction
+        // we want to record is the direction of motion, which is
+        // the dx/dy/dz of the position delta from the previous
+        // frame.
+        const double dist = (dist_sq > 0.0) ? sqrt(dist_sq) : 1e-6;
         state_.knocked_out = true;
         state_.time_remaining_s = cfg_.recovery_seconds;
         state_.impact_direction = Vec3{-dx / dist, -dy / dist, -dz / dist};
         player.mode = PlayerMode::KnockedOut;
-        // Diagnostic-heavy log. The M11 velocity cap bounds per-frame
-        // |dy| to MovementConfig::vertical_velocity_max_mps × dt
-        // ≤ 0.164 m plus horizontal ≤ 0.075 m, so a healthy trigger
-        // reports `velocity` ≤ ~10.79 m/s. Values substantially higher
-        // than that mean either (a) the cap is bypassed by a code path
-        // the FrameLoop's PhaseIntegrateMovement doesn't cover, or
-        // (b) dt is much larger than 16.67 ms (per-frame thread
-        // stall). The remaining fields (dx, dy, dz, dist, dt) give
-        // the next session enough to localise the source without
-        // re-deploying with a different logging path.
+        // Diagnostic-heavy log. The M10 lander now reports BOTH
+        // the integrated speed (||v||) and the legacy dist/dt
+        // figure so a post-mortem can still see how the legacy
+        // heuristic would have classified the same event. A
+        // healthy trigger has ||v|| ≈ dist/dt; a spurious dist/dt
+        // trigger has dist/dt ≫ ||v|| (position glitch with a
+        // low integrated velocity).
         WALKERCORE_LOG_WARN(
-            "KnockoutProvider: knock-out triggered (impact velocity %.1f m/s, "
+            "KnockoutProvider: knock-out triggered (impact ||v||=%.1f m/s, "
             "dist=%.3f m, dx=%.3f dy=%.3f dz=%.3f, dt=%.4f s, "
-            "threshold=%.1f m/s, vmax-derived=%.3f m)",
-            velocity, dist, dx, dy, dz, dt,
+            "threshold=%.1f m/s, dist/dt=%.1f m/s, vmax-derived=%.3f m)",
+            speed, dist, dx, dy, dz, dt,
             cfg_.velocity_change_threshold_mps,
+            dist / dt,
             cfg_.velocity_change_threshold_mps * dt);
 
         // M10 partial: TMRealWalk-style per-angle collision normal log.
@@ -235,7 +245,7 @@ void KnockoutProvider::Tick(PlayerState &player, double dt) {
             "KnockoutProvider: collision direction (angle=%+.0f deg, "
             "normal=(%+.2f,%+.2f,%+.2f), |v|=%.1f m/s) "
             "[TMRealWalk-style probe]",
-            yaw_deg, nx, ny, nz, velocity);
+            yaw_deg, nx, ny, nz, speed);
     }
     last_position_ = player.feet_position;
 }

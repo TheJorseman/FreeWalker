@@ -607,19 +607,24 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
     g_prev_encoded_fsm_state = fsm_state;
   }
 
-  // Phase C0: M10 knock-out tracker. Runs before RunOnce so the player's
-  // mode is up to date when PhaseAnimatePlayer checks it (KnockedOut is
-  // not in the "moving" set, so head bob and crouch blend skip).
-  if (g_knockout != nullptr) {
-    g_knockout->Tick(*player_ptr, dt_seconds);
-  }
-
   // Phase C: integrate movement and apply the camera override. The
   // FrameLoop checks the FSM state — only Walking does work; the rest is
   // an input-sample-only pass. We pass dt_seconds explicitly so the
   // FrameLoop uses the same frame delta the renderer just observed,
   // instead of measuring its own wall-clock delta separately.
   g_frame_loop->RunOnce(dt_seconds);
+
+  // Phase C1: M10 knock-out tracker. Runs AFTER RunOnce so the
+  // FrameLoop's PhaseIntegrateMovement has already updated
+  // player.velocity (and the M10 lander uses ||player.velocity||
+  // as the impact-velocity metric, not dist/dt — the dist/dt
+  // formula misreads position glitches like cabin-entry snaps as
+  // 90+ m/s impacts because it does not know about teleport
+  // re-primes, whereas the integrated velocity is bounded by
+  // walk+gravity clamps every healthy frame).
+  if (g_knockout != nullptr) {
+    g_knockout->Tick(*player_ptr, dt_seconds);
+  }
 
   // Phase D: poll the settings file for live edits (cheap).
   if (g_settings != nullptr) {

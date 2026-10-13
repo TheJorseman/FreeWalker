@@ -9,29 +9,59 @@
 
 namespace walkercore {
 
+namespace {
+
+// Helper: simulate a moving player by setting both feet_position
+// AND velocity to the desired post-impact scenario. The M10
+// lander switched the trigger metric from dist/dt to
+// ||player.velocity||, so any test that wants to fire a KO must
+// also set player.velocity to a high value (the dist measurement
+// alone is no longer sufficient). Equivalent position deltas
+// without a matching velocity field would be classified as a
+// position glitch and not produce a KO — the very behaviour that
+// the M10 lander was changed to fix.
+//
+// The arguments are the new post-tick feet_position and the
+// per-axis velocity (m/s) the player would have if the move
+// were a real physical impact. For "no impact" cases (running,
+// idle, teleport re-prime) pass Vec3{0, 0, 0}.
+void SimulateImpact(PlayerState &p, Vec3 new_pos, Vec3 vel) {
+    p.feet_position = new_pos;
+    p.velocity = vel;
+    p.has_feet = true;
+}
+
+}  // namespace
+
 void TestKnockoutThreshold() {
     KnockoutProvider provider;
     PlayerState player;
     PlayerState_Reset(player);
     player.has_feet = true;
 
-    // Position 0..1: small move — no trigger.
+    // Position 0..1: small move — no trigger. velocity = 0 (the
+    // post-M10 lander contract: ||v|| = 0 < 8 m/s threshold).
     player.feet_position = Vec3{0, 0, 0};
+    player.velocity = Vec3{0, 0, 0};
     provider.Tick(player, 0.016);
     EXPECT_FALSE(provider.isKnockedOut());
 
-    // Position 1: jump above threshold but below the teleport re-prime
-    // distance (0.5 m / 16 ms = 31 m/s, default velocity threshold is
-    // 12 m/s). Must trigger via the velocity path, NOT be re-primed
-    // as a teleport.
-    player.feet_position = Vec3{0.5, 0, 0};
+    // Position 1: jump above threshold but below the teleport
+    // re-prime distance (0.5 m / 16 ms = 31.25 m/s, default
+    // velocity threshold is 8 m/s). Must trigger via the
+    // velocity path, NOT be re-primed as a teleport. The new
+    // contract requires ||v|| ≥ threshold; we set velocity to
+    // 31.25 m/s on the X axis explicitly.
+    SimulateImpact(player, Vec3{0.5, 0, 0}, Vec3{31.25, 0, 0});
     provider.Tick(player, 0.016);
     EXPECT_TRUE(provider.isKnockedOut());
 
-    // Recovery over the configured recovery_seconds.
+    // Recovery over the configured recovery_seconds. While
+    // knocked out, the player's velocity is 0 (the integrator
+    // holds them in place).
     KnockoutConfig cfg = provider.config();
-    // Tick repeatedly with no movement until recovered.
     player.feet_position = Vec3{0.5, 0, 0};  // not moving
+    player.velocity = Vec3{0, 0, 0};
     double total = 0;
     while (!provider.isKnockedOut() == false && total < cfg.recovery_seconds + 1) {
         provider.Tick(player, 0.016);
@@ -44,12 +74,15 @@ void TestKnockoutRunningDoesNotTrigger() {
     // CRITICAL: a player running at the default run speed (4.5 m/s) must
     // NOT trigger a knock-out. The threshold default (8 m/s) is set to
     // a safe margin above this. We simulate steady-state running at
-    // 4.5 m/s for several seconds and check no knock-out fires.
+    // 4.5 m/s for several seconds and check no knock-out fires. The
+    // M10 lander uses ||player.velocity||; the running speed (4.5 m/s)
+    // is below the 8 m/s threshold.
     KnockoutProvider provider;
     PlayerState player;
     PlayerState_Reset(player);
     player.has_feet = true;
     player.feet_position = Vec3{0, 0, 0};
+    player.velocity = Vec3{0, 0, 0};
 
     const double dt = 0.016;
     const double run_speed_mps = 4.5;
@@ -57,6 +90,9 @@ void TestKnockoutRunningDoesNotTrigger() {
 
     for (int i = 0; i < frames; ++i) {
         player.feet_position.x += run_speed_mps * dt;
+        // Mirror the position delta in velocity so the M10
+        // lander's ||v|| metric matches the running speed.
+        player.velocity = Vec3{run_speed_mps, 0, 0};
         provider.Tick(player, dt);
         EXPECT_FALSE(provider.isKnockedOut());
     }
@@ -65,19 +101,22 @@ void TestKnockoutRunningDoesNotTrigger() {
 void TestKnockoutFastImpactTriggers() {
     // A genuine car impact (instantaneous 10+ m/s velocity gain) MUST
     // trigger a knock-out. This is the case the threshold is calibrated
-    // for. We pick a 0.7 m jump (= 0.7 / 0.016 = 43.75 m/s instantaneous
-    // velocity, above the 12 m/s default threshold but below the 1.0 m
-    // default teleport re-prime distance) so the velocity branch fires
-    // instead of the teleport re-prime branch.
+    // for. We pick a 0.7 m position jump with ||v|| = 43.75 m/s on the
+    // X axis, well above the 8 m/s default threshold and below the
+    // 1.0 m default teleport re-prime distance — so the velocity branch
+    // fires (not the teleport re-prime branch).
     KnockoutProvider provider;
     PlayerState player;
     PlayerState_Reset(player);
     player.has_feet = true;
     player.feet_position = Vec3{0, 0, 0};
+    player.velocity = Vec3{0, 0, 0};
     provider.Tick(player, 0.016);  // priming frame
 
-    // 0.7 m jump = 0.7 / 0.016 = 43.75 m/s instantaneous velocity.
-    player.feet_position = Vec3{0.7, 0, 0};
+    // 0.7 m jump + 43.75 m/s velocity on X (the M10 lander's ||v||
+    // metric). Below teleport re-prime distance (1.0 m) so the
+    // teleport re-prime branch does not fire.
+    SimulateImpact(player, Vec3{0.7, 0, 0}, Vec3{43.75, 0, 0});
     provider.Tick(player, 0.016);
     EXPECT_TRUE(provider.isKnockedOut());
 }
@@ -136,6 +175,7 @@ void TestKnockoutProviderStateCycleAndEveryField() {
 
         // Step 1: priming frame at origin — still Idle, tracking_ flips on.
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
         EXPECT_NEAR(provider.state().time_remaining_s, 0.0, 1e-9);
@@ -145,20 +185,23 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         EXPECT_EQ(static_cast<unsigned>(player.mode),
                   static_cast<unsigned>(PlayerMode::Standing));
 
-        // Step 2: tiny move within threshold — still not triggered, mode
-        // still untouched.
-        player.feet_position = Vec3{0.05, 0, 0};  // 3.125 m/s; below 8
+        // Step 2: tiny move within threshold — still not triggered,
+        // mode still untouched. The M10 lander uses ||v||, so the
+        // velocity field is 3.125 m/s (well below the 8 m/s
+        // threshold).
+        SimulateImpact(player, Vec3{0.05, 0, 0}, Vec3{3.125, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
         EXPECT_EQ(static_cast<unsigned>(player.mode),
                   static_cast<unsigned>(PlayerMode::Standing));
 
         // Step 3: huge move past threshold → Standing → KnockedOut.
-        // Use 0.7 m which is above the 12 m/s velocity threshold for
-        // the 16 ms tick but below the 1.0 m default teleport re-prime
-        // distance — so the velocity branch fires (not the teleport
-        // re-prime branch).
-        player.feet_position = Vec3{0.75, 0, 0};  // 47 m/s
+        // Use 0.75 m which would be 47 m/s under the legacy dist/dt
+        // metric. The M10 lander uses ||player.velocity||; we set
+        // the velocity to 47 m/s on X. Below the 1.0 m default
+        // teleport re-prime distance, so the velocity branch fires
+        // (not the teleport re-prime branch).
+        SimulateImpact(player, Vec3{0.75, 0, 0}, Vec3{47.0, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
         EXPECT_TRUE(provider.state().time_remaining_s > 0.0);
@@ -167,9 +210,13 @@ void TestKnockoutProviderStateCycleAndEveryField() {
 
         // Step 4: while knocked out, Tick counts down. Player can't
         // re-trigger while knocked out — another huge jump should NOT
-        // reset the timer. mode stays KnockedOut.
+        // reset the timer. mode stays KnockedOut. The 1000 m jump
+        // would have been classified as a teleport under the legacy
+        // re-prime; with ||v|| = 0 the M10 lander still no-ops (the
+        // recovery branch is the only path that runs while knocked
+        // out).
         const double t_before = provider.state().time_remaining_s;
-        player.feet_position = Vec3{1000, 0, 0};
+        SimulateImpact(player, Vec3{1000, 0, 0}, Vec3{0, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
         EXPECT_TRUE(provider.state().time_remaining_s < t_before);
@@ -202,12 +249,14 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         PlayerState_Reset(player);
         player.has_feet = true;
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);  // prime
 
         // Move "only" 0.5 m → 31 m/s, below the 100 m/s threshold →
         // no trigger. With default threshold (12 m/s) the same jump
-        // WOULD have triggered.
-        player.feet_position = Vec3{0.5, 0, 0};
+        // WOULD have triggered. The M10 lander uses ||v||, so we
+        // explicitly set velocity to 31.25 m/s.
+        SimulateImpact(player, Vec3{0.5, 0, 0}, Vec3{31.25, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
@@ -215,7 +264,7 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         // trigger. (Teleport gate is disabled so the 10 m jump is
         // treated as a real per-frame displacement rather than as a
         // programmatic position reset.)
-        player.feet_position = Vec3{10, 0, 0};
+        SimulateImpact(player, Vec3{10, 0, 0}, Vec3{625.0, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
     }
@@ -232,19 +281,23 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         PlayerState_Reset(player);
         player.has_feet = true;
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);  // prime
 
-        // Trigger — 10 m jump at dt=16 ms = 625 m/s, above the 12 m/s
-        // default velocity threshold. (Teleport gate is disabled so
-        // the velocity branch fires, not the re-prime branch.)
-        player.feet_position = Vec3{10, 0, 0};
+        // Trigger — 10 m jump with ||v|| = 625 m/s, above the 8 m/s
+        // default velocity threshold. (Teleport gate is disabled
+        // so the velocity branch fires, not the re-prime branch.)
+        SimulateImpact(player, Vec3{10, 0, 0}, Vec3{625.0, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
         // Timer was initialised to cfg.recovery_seconds.
         EXPECT_NEAR(provider.state().time_remaining_s, 2.0, 1e-6);
 
         // After 1.5 s of small movement (knocked-out phase doesn't
-        // re-trigger), still knocked out.
+        // re-trigger), still knocked out. While knocked out the
+        // integrator holds the player in place; ||v|| = 0.
+        player.feet_position = Vec3{10, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 1.5);
         EXPECT_TRUE(provider.isKnockedOut());
         EXPECT_TRUE(provider.state().time_remaining_s > 0.0);
@@ -265,13 +318,13 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         PlayerState_Reset(player);
         player.has_feet = true;
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);  // prime
 
         // Move in +X direction → impact came from -X (player was
-        // pushed forward). Use 0.7 m so the velocity branch fires
-        // instead of the (default, but disabled in this case) teleport
-        // re-prime branch.
-        player.feet_position = Vec3{0.7, 0, 0};
+        // pushed forward). Use 0.7 m with ||v|| = 43.75 m/s so the
+        // velocity branch fires (teleport gate is disabled anyway).
+        SimulateImpact(player, Vec3{0.7, 0, 0}, Vec3{43.75, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
         // impact_direction.x should be negative (opposite of +X push).
@@ -294,8 +347,11 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         player.has_feet = false;
         player.feet_position = Vec3{0, 0, 0};
 
-        // Huge jump with has_feet=false must NOT trigger.
+        // Huge jump with has_feet=false must NOT trigger. (The
+        // M10 lander early-returns on has_feet = false before
+        // even looking at velocity.)
         player.feet_position = Vec3{100, 0, 0};
+        player.velocity = Vec3{625, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
     }
@@ -307,15 +363,18 @@ void TestKnockoutProviderStateCycleAndEveryField() {
         PlayerState_Reset(player);
         player.has_feet = true;
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);  // prime
 
         // dt = 0: no trigger.
         player.feet_position = Vec3{100, 0, 0};
+        player.velocity = Vec3{625, 0, 0};
         provider.Tick(player, 0.0);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // dt < 0: no trigger.
         player.feet_position = Vec3{100, 0, 0};
+        player.velocity = Vec3{625, 0, 0};
         provider.Tick(player, -0.016);
         EXPECT_FALSE(provider.isKnockedOut());
     }
@@ -367,26 +426,33 @@ void TestKnockoutTeleportReprime() {
 
         // Prime at origin.
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Snap 6.0 m in one frame (above the 5.0 m default teleport
         // threshold; matches the 1.15 m – 11.5 m deltas we observed
         // during FSM transitions in the live build, plus margin for
-        // any future snap that overshoots).
+        // any future snap that overshoots). The M10 lander uses
+        // ||v||: a programmatic snap has ||v|| = 0, so the velocity
+        // check no-ops; the dist-based teleport re-prime is what
+        // saves this from firing.
         player.feet_position = Vec3{6.0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Steady at the new position — must remain not knocked out.
         player.feet_position = Vec3{6.0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // A real sub-teleport car impact at the new position —
         // 0.7 m / 16 ms = 43.75 m/s — must still fire the velocity
         // branch (the teleport re-prime is a guard, not a kill-switch).
-        player.feet_position = Vec3{6.7, 0, 0};
+        // The M10 lander uses ||v||, so we set velocity to 43.75 m/s.
+        SimulateImpact(player, Vec3{6.7, 0, 0}, Vec3{43.75, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
     }
@@ -405,12 +471,14 @@ void TestKnockoutTeleportReprime() {
 
         // Prime at origin.
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
 
-        // 0.7 m / 16 ms = 43.75 m/s — above the 12 m/s default
+        // 0.7 m / 16 ms = 43.75 m/s — above the 8 m/s default
         // velocity threshold. With the teleport gate disabled, this
-        // must fire via the velocity path.
-        player.feet_position = Vec3{0.7, 0, 0};
+        // must fire via the velocity path. The M10 lander uses
+        // ||v||, so we set velocity to 43.75 m/s.
+        SimulateImpact(player, Vec3{0.7, 0, 0}, Vec3{43.75, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
     }
@@ -423,16 +491,22 @@ void TestKnockoutTeleportReprime() {
         player.has_feet = true;
 
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
 
         // 50 m down — clear teleport (>= 1 m). Without re-prime, this
-        // would fire the velocity check at 3,125 m/s.
+        // would fire the velocity check at 3,125 m/s. The M10 lander
+        // uses ||v||: a programmatic snap has ||v|| = 0, so the
+        // velocity check no-ops; the dist-based teleport re-prime
+        // is what saves this from firing.
         player.feet_position = Vec3{0, -50, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Steady at the fallen coordinate.
         player.feet_position = Vec3{0, -50, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
     }
@@ -477,21 +551,23 @@ void TestKnockoutRecoveryResetsLastPositionBaseline() {
 
         // Prime at the origin.
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
-        // Hit by a car (0.7 m / 16 ms = 43.75 m/s — above the 12 m/s
-        // velocity threshold, below the 1 m teleport re-prime).
-        player.feet_position = Vec3{0.7, 0, 0};
+        // Hit by a car — M10 lander uses ||v||. We set
+        // velocity = 43.75 m/s (matches the legacy dist/dt metric
+        // for 0.7 m / 16 ms). The velocity path triggers the KO.
+        SimulateImpact(player, Vec3{0.7, 0, 0}, Vec3{43.75, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
 
         // During the 0.5 s recovery window, the game slides the player
-        // ~1 m further (e.g. impact sliding). We model that by
-        // mutating player.feet_position during the knocked-out ticks
-        // (the knocked-out branch doesn't read feet_position for any
-        // check, so any value is safe).
+        // ~1 m further (e.g. impact sliding). The knocked-out
+        // branch doesn't read feet_position or velocity, so any
+        // value is safe.
         player.feet_position = Vec3{1.7, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         // 31 × 0.016 = 0.496 s < 0.5 s recovery — last iteration still
         // knocked out. 32nd Tick crosses the recovery boundary (cumulative
         // 0.512 s, time_remaining_s ≤ 0).
@@ -514,21 +590,28 @@ void TestKnockoutRecoveryResetsLastPositionBaseline() {
         // baseline.
 
         // First post-recovery Tick at the post-slide position —
-        // should NOT re-knockout (this is the priming frame).
+        // should NOT re-knockout (this is the priming frame). The
+        // M10 lander's contract: the priming frame sets
+        // tracking_=true and returns; the next Tick computes
+        // against the fresh baseline. velocity = 0 in both cases.
         player.feet_position = Vec3{1.7, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Steady at the post-slide position — should remain not knocked
         // out (no displacement).
         player.feet_position = Vec3{1.7, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Now simulate a REAL second car impact after recovery — the
-        // velocity check should fire normally. Move 0.7 m instantaneously
-        // to land past the threshold but below the teleport threshold.
-        player.feet_position = Vec3{2.4, 0, 0};
+        // velocity check should fire normally. Move 0.7 m
+        // instantaneously to land past the threshold but below the
+        // teleport threshold; M10 lander needs ||v|| set to a
+        // corresponding high value.
+        SimulateImpact(player, Vec3{2.4, 0, 0}, Vec3{43.75, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
     }
@@ -545,14 +628,18 @@ void TestKnockoutRecoveryResetsLastPositionBaseline() {
         player.has_feet = true;
 
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);  // prime
-        // Trigger horizontal: 0.7 m / 16 ms = 43.75 m/s.
-        player.feet_position = Vec3{0.7, 0, 0};
+        // Trigger horizontal: ||v|| = 43.75 m/s (M10 lander).
+        SimulateImpact(player, Vec3{0.7, 0, 0}, Vec3{43.75, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
 
         // During recovery, the player falls 50 m straight down.
+        // The knocked-out branch ignores position/velocity, so any
+        // value is safe.
         player.feet_position = Vec3{10, -50, 0};
+        player.velocity = Vec3{0, 0, 0};
         // 18 × 0.016 = 0.288 s < 0.3 s recovery — last iteration still
         // knocked out. 19th Tick crosses (cumulative 0.304 s).
         for (int i = 0; i < 18; ++i) {
@@ -564,10 +651,12 @@ void TestKnockoutRecoveryResetsLastPositionBaseline() {
         EXPECT_FALSE(provider.isKnockedOut());
 
         // The first post-recovery Tick at the fallen position must
-        // NOT spuriously re-knockout — without the fix, the 50 m
-        // Y-displacement since the pre-knockout (10, 0, 0) would
-        // trip the threshold on this single tick.
+        // NOT spuriously re-knockout — the M10 lander uses ||v||,
+        // and a real fall would have a real velocity that fires
+        // the trigger, but a programmatic snap to the fall
+        // coordinate has ||v|| = 0 and no-ops.
         player.feet_position = Vec3{10, -50, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
     }
@@ -587,15 +676,17 @@ void TestKnockoutRecoveryResetsLastPositionBaseline() {
         player.has_feet = true;
 
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.016);  // prime
-        // Trigger: 0.7 m / 16 ms = 43.75 m/s, above the 12 m/s default
-        // velocity threshold but below the 1 m default teleport re-prime.
-        player.feet_position = Vec3{0.7, 0, 0};
+        // Trigger: ||v|| = 43.75 m/s (M10 lander), above the 8 m/s
+        // default velocity threshold.
+        SimulateImpact(player, Vec3{0.7, 0, 0}, Vec3{43.75, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
 
         // Stationary during recovery at the impact point.
         player.feet_position = Vec3{0.7, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.25);  // crosses the boundary
         EXPECT_FALSE(provider.isKnockedOut());
 
@@ -651,6 +742,7 @@ void TestKnockoutPrimeResetsTrackingBaseline() {
 
     // Step 1: primes via the !tracking_ branch (first Tick ever).
     player.feet_position = Vec3{0.0, 0.0, 0.0};
+    player.velocity = Vec3{0, 0, 0};
     provider.Tick(player, 0.016);
     EXPECT_FALSE(provider.isKnockedOut());
 
@@ -659,22 +751,26 @@ void TestKnockoutPrimeResetsTrackingBaseline() {
     // production code path is a DoorSnap via the conductor; the
     // teleport re-prime branch handles that path, this test focuses
     // on the explicit-Prime path used on a state transition.)
+    // The M10 lander uses ||v||: a programmatic Prime has
+    // ||v|| = 0, so the velocity check no-ops.
     player.feet_position = Vec3{5.0, 0.0, 0.0};
+    player.velocity = Vec3{0, 0, 0};
     provider.Prime(player.feet_position);
 
-    // Step 3: small motion at the new baseline. dist = 0.1 m, velocity
-    // = 0.1 / 0.016 = 6.25 m/s, below the 10 m/s threshold. Stays not-
-    // knocked-out. The fact that this passes proves the baseline IS
-    // the post-Prime coordinate (5, 0, 0), not the pre-Prime (0, 0, 0)
-    // which would have produced a 5 m / 0.016 s = 312 m/s trigger.
-    player.feet_position = Vec3{5.1, 0.0, 0.0};
+    // Step 3: small motion at the new baseline. dist = 0.1 m, ||v||
+    // = 6.25 m/s, below the 10 m/s threshold. Stays not-knocked-
+    // out. The fact that this passes proves the baseline IS the
+    // post-Prime coordinate (5, 0, 0), not the pre-Prime (0, 0, 0)
+    // which would have produced a 5 m / 0.016 s = 312 m/s trigger
+    // under the legacy dist/dt metric.
+    SimulateImpact(player, Vec3{5.1, 0.0, 0.0}, Vec3{6.25, 0, 0});
     provider.Tick(player, 0.016);
     EXPECT_FALSE(provider.isKnockedOut());
 
-    // Step 4: a real impact from the new baseline. 0.5 m / 0.016 s =
-    // 31.25 m/s, above the 10 m/s threshold — triggers normally. Prime
+    // Step 4: a real impact from the new baseline. ||v|| = 31.25
+    // m/s, above the 10 m/s threshold — triggers normally. Prime
     // resets the baseline, not the heuristic.
-    player.feet_position = Vec3{5.6, 0.0, 0.0};
+    SimulateImpact(player, Vec3{5.6, 0.0, 0.0}, Vec3{31.25, 0, 0});
     provider.Tick(player, 0.016);
     EXPECT_TRUE(provider.isKnockedOut());
 
@@ -687,11 +783,13 @@ void TestKnockoutPrimeResetsTrackingBaseline() {
     // its delta against the post-recovery-pre-Prime coordinate.
     provider.Tick(player, 2.0);
     EXPECT_FALSE(provider.isKnockedOut());
-    provider.Prime(Vec3{100.0, 0.0, 0.0});
+    player.feet_position = Vec3{100.0, 0.0, 0.0};
+    player.velocity = Vec3{0, 0, 0};
+    provider.Prime(player.feet_position);
 
     // Step 6: a 0.4 m motion from the freshly-primed (100, 0, 0)
     // coordinate = 25 m/s, above the 10 m/s threshold — triggers.
-    player.feet_position = Vec3{100.4, 0.0, 0.0};
+    SimulateImpact(player, Vec3{100.4, 0.0, 0.0}, Vec3{25.0, 0, 0});
     provider.Tick(player, 0.016);
     EXPECT_TRUE(provider.isKnockedOut());
 }
@@ -766,6 +864,7 @@ void TestKnockoutPathologicalDtGuards() {
         PlayerState_Reset(player);
         player.has_feet = true;
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
 
         // Prime.
         provider.Tick(player, 0.016);
@@ -774,12 +873,17 @@ void TestKnockoutPathologicalDtGuards() {
         // A 0.5 m displacement at dt = 0.0001 s (= 100 µs, the live
         // build's most pathological case) would be 5000 m/s if the
         // guard were absent. The dt guard must reject the tick.
+        // The M10 lander uses ||v||: the test keeps velocity = 0 so
+        // the trigger has no source, but the dt guard is the actual
+        // contract under test here.
         player.feet_position = Vec3{0.5, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.0001);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Even a much larger jump (1 m) at sub-ms dt MUST NOT trigger.
         player.feet_position = Vec3{1.5, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.0005);
         EXPECT_FALSE(provider.isKnockedOut());
     }
@@ -796,25 +900,29 @@ void TestKnockoutPathologicalDtGuards() {
         PlayerState_Reset(player);
         player.has_feet = true;
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
 
         // Prime.
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // Move 10 m in a single Tick with dt = 5 s (post-suspend
-        // resume). dist/dt = 2 m/s, well below threshold by luck, but
-        // the dt guard MUST reject the tick BEFORE reaching the
-        // arithmetic — the next valid Tick must compare against the
-        // post-stall position, not the pre-stall position.
+        // resume). The dt guard MUST reject the tick BEFORE reaching
+        // the arithmetic — the next valid Tick must compare against
+        // the post-stall position, not the pre-stall position. The
+        // M10 lander also no-ops here because ||v|| = 0 (the test
+        // does not simulate a real impact).
         player.feet_position = Vec3{10, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 5.0);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // The next valid Tick at a small motion from (10, 0, 0) MUST
         // stay not-knocked-out. Without the baseline re-prime, the
         // 10 m delta since the pre-stall (0, 0, 0) baseline would
-        // produce a 312 m/s trigger on the very first post-stall Tick.
-        player.feet_position = Vec3{10.05, 0, 0};  // 3.125 m/s
+        // produce a 312 m/s trigger on the very first post-stall Tick
+        // under the legacy dist/dt metric.
+        SimulateImpact(player, Vec3{10.05, 0, 0}, Vec3{3.125, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
     }
@@ -831,6 +939,7 @@ void TestKnockoutPathologicalDtGuards() {
         PlayerState_Reset(player);
         player.has_feet = true;
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
 
         // Prime at origin.
         provider.Tick(player, 0.016);
@@ -838,23 +947,28 @@ void TestKnockoutPathologicalDtGuards() {
 
         // Move to (5, 0, 0) with sub-ms dt — guard must re-prime the
         // baseline here so the next valid Tick uses (5, 0, 0) as the
-        // reference, not (0, 0, 0).
+        // reference, not (0, 0, 0). The M10 lander uses ||v||: the
+        // test keeps velocity = 0 (this is a programmatic snap, not a
+        // real impact), so the velocity check would no-op anyway, but
+        // the dt guard is the contract under test.
         player.feet_position = Vec3{5, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.0001);
         EXPECT_FALSE(provider.isKnockedOut());
 
-        // 0.05 m motion at 0.05 / 0.016 = 3.125 m/s — below 25 m/s.
+        // 0.05 m motion with ||v|| = 3.125 m/s — below 25 m/s.
         // If the baseline were still (0, 0, 0), the 5 m delta would
-        // produce 312 m/s and trigger. The re-prime means we measure
-        // from (5, 0, 0) → (5.05, 0, 0) → 3.125 m/s, no trigger.
-        player.feet_position = Vec3{5.05, 0, 0};
+        // produce 312 m/s under the legacy dist/dt metric and
+        // trigger. The re-prime means we measure from (5, 0, 0) →
+        // (5.05, 0, 0) → ||v|| = 3.125 m/s, no trigger.
+        SimulateImpact(player, Vec3{5.05, 0, 0}, Vec3{3.125, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
-        // Now a real impact from the new baseline. 0.5 m / 16 ms =
-        // 31.25 m/s, above the 25 m/s threshold — triggers normally.
-        // The dt guards reset the baseline, not the heuristic.
-        player.feet_position = Vec3{5.55, 0, 0};
+        // Now a real impact from the new baseline. ||v|| = 31.25
+        // m/s, above the 25 m/s threshold — triggers normally. The
+        // dt guards reset the baseline, not the heuristic.
+        SimulateImpact(player, Vec3{5.55, 0, 0}, Vec3{31.25, 0, 0});
         provider.Tick(player, 0.016);
         EXPECT_TRUE(provider.isKnockedOut());
     }
@@ -876,16 +990,20 @@ void TestKnockoutPathologicalDtGuards() {
         PlayerState_Reset(player);
         player.has_feet = true;
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
 
         // Prime.
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // dt = 0.250 — exactly at the upper guard boundary. Inclusive,
-        // so the velocity path runs. 0.7 m / 0.250 s = 2.8 m/s, below
-        // threshold — no trigger. (The point is to lock the boundary:
-        // 0.250 must NOT trip the guard, 0.251 must.)
+        // so the velocity path runs. ||v|| = 2.8 m/s (the test keeps
+        // velocity = 0 so the M10 lander's ||v|| check no-ops anyway;
+        // the dt guard is the contract under test). The point is to
+        // lock the boundary: 0.250 must NOT trip the guard, 0.251
+        // must.
         player.feet_position = Vec3{0.7, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.250);
         EXPECT_FALSE(provider.isKnockedOut());
     }
@@ -902,18 +1020,132 @@ void TestKnockoutPathologicalDtGuards() {
         PlayerState_Reset(player);
         player.has_feet = true;
         player.feet_position = Vec3{0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
 
         provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
 
         // dt = 0.251 — just past the upper guard boundary. The guard
-        // rejects the tick, so a 0.7 m displacement is harmless.
-        // 0.7 / 0.251 = 2.79 m/s, below threshold by coincidence — so
-        // we move a larger distance to make the test more pointed:
-        // 6.3 m / 0.251 s = 25.1 m/s, just above threshold. Guard
-        // must still reject.
+        // rejects the tick, so a 6.3 m displacement is harmless. The
+        // M10 lander also no-ops here (||v|| = 0), but the guard is
+        // the contract under test — if a future refactor reintroduces
+        // the dist/dt arithmetic, the guard must still reject this
+        // tick so dist/dt = 25.1 m/s cannot fire a spurious trigger.
         player.feet_position = Vec3{6.3, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
         provider.Tick(player, 0.251);
+        EXPECT_FALSE(provider.isKnockedOut());
+    }
+}
+
+// -----------------------------------------------------------------------------
+// M10 Lander: ||player.velocity|| as the trigger metric.
+//
+// The M10 lander switched the trigger from dist/dt to
+// ||player.velocity|| because dist/dt misreads single-frame
+// position glitches (FSM `PlacePlayerAtDoor` / `PlacePlayerAtSeat`
+// snap, save-load teleport, world-streaming jump) as 50-100 m/s
+// impacts even when the player's actual integrated velocity is
+// < 1 m/s. The probes here pin the new contract:
+//   1. A single-frame position glitch with ||v|| = 0 does NOT fire
+//      a KO (the central bug fix).
+//   2. A real integrated impact with ||v|| > threshold fires the
+//      KO regardless of the position delta size (so a tiny
+//      0.05 m / 16 ms position jump with velocity = 50 m/s on
+//      a different axis still fires).
+//   3. The trigger fires on the magnitude of ||v||, not on any
+//      single axis component (so a 5 m/s velocity on each of
+//      three axes = ||v|| ≈ 8.66 m/s, just over the 8 m/s
+//      threshold, fires).
+//   4. A non-moving player (||v|| = 0) is never knocked out, no
+//      matter what dist the test reports (negative control
+//      against future regressions that re-introduce a dist/dt
+//      fallback).
+// -----------------------------------------------------------------------------
+
+void TestKnockoutTriggerUsesIntegratedVelocityNotDistDt() {
+    // The central bug fix: a 1.237 m / 13 ms position glitch (matches
+    // the live ATS 1.61.3.1s session that produced the spurious
+    // 95.3 m/s KO with dist/dt = 1.237 / 0.013 = 95.2 m/s) MUST NOT
+    // fire the KO when ||v|| = 0. The M10 lander uses ||v|| as the
+    // trigger metric, so a programmatic snap with ||v|| = 0 is
+    // correctly classified as "no impact".
+    KnockoutProvider provider;
+    PlayerState player;
+    PlayerState_Reset(player);
+    player.has_feet = true;
+    player.feet_position = Vec3{0, 0, 0};
+    player.velocity = Vec3{0, 0, 0};
+    provider.Tick(player, 0.013);  // prime
+
+    // The exact scenario from the live log: 1.237 m position jump
+    // in 13 ms with ||v|| = 0. The M10 lander MUST NOT fire.
+    player.feet_position = Vec3{1.237, 0, 0};
+    player.velocity = Vec3{0, 0, 0};
+    provider.Tick(player, 0.013);
+    EXPECT_FALSE(provider.isKnockedOut());
+}
+
+void TestKnockoutTriggerFiresOnIntegratedVelocityOnly() {
+    // Mirror of the previous probe with ||v|| = 50 m/s and a small
+    // position delta. The M10 lander uses ||v|| as the trigger
+    // metric, so a real impact with a small position delta still
+    // fires (the position delta is irrelevant — only ||v|| matters).
+    KnockoutProvider provider;
+    PlayerState player;
+    PlayerState_Reset(player);
+    player.has_feet = true;
+    player.feet_position = Vec3{0, 0, 0};
+    player.velocity = Vec3{0, 0, 0};
+    provider.Tick(player, 0.016);  // prime
+
+    // 50 m/s on +X, but only 0.05 m position delta (the M10 lander
+    // doesn't care about the position delta, only ||v||).
+    player.feet_position = Vec3{0.05, 0, 0};
+    player.velocity = Vec3{50.0, 0, 0};
+    provider.Tick(player, 0.016);
+    EXPECT_TRUE(provider.isKnockedOut());
+}
+
+void TestKnockoutTriggerUsesMagnitudeAcrossAxes() {
+    // The M10 lander uses the magnitude ||v|| = sqrt(vx² + vy² + vz²)
+    // as the trigger, not any single axis. A diagonal velocity with
+    // 5 m/s on each of three axes has ||v|| = sqrt(75) ≈ 8.66 m/s,
+    // just above the 8 m/s default threshold — must fire.
+    KnockoutProvider provider;
+    PlayerState player;
+    PlayerState_Reset(player);
+    player.has_feet = true;
+    player.feet_position = Vec3{0, 0, 0};
+    player.velocity = Vec3{0, 0, 0};
+    provider.Tick(player, 0.016);  // prime
+
+    player.feet_position = Vec3{0, 0, 0};
+    player.velocity = Vec3{5.0, 5.0, 5.0};  // ||v|| ≈ 8.66 m/s
+    provider.Tick(player, 0.016);
+    EXPECT_TRUE(provider.isKnockedOut());
+}
+
+void TestKnockoutStationaryPlayerNeverTriggers() {
+    // Negative control: a non-moving player (||v|| = 0) is never
+    // knocked out, no matter what dist the test reports. This is
+    // the test that future regressions that re-introduce a
+    // dist/dt fallback will fail.
+    KnockoutProvider provider;
+    PlayerState player;
+    PlayerState_Reset(player);
+    player.has_feet = true;
+    player.feet_position = Vec3{0, 0, 0};
+    player.velocity = Vec3{0, 0, 0};
+    provider.Tick(player, 0.016);  // prime
+
+    // Huge position jump (would have been 6250 m/s under the
+    // legacy dist/dt metric) with ||v|| = 0. The M10 lander
+    // MUST NOT fire.
+    for (int i = 0; i < 100; ++i) {
+        player.feet_position = Vec3{static_cast<double>(i) * 100.0, 0, 0};
+        player.velocity = Vec3{0, 0, 0};
+        provider.Tick(player, 0.016);
         EXPECT_FALSE(provider.isKnockedOut());
     }
 }

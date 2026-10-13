@@ -308,11 +308,14 @@ void TestDiagnosticDumpReportsKnockout() {
     p.has_feet = true;
     // First Tick with has_feet and dt>0 seeds the previous position.
     knockout.Tick(p, 0.016);
-    // Second Tick jumps the player 50 m in one frame — velocity ≈ 3125 m/s
-    // >> 8 m/s threshold, triggers knock-out. (Teleport gate is disabled
-    // so the 50 m jump goes through the velocity branch instead of the
-    // re-prime branch.)
+    // Second Tick jumps the player 50 m in one frame with
+    // ||v|| = 3125 m/s >> 8 m/s threshold, triggers knock-out.
+    // (Teleport gate is disabled so the 50 m jump goes through
+    // the velocity branch instead of the re-prime branch.) The
+    // M10 lander uses ||player.velocity||; we set velocity to a
+    // matching high value to actually fire the trigger.
     p.feet_position = {50, 0, 0};
+    p.velocity = {3125, 0, 0};
     knockout.Tick(p, 0.016);
 
     EXPECT_TRUE(knockout.isKnockedOut());
@@ -1578,11 +1581,14 @@ void TestDumpKnockoutReportsStateAndConfig() {
     p.feet_position = Vec3{0, 0, 0};
     p.has_feet = true;
     ko.Tick(p, 0.016);  // prime tracking_ without firing KO
-    p.feet_position = Vec3{0.6, 0, 0};
     // 0.6 m in 16 ms = 37.5 m/s — above the 30 m/s velocity
     // threshold (dist_threshold = 30 * 0.016 = 0.48 m so 0.6 > 0.48)
     // but below the 1.0 m snap-re-prime distance, so the heuristic
-    // fires the KO instead of re-priming the baseline.
+    // fires the KO instead of re-priming the baseline. The M10
+    // lander uses ||player.velocity||, so we set velocity to 37.5
+    // m/s to fire the trigger.
+    p.feet_position = Vec3{0.6, 0, 0};
+    p.velocity = Vec3{37.5, 0, 0};
     ko.Tick(p, 0.016);
     EXPECT_TRUE(ko.isKnockedOut());  // confirm we triggered KO
 

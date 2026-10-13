@@ -911,10 +911,45 @@ void GameFreeCameraShim::OnEnterWalking() {
 
 void GameFreeCameraShim::OnExitWalking() {
     exiting_walking_ = true;
+    // M2.5: dispatch the toggle key on Walking exit so the dev free
+    // camera turns OFF when the user re-enters the truck. Without
+    // this, the dev free camera stays activated after the F (or F10)
+    // recovery and the user is left in a hybrid state: the game's
+    // camera is back in cabin view but the dev free camera is still
+    // toggled on in some bookkeeping, which can produce visual
+    // glitches (camera matrix flashes between free and cabin) the
+    // next time the user walks again. The symmetric
+    // entry-toggles-on / exit-toggles-off pairing is what makes the
+    // shim idempotent across many F10 cycles.
+    //
+    // The dispatch honours the same gates as OnEnterWalking —
+    // enabled_ AND supported_ must both be true — so a user who
+    // runs the shim off (the default after the M2.5 auto-migrate)
+    // sees no toggle-dispatched line on Walking exit, matching the
+    // entry-side silence. When both gates are met, we report the
+    // dispatch + path in a single line so the analyst can grep
+    // game.log for "Walking exit -> dispatched" and see the toggle
+    // parity.
+    if (enabled_ && supported_) {
+        const int dispatched = TriggerToggle();
+        WALKERCORE_LOG_INFO(
+            "GameFreeCameraShim: Walking exit -> dispatched %d key "
+            "event(s) (walks_entered=%d, toggles_dispatched=%d, "
+            "toggle VK=0x%X, hwnd=0x%llX) — toggle dispatched to "
+            "deactivate the dev free camera so the cabin view "
+            "regains control when the user re-enters the truck.",
+            dispatched, walks_entered_, toggles_dispatched_,
+            toggle_vk_,
+            static_cast<unsigned long long>(
+                reinterpret_cast<std::uintptr_t>(hwnd_)));
+        return;
+    }
     WALKERCORE_LOG_INFO(
         "GameFreeCameraShim: Walking exit (walks_entered=%d, "
-        "toggles_dispatched=%d)",
-        walks_entered_, toggles_dispatched_);
+        "toggles_dispatched=%d, gate=%s, supported=%s)",
+        walks_entered_, toggles_dispatched_,
+        enabled_ ? "on" : "off",
+        supported_ ? "1" : "0/missing");
 }
 
 int GameFreeCameraShim::TriggerToggle() {

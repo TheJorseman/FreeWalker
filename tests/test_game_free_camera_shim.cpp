@@ -268,9 +268,87 @@ void TestGameFreeCameraShimOnExitWalkingLeavesCountersIntact() {
     s->OnEnterWalking();
     EXPECT_EQ(s->walks_entered(), 2);
     s->OnExitWalking();
-    // OnExitWalking must not mutate walks_entered / toggles_dispatched.
+    // OnExitWalking must not mutate walks_entered. With the M2.5
+    // follow-up, the dispatch path (enabled+supported) is also
+    // triggered on exit so the dev free camera turns off when the
+    // user re-enters the truck. This test only enables the shim
+    // (no SetSupportedForTesting) so supported_ stays false and
+    // the dispatch does not fire — the counter stays at 0.
     EXPECT_EQ(s->walks_entered(), 2);
     EXPECT_EQ(s->toggles_dispatched(), 0);
+}
+
+void TestGameFreeCameraShimOnExitWalkingDispatchesWhenSupported() {
+    // M2.5 follow-up: OnExitWalking now dispatches the toggle key
+    // so the dev free camera turns off when the user re-enters
+    // the truck. The dispatch path mirrors OnEnterWalking: enabled
+    // AND supported must both be true. With both gates met, the
+    // toggle_vk_ count increments by 1 per Walking exit (the same
+    // way OnEnterWalking bumps it). Verify the symmetric
+    // dispatch behaviour here.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->BindGameHwnd(reinterpret_cast<HWND>(0x12345678));
+    // No OnEnterWalking first — exercise the exit-without-entry
+    // path. The M2.5 contract is that OnExitWalking dispatches
+    // regardless of whether OnEnterWalking was called, so the
+    // dispatch counter starts at 1 from this single exit call.
+    const int before = s->toggles_dispatched();
+    s->OnExitWalking();
+    EXPECT_EQ(s->toggles_dispatched(), before + 1);
+    // Walking exit does NOT bump walks_entered — that counter is
+    // only incremented by OnEnterWalking.
+    EXPECT_EQ(s->walks_entered(), 0);
+}
+
+void TestGameFreeCameraShimOnExitWalkingHonoursDisabledGate() {
+    // When the shim is disabled, OnExitWalking must not dispatch —
+    // the same gate that suppresses OnEnterWalking dispatch also
+    // suppresses OnExitWalking. Without this guard, a user who
+    // disables the shim after a Walking entry would see a stray
+    // toggle on exit that the entry did not initiate, leaving the
+    // dev free camera in the opposite of expected state.
+    auto s = MakeShim();
+    s->SetEnabled(false);
+    s->SetSupportedForTesting(true);
+    s->BindGameHwnd(reinterpret_cast<HWND>(0x12345678));
+    s->OnExitWalking();
+    EXPECT_EQ(s->toggles_dispatched(), 0);
+}
+
+void TestGameFreeCameraShimOnExitWalkingHonoursUnsupportedGate() {
+    // When supported_ is false (g_developer not detected in
+    // config.cfg), OnExitWalking must not dispatch even if enabled.
+    // Symmetric with OnEnterWalking's supported-gate behaviour.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    // Leave SetSupportedForTesting(false) — default state.
+    s->BindGameHwnd(reinterpret_cast<HWND>(0x12345678));
+    s->OnExitWalking();
+    EXPECT_EQ(s->toggles_dispatched(), 0);
+}
+
+void TestGameFreeCameraShimEntryAndExitToggleParity() {
+    // End-to-end F10 cycle: enter Walking → dispatch (count=1),
+    // exit Walking → dispatch (count=2), enter Walking again →
+    // dispatch (count=3), exit Walking → dispatch (count=4). The
+    // pair of toggles cancel each other (dev camera ON then OFF
+    // then ON then OFF) so the net visible state is the same as
+    // before any F10 presses. The dispatch counter is the
+    // user-visible trace of this parity.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->BindGameHwnd(reinterpret_cast<HWND>(0x12345678));
+    s->OnEnterWalking();
+    EXPECT_EQ(s->toggles_dispatched(), 1);
+    s->OnExitWalking();
+    EXPECT_EQ(s->toggles_dispatched(), 2);
+    s->OnEnterWalking();
+    EXPECT_EQ(s->toggles_dispatched(), 3);
+    s->OnExitWalking();
+    EXPECT_EQ(s->toggles_dispatched(), 4);
 }
 
 // --- ProbeConfigCandidatesForTesting -------------------------------------

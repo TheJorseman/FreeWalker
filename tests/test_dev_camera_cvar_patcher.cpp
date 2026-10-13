@@ -134,8 +134,14 @@ std::unique_ptr<DevCameraCvarPatcher> MakePatcher() {
 void TestDevCameraCvarPatcherDefaultStateIsEnabled() {
     auto p = MakePatcher();
     EXPECT_TRUE(p->isEnabled());
-    EXPECT_STREQ("0x223F6C0", "0x223F6C0");  // sentinel
-    EXPECT_EQ(p->name_rva(), 0x223F6C0ULL);
+    EXPECT_STREQ("0x22408C0", "0x22408C0");  // sentinel
+    // Default RVA is 0x22408C0 in ATS 1.61.3.1s (.rdata-resident
+    // section, file offset 0x223F6C0). The original commit (2cf1867)
+    // used 0x223F6C0 — the file offset, not the RVA. The PE has
+    // SectionAlignment=0x1000 but FileAlignment=0x200, so .rdata has
+    // a +0x200 offset between file and RVA. The new RVA was derived
+    // by walking the .rdata section header.
+    EXPECT_EQ(p->name_rva(), 0x22408C0ULL);
     EXPECT_EQ(p->runs(), 0);
     EXPECT_EQ(p->patches(), 0);
 }

@@ -26,9 +26,17 @@
 // What this provider does:
 //   1. Resolve amtrucks.exe image base via GetModuleHandleA("amtrucks.exe").
 //   2. Compute the rebased location of the cvar name string at
-//      RVA 0x223F6C0 (file offset 0x223F6C0 in ATS 1.61.3.1s;
-//      SectionAlignment == FileAlignment == 0x1000 for this PE so
-//      file offset == RVA). Verify the string at that VA is exactly
+//      RVA 0x22408C0 in ATS 1.61.3.1s. The original commit
+//      (2cf1867) used 0x223F6C0 — the file offset, NOT the RVA
+//      (the PE has SectionAlignment=0x1000 but FileAlignment=0x200,
+//      so .rdata has a +0x200 offset between file and RVA; the
+//      literal 0x223F6C0 only happens to match because the
+//      difference happens to be the section's rawaddr, not zero).
+//      The 0x22408C0 RVA was derived from the file offset
+//      0x223F6C0 by walking the .rdata section header (VAddr
+//      0x1DBE000, RawAddr 0x1DBCE00, so the .rdata-resident
+//      offset +0x4828C0 above the section start gives
+//      RVA 0x22408C0). Verify the string at that VA is exactly
 //      `g_developer\0`.
 //   3. Scan amtrucks.exe's data region (read-only PE scan, no
 //      allocation, no writing) for pointers that reference the cvar
@@ -95,7 +103,7 @@ struct DevCameraCvarPatchResult {
     // not the expected cvar.
     bool skipped = false;
     // The rebased VA of the cvar name string (the literal
-    // "g_developer\0" at RVA 0x223F6C0). 0 if not resolved.
+    // "g_developer\0" at RVA 0x22408C0 in ATS 1.61.3.1s). 0 if not resolved.
     uint64_t cvar_name_va = 0;
     // The rebased VA of the value buffer (where we wrote "1"). 0
     // if not resolved.
@@ -163,7 +171,7 @@ private:
     std::uint64_t module_base_for_testing_ = 0;
 
     bool enabled_ = true;
-    std::uint64_t name_rva_ = 0x223F6C0ULL;  // g_developer RVA, ATS 1.61.3.1s
+    std::uint64_t name_rva_ = 0x22408C0ULL;  // g_developer RVA, ATS 1.61.3.1s (.rdata, file offset 0x223F6C0)
     DevCameraCvarPatchResult last_result_{};
     int runs_ = 0;
     int patches_ = 0;

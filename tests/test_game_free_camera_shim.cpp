@@ -541,6 +541,27 @@ void TestGameFreeCameraShimReadControlsSiiKeyFindsAlternateName() {
     std::remove(path.c_str());
 }
 
+void TestGameFreeCameraShimReadControlsSiiKeyFindsCamdbg() {
+    // `camdbg` is the stock SCS action name for toggling the dev
+    // free camera (camera + debug). It is RE-confirmed via the
+    // CVar `g_debug_camera` registration in `amtrucks.exe`; the
+    // SCS input parser rejects `dev_camera_toggle` as "not valid
+    // object name" (game.log) so `camdbg` is the only name that
+    // reliably routes the dispatch to the dev camera. The
+    // parser's per-action lookup is action-name driven — we
+    // verify the action-specific call works in isolation, then
+    // the auto-detect loop in the runtime covers the ordering.
+    const std::string path = MakeTempPath("controls_camdbg");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix camdbg `keyboard.key0?0`\"\n"));
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("camdbg")),
+        std::string("keyboard.key0"));
+    std::remove(path.c_str());
+}
+
 void TestGameFreeCameraShimReadControlsSiiKeyPicksKeyboardAmongMany() {
     // Reverse-order binding (semantical first, keyboard second).
     // The parser must skip the semantical device and return the

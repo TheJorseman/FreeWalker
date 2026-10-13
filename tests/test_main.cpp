@@ -389,6 +389,7 @@ void TestGameFreeCameraShimReadGDeveloperValueStopsAtFirstLine();
 void TestGameFreeCameraShimReadControlsSiiKeyEmptyOnEmptyPath();
 void TestGameFreeCameraShimReadControlsSiiKeyFindsKeyboardBinding();
 void TestGameFreeCameraShimReadControlsSiiKeyFindsAlternateName();
+void TestGameFreeCameraShimReadControlsSiiKeyFindsCamdbg();
 void TestGameFreeCameraShimReadControlsSiiKeyPicksKeyboardAmongMany();
 void TestGameFreeCameraShimReadControlsSiiKeyEmptyOnMissingAction();
 void TestGameFreeCameraShimReadControlsSiiKeyOnlyJoystickBinding();
@@ -1081,6 +1082,7 @@ int main() {
     RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyEmptyOnEmptyPath);
     RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyFindsKeyboardBinding);
     RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyFindsAlternateName);
+RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyFindsCamdbg);
     RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyPicksKeyboardAmongMany);
     RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyEmptyOnMissingAction);
     RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyOnlyJoystickBinding);

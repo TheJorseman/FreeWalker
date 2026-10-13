@@ -737,7 +737,7 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
         auto_detected_controls_sii_path_ = path;
         if (!path.empty()) {
             for (const char *action :
-                 {"dev_camera_toggle", "walk_mode", "free_camera"}) {
+                 {"dev_camera_toggle", "camdbg", "walk_mode", "free_camera"}) {
                 const std::string token =
                     ReadControlsSiiKeyForActionForTesting(
                         path, std::string(action));
@@ -779,17 +779,34 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
             toggle_vk_);
         return;
     }
-    // Scan the three known action names in priority order. The first
+    // Scan the known action names in priority order. The first
     // hit wins; subsequent actions are ignored. We also track
-    // whether any of the three scans matched via the escaped-
-    // backtick typo fallback so we can emit a specific warning
-    // when the user has a malformed binding (game.log shows
+    // whether any of the scans matched via the escaped-backtick
+    // typo fallback so we can emit a specific warning when the
+    // user has a malformed binding (game.log shows
     // `<ERROR> Expecting string literal, found '"mix ...'`).
+    //
+    // Priority rationale (most-specific first):
+    //   1. dev_camera_toggle — the intuitive name most users add
+    //      when copying from a TMRealWalk-style tutorial. Stays
+    //      first for users who happen to bind it under a name the
+    //      SCS engine actually accepts in some build / mod.
+    //   2. camdbg — the actual stock SCS action name (camera +
+    //      debug) for toggling the dev free camera. RE-confirmed
+    //      from the CVar `g_debug_camera` registration in
+    //      `amtrucks.exe` (RVA region around `g_developer`). The
+    //      SCS input parser rejects `dev_camera_toggle` as
+    //      "not valid object name" (game.log) so without this
+    //      entry WalkerCore's dispatch silently hits the wrong
+    //      action and the dev camera never activates.
+    //   3. walk_mode — legacy action name some third-party mods
+    //      expose for compatibility.
+    //   4. free_camera — synonym tolerated for completeness.
     const char *hit_action = nullptr;
     std::string token;
     bool detected_typo = false;
     for (const char *action :
-         {"dev_camera_toggle", "walk_mode", "free_camera"}) {
+         {"dev_camera_toggle", "camdbg", "walk_mode", "free_camera"}) {
         bool action_typo = false;
         token = ReadControlsSiiKeyForActionWithDiagForTesting(
             path, std::string(action), &action_typo);

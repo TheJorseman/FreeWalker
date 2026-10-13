@@ -234,13 +234,18 @@ public:
 
     // M2.5: runtime hook. The PluginEntry init path calls this once
     // after ProbeGDeveloperFromConfig. It locates the user's
-    // controls.sii (best effort), looks for `dev_camera_toggle`
-    // first, then `walk_mode`, then `free_camera` (the three action
-    // names the SCS dev-camera UI / consolehandles enum in the
-    // binary exposes — see tmrealwalk-findings.md for the RE
-    // provenance). If a binding is found AND it differs from the
-    // current toggle_vk_ AND the INI did not pin a custom value
-    // (see INI override contract below), the shim adopts it. If
+    // controls.sii (best effort) and scans for `dev_camera_toggle`,
+    // `camdbg`, `walk_mode`, `free_camera` in priority order (most-
+    // specific first). `camdbg` is the actual stock SCS action
+    // name (camera + debug) for toggling the dev free camera — RE-
+    // confirmed from the CVar `g_debug_camera` registration in
+    // `amtrucks.exe`; the SCS input parser rejects `dev_camera_toggle`
+    // as "not valid object name" so the intuitive TMRealWalk-style
+    // name has to defer to `camdbg` for the dispatch to actually
+    // reach the dev camera. If a binding is found AND it differs
+    // from the current toggle_vk_ AND the INI did not pin a custom
+    // value (see INI override contract below), the shim adopts it.
+    // If
     // none is found, the shim emits a one-line, copy-pasteable
     // guidance message to game.log so the user knows exactly which
     // line to add to their controls.sii. The auto-detected value is

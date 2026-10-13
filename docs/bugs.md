@@ -60,9 +60,48 @@
 - ⚠️ Menor: los hot-paths de sentinel management requieren que el archivo INI esté bien-formado (UTF-8 sin BOM, líneas LF/CRLF aceptadas). Una edición manual con caracteres non-ASCII puede romper el sentinel parser. No documentado en walkthrough — pendiente.
 
 ## M7 — Polish mínimo (linterna, head tracker, shadow, door anim)
-- ⚠️ Menor: `PolishProvider::HeadTrackerProvider` es stub (log WARNING al boot). TrackIR/opentrack feed no se aplica aún. Hay `OpentrackReceiver.cpp` completo y compilable, pero el mixer con la pipeline mouse-look está pendiente.
-- ⚠️ Menor: linterna + shadow + door anim solo computan state, no empujan render pipelines (M7 lander partial).
-- ⚠️ Menor: 8 WAVs embebidos en TMRealWalk (`TMRealWalk_Door.WAV`, `TMRealWalk_Footstep1.WAV`, …) sugieren que el siguiente M lander debería añadirlos al lado del DLL para footstep/door sound. No implementado aún. Spec en `docs/observations/tmrealwalk-findings.md`.
+
+**Estado real auditado HEAD `be2b1f9`** (Oct 2026):
+
+- ✅ Las cuatro clases provider existen y están implementadas:
+  - `HeadTrackerProvider` (FeedSample + Sample + Peek + EMA smoothing)
+  - `ShadowProvider`, `FlashlightProvider`, `DoorAnimProvider`
+  Source: `include/walkercore/PolishProviders.h`, `src/provider/PolishProviders.cpp`.
+- ✅ `OpentrackReceiver` (UDP socket on port 4242, 48-byte datagram parse,
+  shortest-arc yaw delta, FeedSample injection) está completo y compila.
+  Source: `src/provider/OpentrackReceiver.cpp`, `include/walkercore/OpentrackReceiver.h`.
+- 🔴 **Wiring gap (real bug)**: `OpentrackReceiver` no se instancia en
+  ningún sitio del proyecto. Búsqueda exhaustiva (`grep -r 'new
+  OpentrackReceiver\|OpentrackReceiver()\|opentrack_receiver_'` en
+  `src/`) confirma cero hits fuera de su propio .cpp/.h. El constructor
+  `OpentrackReceiver::OpentrackReceiver() = default;` (OpentrackReceiver.cpp
+  línea 97) no tiene ningún caller — la feature está codificada pero
+  no llega al juego. Sin un Init() del receiver en `FrameLoop` (o en
+  `PluginEntry`) que pase el `HeadTrackerProvider*` y haga
+  `Tick()` en `PhaseApplyMouseLook`, no hay head tracking. El
+  ema-smoothed yaw/pitch delta nunca llega a `player_.yaw_radians`.
+- 🔴 **Wiring gap (real bug)**: `FrameLoop::PhaseApplyMouseLook`
+  (FrameLoop.cpp línea 225) solo consume `last_input_.mouse_dx/dy` —
+  nunca consulta `HeadTrackerProvider::Sample()` ni lee el
+  HeadTrackerProvider pose. Hasta que se añada un `opentrack_receiver_`
+  member a FrameLoop, el flow UDP→provider→player está cortado.
+- ⚠️ Menor: linterna + shadow + door anim solo computan state, no
+  empujan render pipelines (M7 lander partial — pendiente D3D hook
+  o ImGui overlay integration post mod-stack safety check).
+- ⚠️ Menor: 8 WAVs embebidos en TMRealWalk (`TMRealWalk_Door.WAV`,
+  `TMRealWalk_Footstep1.WAV`, …) sugieren que el siguiente M lander
+  debería añadirlos al lado del DLL para footstep/door sound. No
+  implementado aún. Spec en `docs/observations/tmrealwalk-findings.md`.
+
+**Para activar M7 hoy**, el fix es 4 pasos en C++ sin RE:
+  1. `FrameLoop` gains `std::unique_ptr<OpentrackReceiver> opentrack_receiver_;`
+     y `std::unique_ptr<HeadTrackerProvider> head_tracker_;`
+  2. `FrameLoop::Init()` los construye (passing the INI port + HeadTrackerProvider*)
+  3. `PhaseApplyMouseLook` primer line: `opentrack_receiver_->Tick();` →
+     `head_tracker_->Sample()` → apply delta on top of mouse delta
+  4. Tests: synth a UDP packet pushed into the receiver's queue, verify
+     head_tracker_pose after one Sample().
+Estimación: 1-2 horas + 3-4 tests. Puro código, sin live debugger.
 
 ## M8 — Fuel + station prefab
 - ⚠️ Mayor: `FuelPump` lee capacidades per-truck vía configuration event (real). Pero la posición de estaciones (gas station, service area) sigue siendo un placeholder truck-local. El RE del registry `prefab/list_station` en `amtrucks.exe` no se ha hecho — RE-bloqueado.

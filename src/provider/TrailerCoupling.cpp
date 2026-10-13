@@ -29,19 +29,24 @@ bool g_warned = false;
 void WarnStub() {
     if (g_warned) return;
     g_warned = true;
-    // M9 lander delivers the SCS configuration event + trailer
-    // world-placement channel. Until BOTH have fired, the ApproachTo
-    // KingPin waypoint uses the 2.5 m truck-local placeholder; once
-    // they have, the world-space hook position wins. The remaining
-    // M9 lander piece is the actual SCS trailer-attach API call
-    // (ForceComplete path), which still uses the placeholder.
+    // M9 lander with telemetry-driven ForceComplete. The SCS telemetry
+    // channel `trailer.connected` drives OnTrailerAttachStateChanged;
+    // when it flips true mid-FSM we auto-ForceComplete so the player
+    // does not have to walk the landing-gear + airlines steps manually
+    // when the game's own attach sequence has already succeeded. The
+    // remaining M9 lander piece (if the telemetry channel ever
+    // changes — e.g., a future SCS build adds a hook_attached_chains
+    // boolean that needs a different read) is to map the new channel
+    // name into the same OnTrailerAttachStateChanged path; until then
+    // the layout offset + ApproachToKingPin waypoint are the same as
+    // before.
     WALKERCORE_LOG_WARN(
-        "CouplingProvider: M9 lander partial — hook_position is read "
-        "from the SCS configuration event when available, but the "
-        "SCS trailer-attach API call (ForceComplete) is still a no-op. "
-        "ApproachToKingPin tracks the real hook when the SDK delivers "
-        "it; landing-gear + airlines steps still use the truck-local "
-        "placeholder offsets.");
+        "CouplingProvider: M9 lander partial — telemetry channel "
+        "`trailer.connected` drives OnTrailerAttachStateChanged (auto "
+        "ForceComplete on attach=true) but the ApproachToKingPin "
+        "waypoint still uses the truck-local placeholder offsets when "
+        "the configuration event has not delivered hook_position. "
+        "Once hook_position is present the world-space hook wins.");
 }
 
 constexpr double kTwoPi = 6.28318530717958647692;
@@ -95,6 +100,45 @@ void CouplingProvider::Cancel() {
 void CouplingProvider::ForceComplete() {
     state_.step = CouplingStep::Complete;
     state_.progress = 1.0f;
+}
+
+void CouplingProvider::OnTrailerAttachStateChanged(bool attached) {
+    // The telemetry channel `trailer.connected` is the source of
+    // truth for SCS-confirmed attach. When it flips true while we are
+    // mid-coupling, we skip the rest of the FSM and report Complete
+    // (the player is already hooked up — there's no need to walk
+    // through the landing-gear / airlines steps).
+    //
+    // When it flips false we reset so a subsequent Start() begins
+    // fresh; without the reset a stale "ApproachToKingPin" state
+    // could survive into a future save where the truck has no
+    // trailer attached.
+    //
+    // Calls with no in-progress coupling are no-ops; the early-return
+    // prevents accidentally advancing the FSM from Idle when the
+    // game world happens to have a trailer attached at startup
+    // (the player's truck is already driving with a connected
+    // trailer; we should not enter the coupling flow).
+    if (state_.step == CouplingStep::Idle ||
+        state_.step == CouplingStep::Complete) {
+        return;
+    }
+    if (attached) {
+        WALKERCORE_LOG_INFO(
+            "CouplingProvider: SCS trailer.connected=true during "
+            "step %s (%u); auto-completing via ForceComplete",
+            CouplingStepName(state_.step),
+            static_cast<unsigned>(state_.step));
+        ForceComplete();
+    } else {
+        WALKERCORE_LOG_INFO(
+            "CouplingProvider: SCS trailer.connected=false during "
+            "step %s (%u); resetting FSM to Idle",
+            CouplingStepName(state_.step),
+            static_cast<unsigned>(state_.step));
+        state_.step = CouplingStep::Idle;
+        state_.progress = 0.0f;
+    }
 }
 
 CouplingState CouplingProvider::WaypointForStep(CouplingStep step,

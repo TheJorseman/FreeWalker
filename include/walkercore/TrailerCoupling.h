@@ -77,6 +77,16 @@ public:
     void Cancel();
     void ForceComplete();  // for M9 lander when SCS confirms attach
 
+    // M9 lander hook for the official SCS telemetry channel
+    // `trailer.connected`. When the channel reports `attached=true` and
+    // a coupling step is in progress, the provider auto-completes the
+    // flow instead of waiting for the player to walk through every
+    // step. When the channel reports `attached=false`, the provider
+    // resets so a subsequent Start() begins fresh. Calls are no-ops
+    // when the FSM is Idle (no in-progress coupling) and are
+    // idempotent across identical transitions.
+    void OnTrailerAttachStateChanged(bool attached);
+
     // Per-step duration (seconds) — config so M6 INI can tune.
     void SetStepDuration(CouplingStep step, double seconds);
 

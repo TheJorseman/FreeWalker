@@ -304,6 +304,17 @@ walkercore::ShadowProvider *g_shadow = nullptr;
 // after init does NOT count as a transition.
 walkercore::WalkerFsmState g_prev_fsm_state = walkercore::WalkerFsmState::Driving;
 
+// M9 lander: previous-frame trailer.connected snapshot. The per-frame
+// conductor compares the live value from ScsTelemetryProvider against
+// this cache and dispatches a transition callback into the
+// CouplingProvider when the value changes. The `has_prev` flag is the
+// "first sample" gate: the first frame after init (or after shutdown)
+// we just record the value without dispatching, so a player who
+// happens to spawn already attached to a trailer doesn't get a fake
+// rising-edge into the coupling FSM.
+bool g_prev_trailer_attached = false;
+bool g_has_prev_trailer_attached = false;
+
 }  // namespace
 
 // -----------------------------------------------------------------------------
@@ -706,6 +717,52 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
   if (g_coupling != nullptr && g_fsm != nullptr && g_telemetry != nullptr &&
       fsm_state == walkercore::WalkerFsmState::Walking) {
     g_coupling->Tick(*truck_ptr, *player_ptr, dt_seconds, interact_pressed);
+  }
+
+  // Phase E5.5: M9 telemetry-driven ForceComplete. The SCS telemetry
+  // channel `trailer.connected` is the source of truth for SCS-confirmed
+  // attach. When it flips true while the coupling FSM is mid-flow, the
+  // CouplingProvider's OnTrailerAttachStateChanged auto-completes so
+  // the player doesn't have to walk through the landing-gear / airlines
+  // steps after the game's own attach sequence has already succeeded.
+  // When it flips false, the FSM resets to Idle so a subsequent Start()
+  // begins fresh.
+  //
+  // Detection strategy: the per-frame conductor already runs every
+  // frame on the game thread (the SCS SDK callback also runs on the
+  // same thread, so we don't need a lock). We cache the previous-frame
+  // value and dispatch on a change. The first sample after init /
+  // shutdown is a no-op via g_has_prev_trailer_attached so a player
+  // who spawned already attached doesn't get a fake rising edge into
+  // the coupling FSM.
+  //
+  // Dispatch is gated on g_coupling != nullptr and
+  // truck_ptr->has_trailer_attached (the channel callback has fired at
+  // least once) so the transition detector doesn't fire on a telemetry
+  // provider that hasn't been initialised. We do NOT gate on fsm_state
+  // — the auto-ForceComplete is valid even when the player is mid-drive
+  // (the coupling FSM is in Idle, the dispatch is a no-op, but the
+  // future M9 lander can use the same hook from any state).
+  if (g_coupling != nullptr && truck_ptr->has_trailer_attached) {
+    const bool curr_attached = truck_ptr->trailer_attached;
+    if (!g_has_prev_trailer_attached) {
+      // First sample: just record without dispatching. We use the
+      // boot-time value as the baseline so a player who spawned with
+      // a trailer already attached doesn't get a fake rising-edge
+      // into the coupling FSM (the player isn't walking through the
+      // coupling flow; they're already driving with a connected
+      // trailer).
+      g_prev_trailer_attached = curr_attached;
+      g_has_prev_trailer_attached = true;
+    } else if (curr_attached != g_prev_trailer_attached) {
+      WALKERCORE_LOG_INFO(
+          "M9 telemetry: trailer.connected transition %s→%s; dispatching to "
+          "CouplingProvider::OnTrailerAttachStateChanged",
+          g_prev_trailer_attached ? "true" : "false",
+          curr_attached ? "true" : "false");
+      g_coupling->OnTrailerAttachStateChanged(curr_attached);
+      g_prev_trailer_attached = curr_attached;
+    }
   }
 
   // Phase F: M7 flashlight. Toggle on the G key rising edge or the RMB
@@ -1398,6 +1455,14 @@ extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
     delete g_coupling;
     g_coupling = nullptr;
   }
+  // M9 lander: reset the trailer.connected transition cache so a
+  // re-init (e.g. player reloads the save) starts from a clean
+  // baseline. Without the reset, a `true` value recorded before
+  // shutdown would not trigger the first-sample gate on the next
+  // boot, and the per-frame conductor would fire a stale
+  // transition into the brand-new CouplingProvider instance.
+  g_prev_trailer_attached = false;
+  g_has_prev_trailer_attached = false;
 
   // M2 Game-Free-Camera shim (MVP for the GPU render push). The
   // shim owns no other resources — no log sink hook, no timer —

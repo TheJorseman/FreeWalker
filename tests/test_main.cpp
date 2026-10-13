@@ -292,6 +292,12 @@ void TestCouplingProviderRealHookPositionTransformsToWorld();
 void TestCouplingProviderRealHookPositionRotatesWithTruckHeading();
 void TestCouplingProviderRealHookLandingGearStep();
 void TestCouplingProviderHookUnsetUsesTruckLocalFallback();
+// M9 Lander: telemetry-driven ForceComplete via OnTrailerAttachStateChanged.
+void TestCouplingOnTrailerAttachIdleIsNoOp();
+void TestCouplingOnTrailerAttachCompleteIsNoOp();
+void TestCouplingOnTrailerAttachTrueMidFsmForcesComplete();
+void TestCouplingOnTrailerAttachFalseMidFsmResetsToIdle();
+void TestCouplingOnTrailerAttachIdempotentAcrossIdenticalTransitions();
 
 // M7 opentrack UDP receiver probes.
 void TestOpentrackReceiverInstallUninstallIdempotent();
@@ -1047,6 +1053,13 @@ int main() {
     RUN_TEST(walkercore::TestCouplingProviderRealHookPositionRotatesWithTruckHeading);
     RUN_TEST(walkercore::TestCouplingProviderRealHookLandingGearStep);
     RUN_TEST(walkercore::TestCouplingProviderHookUnsetUsesTruckLocalFallback);
+    // M9 Lander: telemetry-driven ForceComplete via
+    // OnTrailerAttachStateChanged.
+    RUN_TEST(walkercore::TestCouplingOnTrailerAttachIdleIsNoOp);
+    RUN_TEST(walkercore::TestCouplingOnTrailerAttachCompleteIsNoOp);
+    RUN_TEST(walkercore::TestCouplingOnTrailerAttachTrueMidFsmForcesComplete);
+    RUN_TEST(walkercore::TestCouplingOnTrailerAttachFalseMidFsmResetsToIdle);
+    RUN_TEST(walkercore::TestCouplingOnTrailerAttachIdempotentAcrossIdenticalTransitions);
 
     // M7 opentrack UDP receiver probes.
     RUN_TEST(walkercore::TestOpentrackReceiverInstallUninstallIdempotent);

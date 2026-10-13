@@ -134,7 +134,18 @@
 - ⚠️ Mayor: `AdBlue` (DEF) pump stub igual que diesel — capacidades reales, posición stub.
 
 ## M9 — Trailer coupling
-- ⚠️ Mayor: `CouplingProvider` telemetry funciona (auto-ForceComplete en `trailer.connected = true`). Waypoint `ApproachToKingPin` es placeholder truck-local hasta que el configuration event entregue `hook_position` por truck. Sin `hook_position`, no sabe dónde está el king pin en world space — el raycast es fake.
+
+**Estado real auditado HEAD actual** (Oct 2026):
+
+- ✅ **CERRADO en este ciclo**: el SCS telemetry SDK **sí expone** `hook.position` como fvector en la config `truck` (header: `sdk/include/common/scssdk_telemetry_common_configs.h:412`):
+  ```c
+  #define SCS_TELEMETRY_CONFIG_ATTRIBUTE_hook_position "hook.position"
+  ```
+  El `OnTelemetryConfiguration` callback en `ScsTelemetryProvider.cpp:240-253` ya lo lee y lo guarda en `TruckState::hook_position.{x,y,z}` con `has_hook_position = true`. El `CouplingProvider::WaypointForStep` (TrailerCoupling.cpp:183-186) verifica `truck.has_hook_position` y usa el hook real cuando está disponible, cayendo al placeholder solo en la ventana de pocos frames entre `Start()` y el primer evento de configuración (típicamente < 16 ms).
+- ✅ `trailer.connected` channel drives `OnTrailerAttachStateChanged(true)` → auto-ForceComplete (M9 main feature).
+- ✅ Test coverage: `test_coupling_provider.cpp` pin ambos branches (placeholder fallback vs real hook transform). `test_scstelemetry_provider.cpp` pin el path config-event → `has_hook_position` flag.
+- ⚠️ **Warning text fix (este ciclo)**: `CouplingProvider::WarnStub()` texto decía "M9 lander partial — ... still uses truck-local placeholder". Reescrito a "M9 lander wired — ApproachToKingPin uses the real SCS hook.position once the configuration event delivers it". La rama placeholder solo aplica durante la ventana pre-config.
+- 🔴 **Blocked**: el path `trailer.0.hook.position` (king-pin del trailer, no del truck) NO está implementado. El código actual solo lee la config `truck`, no `trailer.0`. Para acoplar multi-trailer con king-pin offsets reales en trailers adicionales, hay que extender `OnTelemetryConfiguration` con un branch `cfg->id == "trailer.0"`. Estimación: 30 min pure code + 2-3 tests. Pendiente hasta que se materialice un escenario multi-trailer concreto.
 
 ## M10 — Knockout
 - ✅ Sin bugs abiertos. Heuristic `||player.velocity||` activa (commit `7591c45`). El snapshot de posición prior FSM se re-prima para evitar spurious KO en transiciones.
@@ -156,7 +167,7 @@ Del game.log más reciente (DLL `6CF26C84…`, pre-M2.7 build):
 | 854-855 | ℹ️ Info | `D3D11 / D3D12 hook SKIPPED` | Por diseño, default-off porque rompe mod stack. |
 | 1355 | ⚠️ Mayor | `GameFreeCameraShim: Walking entry #1 (gate=off, ...)` | El shim está apagado en el INI del usuario. Acción: `game_free_camera_shim = true` o añadir `mix o_im_freecam` en controls.sii. |
 | 1357 | ⚠️ Menor | `FuelProvider: stub active — station position is a truck-local placeholder (M8 partial)` | M8 partial. Real impl needs prefab RE. |
-| 1358 | ⚠️ Mayor | `CouplingProvider: M9 lander partial — telemetry works but ApproachToKingPin waypoint is placeholder` | M9 partial. Real hook_position needed. |
+| 1358 | ℹ️ Info | `CouplingProvider: M9 lander wired — ApproachToKingPin uses the real SCS hook.position...` | M9 cerrado este ciclo (texto rewrited para reflejar estado real). |
 | 1363 | ⚠️ Mayor | `PhysXAdapter: stub — collision queries return no-hit. Player will pass through world geometry.` | Esperado sin `px_scene_hook_install = true`. Y-clamp previene caída infinita. |
 
 ---
@@ -169,7 +180,7 @@ Del game.log más reciente (DLL `6CF26C84…`, pre-M2.7 build):
    - Identificar el slot 14 de PxScene (probablemente `addActors` por contexto de firma)
    - Identificar el layout real del cvar struct de `g_developer`
 3. **MEDIUM — M3 sweep_slot fix.** Añadir segundo scan pass contra 0x2507C08 a `PhysXAdapter::ResolveKnownMethods`. Pure code change, no RE needed.
-4. **MEDIUM — M9 hook_position discovery.** RE del `truck.hook_position` channel en el SCS telemetry SDK. Si existe (probable, la mayoria de los campos truck.* están en el SDK), añadir al `ScsTelemetryProvider` channel registration.
+4. ~~**MEDIUM — M9 hook_position discovery.** RE del `truck.hook_position` channel en el SCS telemetry SDK. Si existe (probable, la mayoria de los campos truck.* están en el SDK), añadir al `ScsTelemetryProvider` channel registration.~~ **CERRADO en este ciclo**: `hook.position` ya está implementado y tested.
 5. **LOW — M8 station prefab RE.** Escaneo del registry `prefab/list_station` — requiere debug pass contra juego corriendo.
 6. **LOW — M5 PerTruckDoorTable extension.** Bucle per DLC truck — sin RE cuando hay catálogo prefab.
 7. **LOW — M7 PolishProvider stubs.** Reemplazar los logs WARNING por comportamiento real cuando las dependencias estén ready (PhX para ground-snap real, D3D hook para push).

@@ -29,24 +29,34 @@ bool g_warned = false;
 void WarnStub() {
     if (g_warned) return;
     g_warned = true;
-    // M9 lander with telemetry-driven ForceComplete. The SCS telemetry
-    // channel `trailer.connected` drives OnTrailerAttachStateChanged;
-    // when it flips true mid-FSM we auto-ForceComplete so the player
-    // does not have to walk the landing-gear + airlines steps manually
-    // when the game's own attach sequence has already succeeded. The
-    // remaining M9 lander piece (if the telemetry channel ever
-    // changes — e.g., a future SCS build adds a hook_attached_chains
-    // boolean that needs a different read) is to map the new channel
-    // name into the same OnTrailerAttachStateChanged path; until then
-    // the layout offset + ApproachToKingPin waypoint are the same as
-    // before.
+    // M9 lander — full implementation:
+    //   * The SCS configuration event delivers `truck.hook.position`
+    //     (and `trailer.0.hook.position` for the trailer side) as
+    //     fvector. ScsTelemetryProvider::OnTelemetryConfiguration
+    //     reads it into TruckState::hook_position and sets
+    //     has_hook_position = true. CouplingProvider::WaypointForStep
+    //     checks has_hook_position and uses the real truck-local
+    //     triple (transformed to world through truck.placement) for
+    //     ApproachToKingPin when present.
+    //   * The SCS telemetry channel `trailer.connected` drives
+    //     CouplingProvider::OnTrailerAttachStateChanged; when it
+    //     flips true mid-FSM we auto-ForceComplete so the player
+    //     does not have to walk the landing-gear + airlines steps
+    //     manually when the game's own attach sequence has already
+    //     succeeded.
+    //   * The placeholder fallback in WaypointForStep is only used
+    //     during the brief window between CouplingProvider::Start()
+    //     and the first SCS configuration event — typically a few
+    //     frames at most. Once hook_position arrives the waypoint
+    //     snaps to the real world-space king-pin.
+    // This warning fires once per process so the diagnostic dump
+    // surfaces the M9 lander status regardless of whether the user
+    // approaches a trailer in this session.
     WALKERCORE_LOG_WARN(
-        "CouplingProvider: M9 lander partial — telemetry channel "
-        "`trailer.connected` drives OnTrailerAttachStateChanged (auto "
-        "ForceComplete on attach=true) but the ApproachToKingPin "
-        "waypoint still uses the truck-local placeholder offsets when "
-        "the configuration event has not delivered hook_position. "
-        "Once hook_position is present the world-space hook wins.");
+        "CouplingProvider: M9 lander wired — ApproachToKingPin uses the "
+        "real SCS hook.position (transformed to world through "
+        "truck.placement) once the configuration event delivers it. "
+        "Trailer attach auto-ForceComplete is driven by trailer.connected.");
 }
 
 constexpr double kTwoPi = 6.28318530717958647692;

@@ -17,12 +17,86 @@
 
 #include "walkercore/InputHook.h"
 #include "walkercore/Log.h"
+#include "walkercore/OpentrackReceiver.h"
+#include "walkercore/PolishProviders.h"
 #include "walkercore/Time.h"
 #include "walkercore/TruckState.h"
 #include "walkercore/WalkerFsm.h"
 #include "walkercore/WorldState.h"
 
 namespace walkercore {
+
+bool FrameLoop::InitHeadTracker(unsigned short port) {
+    if (opentrack_receiver_) {
+        // Already initialised. Idempotent — return true to mirror the
+        // success case so callers can use the return value as a
+        // "have we got it?" check.
+        return true;
+    }
+    // Build the provider first. HeadTrackerProvider::Install() is a
+    // pure lifecycle setter on this build (no socket, no global
+    // state); a failure means a programmer error rather than a
+    // runtime resource issue, but we still surface it as false.
+    head_tracker_ = std::make_unique<HeadTrackerProvider>();
+    HeadTrackerConfig cfg;
+    // Enable only the opentrack source by default. The mouse
+    // source is the FrameLoop's own mouse-delta path — wiring it
+    // through the head tracker would double-count. The TrackIR
+    // source is opt-in only when the user supplies it through the
+    // M11 settings menu.
+    cfg.use_mouse = false;
+    cfg.use_trackir = false;
+    cfg.use_opentrack = true;
+    // Match opentrack's default 1.0 rad/rad for the unit
+    // conversion (opentrack publishes degrees; OpentrackReceiver's
+    // Tick converts to radians before calling FeedSample — see
+    // OpentrackReceiver.cpp). If the user wants a non-default
+    // sensitivity, it comes through the M6 INI lander's M7 row;
+    // the FrameLoop's provider-receiver plumbing is unaffected.
+    cfg.opentrack_sensitivity_rad_per_unit = 1.0f;
+    head_tracker_->SetConfig(cfg);
+    if (!head_tracker_->Install()) {
+        head_tracker_.reset();
+        return false;
+    }
+    opentrack_receiver_ = std::make_unique<OpentrackReceiver>();
+    if (!opentrack_receiver_->Install(port)) {
+        opentrack_receiver_.reset();
+        head_tracker_->Uninstall();
+        head_tracker_.reset();
+        return false;
+    }
+    return true;
+}
+
+void FrameLoop::ShutdownHeadTracker() {
+    if (opentrack_receiver_) {
+        opentrack_receiver_->Uninstall();
+        opentrack_receiver_.reset();
+    }
+    if (head_tracker_) {
+        head_tracker_->Uninstall();
+        head_tracker_.reset();
+    }
+}
+
+HeadTrackerState FrameLoop::headTrackerState() const {
+    if (!head_tracker_) {
+        HeadTrackerState out;
+        out.active = false;
+        out.dominant_source = HeadTrackerSource::Opentrack;
+        out.yaw_radians = 0.0f;
+        out.pitch_radians = 0.0f;
+        return out;
+    }
+    return head_tracker_->Peek();
+}
+
+// Out-of-line definition; required because the default destructor needs
+// the complete types of HeadTrackerProvider and OpentrackReceiver at
+// the call site. FrameLoop.cpp is the only TU that includes both
+// header (PolishProviders.h, OpentrackReceiver.h).
+FrameLoop::~FrameLoop() = default;
 
 namespace {
 // 2π with double precision, used by the head-bob phase accumulator
@@ -223,6 +297,21 @@ void FrameLoop::PhaseSampleInput() {
 }
 
 void FrameLoop::PhaseApplyMouseLook() {
+    // M7: pump the opentrack UDP socket first. Tick() is a no-op if
+    // the receiver is null or the socket failed to install (port
+    // conflict on 4242). On a tick that produces a new sample, the
+    // receiver feeds the OpentrackSource HeadTrackerSample into the
+    // HeadTrackerProvider; the smoothed pose offset is then visible
+    // through headTrackerState(). The full integration of that
+    // offset into player_.yaw_radians is the M7 lander's job —
+    // this commit closes the wiring gap (Tick called every frame,
+    // receiver constructed, provider wired) without changing the
+    // yaw math. The mouse-only path below stays source-of-truth
+    // when no head tracker is connected.
+    if (opentrack_receiver_) {
+        opentrack_receiver_->Tick(head_tracker_.get());
+    }
+
     // Sensitivity in config is "radians per raw input unit". Each unit is
     // roughly 1/1200 of an 800 DPI mouse sweep; the default gives ~0.13 rad
     // per inch of mouse movement, close to TMRealWalk's published value.

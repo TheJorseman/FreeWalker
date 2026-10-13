@@ -122,6 +122,11 @@ void TestFrameLoopRunOnceSamplesWhenConductorDidNot();
 void TestFrameLoopPlayerSnapshotStableAcrossConductor();
 void TestFrameLoopOverridePathPreservesProjectionFields();
 void TestFrameLoopWalkingPopulatesViewAndProjectionMatrices();
+void TestFrameLoopHeadTrackerNotInitialisedByDefault();
+void TestFrameLoopInitHeadTrackerIsIdempotent();
+void TestFrameLoopHeadTrackerShutdownRestoresBaseline();
+void TestFrameLoopHeadTrackerTickIsNoOpWithoutReceiver();
+void TestFrameLoopHeadTrackerStateDefaultSourceIsSentinel();
 void TestWalkerFsmInputsPointerRefactorContract();
 void TestWalkerFsmTransitionOutCameraFromMatchesCabinSeatWhenPointerAliases();
 void TestCameraStateBuildViewRotationPitchZeroSkipsNormalisation();
@@ -814,6 +819,11 @@ int main() {
     // override frame. Pin both contracts.
     RUN_TEST(walkercore::TestFrameLoopOverridePathPreservesProjectionFields);
     RUN_TEST(walkercore::TestFrameLoopWalkingPopulatesViewAndProjectionMatrices);
+    RUN_TEST(walkercore::TestFrameLoopHeadTrackerNotInitialisedByDefault);
+    RUN_TEST(walkercore::TestFrameLoopInitHeadTrackerIsIdempotent);
+    RUN_TEST(walkercore::TestFrameLoopHeadTrackerShutdownRestoresBaseline);
+    RUN_TEST(walkercore::TestFrameLoopHeadTrackerTickIsNoOpWithoutReceiver);
+    RUN_TEST(walkercore::TestFrameLoopHeadTrackerStateDefaultSourceIsSentinel);
 
     // WalkerFsmInputs pointer-refactor contract. The per-frame
     // conductor uses UpdateFromPointers to avoid a 152-byte/frame

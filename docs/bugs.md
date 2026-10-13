@@ -61,7 +61,7 @@
 
 ## M7 — Polish mínimo (linterna, head tracker, shadow, door anim)
 
-**Estado real auditado HEAD `be2b1f9`** (Oct 2026):
+**Estado real auditado HEAD `f8812c6`** (Oct 2026):
 
 - ✅ Las cuatro clases provider existen y están implementadas:
   - `HeadTrackerProvider` (FeedSample + Sample + Peek + EMA smoothing)
@@ -80,11 +80,20 @@
   `PluginEntry`) que pase el `HeadTrackerProvider*` y haga
   `Tick()` en `PhaseApplyMouseLook`, no hay head tracking. El
   ema-smoothed yaw/pitch delta nunca llega a `player_.yaw_radians`.
+  ✅ **CERRADO en M7.1** (`f8812c6`, Oct 2026): el receiver ahora se
+  instancia dentro de `FrameLoop::InitHeadTracker(port=4242)`, abre
+  el UDP socket, y `FrameLoop::PhaseApplyMouseLook` invoca
+  `opentrack_receiver_->Tick(head_tracker_.get())` en cada frame.
+  La pose offset del head tracker es poll-able vía
+  `FrameLoop::headTrackerState()` (consulta `HeadTrackerProvider::Peek()`).
+  5 tests unitarios cubren el wiring (cross-platform-safe: el receptor
+  puede ser nullptr en hosts sin socket o donde el puerto está bindeado).
 - 🔴 **Wiring gap (real bug)**: `FrameLoop::PhaseApplyMouseLook`
   (FrameLoop.cpp línea 225) solo consume `last_input_.mouse_dx/dy` —
   nunca consulta `HeadTrackerProvider::Sample()` ni lee el
   HeadTrackerProvider pose. Hasta que se añada un `opentrack_receiver_`
   member a FrameLoop, el flow UDP→provider→player está cortado.
+  ✅ **CERRADO en M7.1** (`f8812c6`): ver arriba.
 - ⚠️ Menor: linterna + shadow + door anim solo computan state, no
   empujan render pipelines (M7 lander partial — pendiente D3D hook
   o ImGui overlay integration post mod-stack safety check).
@@ -93,15 +102,25 @@
   debería añadirlos al lado del DLL para footstep/door sound. No
   implementado aún. Spec en `docs/observations/tmrealwalk-findings.md`.
 
-**Para activar M7 hoy**, el fix es 4 pasos en C++ sin RE:
-  1. `FrameLoop` gains `std::unique_ptr<OpentrackReceiver> opentrack_receiver_;`
-     y `std::unique_ptr<HeadTrackerProvider> head_tracker_;`
-  2. `FrameLoop::Init()` los construye (passing the INI port + HeadTrackerProvider*)
-  3. `PhaseApplyMouseLook` primer line: `opentrack_receiver_->Tick();` →
-     `head_tracker_->Sample()` → apply delta on top of mouse delta
-  4. Tests: synth a UDP packet pushed into the receiver's queue, verify
-     head_tracker_pose after one Sample().
-Estimación: 1-2 horas + 3-4 tests. Puro código, sin live debugger.
+**Para completar M7 hoy** (post M7.1, queda pendiente el lander):
+
+  - ✅ Pasos 1-4 del wiring (ver arriba).
+  - ⏳ Pendiente M7 lander: separar mouse-vs-head-tracker en acumuladores
+    distintos y sumar la pose-offset a `player_.yaw_radians`. La arquitectura
+    actual de `PhaseApplyMouseLook` trata la rotación como un campo
+    absolute — el offset EMA-smoothed del head tracker encaja como additivo,
+    pero hay que validar que no produce drift frame-a-frame. Estimación:
+    30-60 min + 2-3 tests + una live-test con opentrack corriendo.
+  - ⏳ Pendiente: M11 settings menu exponiendo `cfg.use_opentrack` /
+    `cfg.smoothing_factor` como toggles. Hookearlos a M6 INI keys.
+  - ⏳ Pendiente: thread de UDP receive. Actualmente `OpentrackReceiver::Tick`
+    es single-frame non-blocking. Si el spike-FrameLoop loop corre a 30 fps
+    y el opentrack envía a 60+ fps, algunos datagrams se pierden. La
+    solución es un worker thread independiente que vuelca la última pose a
+    un shared mutex-protected struct; Tick copia la pose en un solo
+    read. Esa refactorización se cruza con la arquitectura del M6/M11.
+  - ⚠️ Menor: 8 WAVs embebidos en TMRealWalk (footstep/door audio) sin
+    wire aún. Spec en `docs/observations/tmrealwalk-findings.md`.
 
 ## M8 — Fuel + station prefab
 - ⚠️ Mayor: `FuelPump` lee capacidades per-truck vía configuration event (real). Pero la posición de estaciones (gas station, service area) sigue siendo un placeholder truck-local. El RE del registry `prefab/list_station` en `amtrucks.exe` no se ha hecho — RE-bloqueado.

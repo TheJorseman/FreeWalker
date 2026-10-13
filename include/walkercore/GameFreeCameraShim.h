@@ -244,6 +244,36 @@ public:
         return auto_detected_controls_sii_path_;
     }
 
+    // M2.5 follow-up: smart-default auto-enable. Called by PluginEntry
+    // AFTER AutoDetectToggleVkFromControlsSii and ProbeGDeveloperFromConfig
+    // have both run. If the INI did not explicitly set
+    // `game_free_camera_shim = ...` (the explicit flag is false), the
+    // shim is currently disabled, a dev_camera_toggle binding was
+    // detected in the user's controls.sii, and g_developer is
+    // supported (value 1 or 2 in config.cfg), the shim flips its own
+    // enabled_ to true and emits a one-line log explaining the
+    // smart-default flip. The user can still disable it explicitly
+    // via INI `[m2] game_free_camera_shim = false` — the explicit
+    // flag gates the smart-default path so a user who has vetted
+    // false is not surprised by a silent re-enable.
+    //
+    // Returns true if the shim was flipped from false → true by this
+    // call. The return value is informational — PluginEntry logs the
+    // same line independently via the WALKERCORE_LOG_INFO below.
+    bool MaybeAutoEnableFromDetection();
+    // M2.5 follow-up: test seam. Sets the INI-explicit-shim-enable
+    // flag without requiring PluginEntry to install it. The
+    // production path is PluginEntry setting
+    // m2_game_free_camera_shim_explicit from the INI parser and
+    // passing the bool to SetIniOverridesShimEnableForTesting. The
+    // unit-test path installs the flag directly so we can exercise
+    // MaybeAutoEnableFromDetection under controlled explicit /
+    // non-explicit INI scenarios without spinning up the INI
+    // parser.
+    void SetIniOverridesShimEnableForTesting(bool b) {
+        ini_overrides_shim_enable_ = b;
+    }
+
 private:
     bool enabled_ = false;
     bool supported_ = false;
@@ -260,6 +290,17 @@ private:
     // auto-detects from controls.sii if a binding is found and falls
     // back to the hard-coded default 0x60 otherwise.
     bool ini_overrides_toggle_vk_ = false;
+    // M2.5 follow-up: did the INI explicitly set
+    // `game_free_camera_shim = ...`? Set by PluginEntry before
+    // calling MaybeAutoEnableFromDetection. When true, the
+    // smart-default auto-enable is skipped — the user has explicitly
+    // vetted the value (false or true) and we must not silently flip
+    // it. When false (the INI never named the knob), the
+    // MaybeAutoEnableFromDetection path is allowed to flip from
+    // false → true if both detection gates (binding found AND
+    // g_developer supported) are satisfied. See the public method
+    // doc for the full rationale.
+    bool ini_overrides_shim_enable_ = false;
     // M2.5: diagnostic fields exposed via auto_detected_key_name() /
     // auto_detected_controls_sii_path() so the F10 Walking-entry log
     // can confirm "picked up keyboard.num5 from

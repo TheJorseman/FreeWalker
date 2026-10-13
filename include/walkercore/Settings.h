@@ -66,6 +66,18 @@ struct WalkerSettings {
     // the M2 lander's worst-case mod stack. The M11 settings menu
     // can flip it at runtime via the exported ABI.
     bool m2_game_free_camera_shim = false;
+    // M2.5 follow-up: did the INI explicitly set `game_free_camera_shim
+    // = ...`? When true, the PluginEntry's auto-enable path (when a
+    // dev_camera_toggle binding is detected in controls.sii AND
+    // g_developer is supported) is skipped — the user has signalled
+    // "I know what I want, leave me alone". When false (the INI
+    // never named the knob), the auto-enable path is allowed to flip
+    // the shim from false → true. Without this flag, an auto-enable
+    // would silently flip a value the user has explicitly disabled
+    // (e.g. a user who prefers manual dev-camera toggles via the
+    // in-game console). Same contract as
+    // m2_dev_camera_toggle_vk_explicit.
+    bool m2_game_free_camera_shim_explicit = false;
     // M2: virtual key the shim synthesises on every Walking entry
     // to toggle the dev free camera. The SCS convention is
     // VK_NUMPAD0 (0x60) — that's the default. Users whose

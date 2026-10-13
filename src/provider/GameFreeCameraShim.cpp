@@ -909,6 +909,63 @@ void GameFreeCameraShim::OnEnterWalking() {
             reinterpret_cast<std::uintptr_t>(hwnd_)));
 }
 
+bool GameFreeCameraShim::MaybeAutoEnableFromDetection() {
+    // M2.5 follow-up: smart-default auto-enable. Three gates must
+    // all be satisfied to flip the shim from false → true:
+    //
+    //   1. INI did NOT explicitly set `game_free_camera_shim = ...`
+    //      — if the user has named the knob in the INI (regardless
+    //      of value), they have signalled "I know what I want, leave
+    //      me alone" and we must not flip their value.
+    //   2. A `dev_camera_toggle` / `walk_mode` / `free_camera`
+    //      binding was detected in the user's controls.sii. Without
+    //      a binding, the shim's synthesised key falls on a
+    //      different action and the auto-enable would activate a
+    //      no-op dispatch.
+    //   3. g_developer is supported (value 1 or 2 in config.cfg).
+    //      Without g_developer=1, the SCS dev free camera is not
+    //      available and the dispatch would produce no visual change.
+    //
+    // All three gates are independent. Any miss returns false
+    // without mutating enabled_, and the user can still opt in
+    // manually by editing the INI.
+    if (ini_overrides_shim_enable_) {
+        // The INI named the knob. Honour the user's choice; do not
+        // auto-flip.
+        return false;
+    }
+    if (auto_detected_key_name_.empty()) {
+        // No binding found. Even if the user enabled the shim, the
+        // dispatch would target a non-existent action. We could
+        // still flip enabled_ → true (the user can add the binding
+        // later and the next F10 will then dispatch), but that
+        // would produce a Walking-entry log line saying
+        // "dispatched 0 key event(s)" which is confusing. Stay off.
+        return false;
+    }
+    if (!supported_) {
+        // g_developer is 0 / missing. The dev free camera is not
+        // available. Stay off.
+        return false;
+    }
+    if (enabled_) {
+        // Already enabled (the user did it themselves, or a previous
+        // boot's smart-default flipped it). No change needed.
+        return false;
+    }
+    // All three gates pass. Flip the shim on and log the change.
+    enabled_ = true;
+    WALKERCORE_LOG_INFO(
+        "GameFreeCameraShim: smart-default auto-enable (binding=%s, "
+        "VK=0x%X, g_developer=%s, INI=[m2] game_free_camera_shim "
+        "untouched). The shim will now dispatch the toggle key on "
+        "every F10 transition. To disable, set [m2] "
+        "game_free_camera_shim = false in WalkerCore.ini.",
+        auto_detected_key_name_.c_str(), toggle_vk_,
+        supported_ ? "1" : "?");
+    return true;
+}
+
 void GameFreeCameraShim::OnExitWalking() {
     exiting_walking_ = true;
     // M2.5: dispatch the toggle key on Walking exit so the dev free

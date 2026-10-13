@@ -1096,6 +1096,20 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   g_game_free_camera_shim->AutoDetectToggleVkFromControlsSii(
       g_settings != nullptr &&
       g_settings->current().m2_dev_camera_toggle_vk_explicit);
+  // M2.5 follow-up: smart-default auto-enable. If the INI did not
+  // explicitly set `game_free_camera_shim = ...` AND a
+  // dev_camera_toggle binding was found AND g_developer is
+  // supported, the shim flips from false → true. This collapses the
+  // user-side onboarding from three manual steps (controls.sii edit
+  // + INI shim=true + restart) to one (controls.sii edit + restart),
+  // which is the friction reduction that makes the walkthrough
+  // actually viable for the user. The INI explicit-flag guards the
+  // flip so a user who has explicitly vetted `false` is not
+  // surprised.
+  g_game_free_camera_shim->SetIniOverridesShimEnableForTesting(
+      g_settings != nullptr &&
+      g_settings->current().m2_game_free_camera_shim_explicit);
+  g_game_free_camera_shim->MaybeAutoEnableFromDetection();
   // Bind the game window for the shim's PostMessage dispatch path.
   // FindGameHwnd() enumerates top-level windows owned by the current
   // process and picks the first visible, non-empty one (which is

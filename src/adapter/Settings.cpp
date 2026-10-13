@@ -329,6 +329,17 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
             bool bv = false;
             if (lkey == "game_free_camera_shim" && TryParseBool(value, &bv)) {
                 loaded.m2_game_free_camera_shim = bv;
+                // M2.5 follow-up: even if the value happens to equal
+                // the default false, the user has explicitly named the
+                // knob in the INI — set the explicit flag so the
+                // PluginEntry's smart-default auto-enable (when a
+                // dev_camera_toggle binding is detected in
+                // controls.sii AND g_developer is supported) is
+                // skipped. The explicit-vs-default distinction matters
+                // because auto-enable would otherwise flip a value
+                // the user has explicitly vetted (and may have set to
+                // false on purpose).
+                loaded.m2_game_free_camera_shim_explicit = true;
             } else if (lkey == "camera_hijack" && TryParseBool(value, &bv)) {
                 // M2 long-term: MinHook the camera state dispatcher at
                 // RVA 0xC22F40 and replace the matrices the SCS state

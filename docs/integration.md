@@ -157,18 +157,50 @@ Phase A of the M2 lander owns the D3D11 swap-chain hook (above). Phase
 B — actually moving the in-game camera when F10 transitions
 Driving → Walking — splits into two paths:
 
-**MVP path (use today): `GameFreeCameraShim`.** Disabled by default; flip
-the INI gate (`%APPDATA%\WalkerCore\WalkerCore.ini`, write under
-`[m2]`): `game_free_camera_shim = true`. On every Driving → Walking
-transition the shim synthesises a `VK_NUMPAD0` press+release so the
-SCS developer free camera takes over (assuming `g_developer "1"` is
-already in the game's `config.cfg` — which it is on this host, see
-`game.log.txt:350`). The shim's `g_developer` probe auto-reads the
-game's config and only fires keys when detected; otherwise it logs an
-advisory instead of synthesising keys. ABI:
-`walker_game_free_camera_shim_set_enabled`, `_supported`,
+**MVP path (use today): `GameFreeCameraShim`.** Default-off with
+**M2.5 smart-default auto-enable**. On every Driving → Walking
+transition the shim synthesises a configurable VK press+release (default
+`VK_NUMPAD0` = `0x60`; overridable via `[m2] dev_camera_toggle_vk = 0xHH`,
+auto-detected from `controls.sii`) so the SCS developer free camera takes
+over (assuming `g_developer "1"` is already in the game's `config.cfg` —
+which it is on this host, see `game.log.txt:350`). The shim's
+`g_developer` probe auto-reads the game's config and only fires keys when
+detected; otherwise it logs an advisory instead of synthesising keys.
+
+**Smart-default auto-enable (M2.5).** When three gates all pass, the
+shim flips itself from `false` to `true` automatically on DLL load:
+  1. The INI did **not** name `[m2] game_free_camera_shim = ...` (the
+     `m2_game_free_camera_shim_explicit` flag is false — the user has
+     not vetted the value).
+  2. A `dev_camera_toggle` / `walk_mode` / `free_camera` binding is
+     present in the user's `controls.sii` (auto-detected via
+     `ControlsSiiParser` + `ScsKeyNameToVkForTesting` lookup table —
+     covers F1-F12, numpad, modifiers, cursor keys, single letters).
+  3. `g_developer = 1` (or `2`) is present in `config.cfg`
+     (`g_developer` probe via OneDrive- and locale-aware candidate
+     enumeration).
+
+When the smart-default flips, the shim logs one line: `GameFreeCameraShim:
+smart-default auto-enable (binding=<key>, VK=0xHH, g_developer=1, INI=[m2]
+game_free_camera_shim untouched). The shim will now dispatch the toggle
+key on every F10 transition.` The user can still disable it explicitly
+via `[m2] game_free_camera_shim = false` — the explicit flag gates the
+smart-default path so a user who has vetted `false` is not surprised by
+a silent re-enable.
+
+**Controls binding auto-detect (M2.5).** At DLL init the shim scans the
+active profile's `controls.sii` (OneDrive- + locale-aware path probe,
+parallels the `g_developer` probe) for the first `keyboard.*` token bound
+to `dev_camera_toggle`. The detected key becomes the dispatch VK unless
+the user explicitly pinned a value in the INI
+(`m2_dev_camera_toggle_vk_explicit=true`). Falls back to the default
+`0x60` when no binding is found.
+
+ABI: `walker_game_free_camera_shim_set_enabled`, `_supported`,
 `_on_enter_walking`, `_on_exit_walking`, `_toggle_now`,
-`walker_dump_game_free_camera_shim`.
+`_dump_game_free_camera_shim`. The F12 dump surfaces
+`ini_overrides_vk` / `auto_detected_key` / `controls_sii_path` for
+verification; F10 Walking-entry log line shows the same fields inline.
 
 The `g_developer` probe is OneDrive- and locale-aware. It first asks
 the shell for `CSIDL_MYDOCUMENTS` (which transparently follows the

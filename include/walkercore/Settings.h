@@ -271,6 +271,15 @@ public:
     // exercise the mtime path directly.
     void PrimeMtimeCache();
 
+    // M2.5 hotfix: in-place sentinel patch for legacy INIs. Adds the
+    // `# walkercore:managed:<key>` comment line after any
+    // M2.5-managed key (game_free_camera_shim, dev_camera_toggle_vk)
+    // whose value matches the code default and which lacks the
+    // sentinel. See Settings.cpp for the full rationale. Idempotent;
+    // preserves every other line (including user-customised keys the
+    // full SaveToPath path would drop).
+    void PatchSentinelsForLegacyIni(const std::string &path);
+
     const WalkerSettings &current() const { return current_; }
     void SetCurrent(const WalkerSettings &s);
 

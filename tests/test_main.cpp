@@ -66,6 +66,13 @@ void TestIniM2DevCameraToggleVkParsesHexAndDecimal();
 void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault();
 void TestIniM2DevCameraToggleVkUnparseableKeepsDefault();
 void TestIniM2DevCameraToggleVkRoundTripsThroughSaveToPath();
+void TestIniM2SentinelSuppressesExplicitFlagForAutoWrittenFalse();
+void TestIniM2NoSentinelMeansExplicitTrue();
+void TestIniM2SentinelForDevCameraToggleVk();
+void TestIniSaveToPathEmitsSentinelForDefaultValues();
+void TestIniSaveToPathOmitsSentinelForNonDefaultValues();
+void TestIniM2LegacyIniGetsSentinelPatchedInPlace();
+void TestIniM2LegacyPatchSkipsNonDefaultValues();
 void TestApplyAllPushesEveryFieldToEveryConsumer();
 void TestWalkerFsmInitialState();
 void TestWalkerFsmDrivingToWalking();
@@ -693,6 +700,13 @@ int main() {
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkUnparseableKeepsDefault);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkRoundTripsThroughSaveToPath);
+    RUN_TEST(walkercore::TestIniM2SentinelSuppressesExplicitFlagForAutoWrittenFalse);
+    RUN_TEST(walkercore::TestIniM2NoSentinelMeansExplicitTrue);
+    RUN_TEST(walkercore::TestIniM2SentinelForDevCameraToggleVk);
+    RUN_TEST(walkercore::TestIniSaveToPathEmitsSentinelForDefaultValues);
+    RUN_TEST(walkercore::TestIniSaveToPathOmitsSentinelForNonDefaultValues);
+    RUN_TEST(walkercore::TestIniM2LegacyIniGetsSentinelPatchedInPlace);
+    RUN_TEST(walkercore::TestIniM2LegacyPatchSkipsNonDefaultValues);
 
     // Regression guard for the dump_state_vk / mouse-button round-trip —
     // the user observed "F12 only gives me a screenshot" because the

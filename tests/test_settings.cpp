@@ -939,4 +939,263 @@ void TestIniM2DevCameraToggleVkRoundTripsThroughSaveToPath() {
     std::remove(path.c_str());
 }
 
+void TestIniM2LegacyIniGetsSentinelPatchedInPlace() {
+    // A pre-M2.5 INI has `game_free_camera_shim = false` and
+    // `dev_camera_toggle_vk = 0x60` written without the
+    // `# walkercore:managed:<key>` sentinel (those DLLs did not emit
+    // it). On the first load with the M2.5 hotfix DLL, the
+    // in-place sentinel patcher must insert the missing sentinels so
+    // the explicit flag is suppressed on the second load and the
+    // smart-default can fire. This is the regression test for the
+    // user-reported case where the smart-default stayed blocked
+    // because the auto-migrated line was treated as user-vetted.
+    const std::string path = MakeTempIniPath("m2_legacy_patch");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "game_free_camera_shim = false\n";
+        w << "dev_camera_toggle_vk = 0x60\n";
+    }
+
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    // First-load: the patcher has fired, so the explicit flag is
+    // suppressed on the FIRST read (the patch happens before
+    // ApplyAll but we already have the loaded state in scope from
+    // the parser pass — the second-pass suppression is what makes
+    // the flag correct on subsequent loads).
+    // Read the file back to confirm the sentinel was appended.
+    {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const std::string content = ss.str();
+        EXPECT_TRUE(content.find("# walkercore:managed:game_free_camera_shim") !=
+                    std::string::npos);
+        EXPECT_TRUE(content.find("# walkercore:managed:dev_camera_toggle_vk") !=
+                    std::string::npos);
+    }
+
+    // Second load (simulating the next DLL load after the patch):
+    // the explicit flag MUST now be false for both keys.
+    SettingsStore reader2;
+    EXPECT_TRUE(reader2.LoadFromPath(path));
+    EXPECT_FALSE(reader2.current().m2_game_free_camera_shim_explicit);
+    EXPECT_FALSE(reader2.current().m2_dev_camera_toggle_vk_explicit);
+
+    std::remove(path.c_str());
+}
+
+void TestIniM2LegacyPatchSkipsNonDefaultValues() {
+    // A pre-M2.5 INI has `game_free_camera_shim = true` (the old
+    // default value) without a sentinel. The patcher MUST NOT insert
+    // a sentinel for non-default values — that line is user-vetted
+    // (in the old-DLL scenario, the user could have left the old
+    // default on purpose; we cannot tell, so we respect whatever the
+    // current value is and only patch at-default values).
+    //
+    // In this scenario, the M2 migrate block (which fires
+    // unconditionally on `= true`) will force the value to `false`
+    // and write the sentinel via SaveToPath. The patcher would not
+    // run because the post-migrate value is at default AND the
+    // sentinel is now present.
+    const std::string path = MakeTempIniPath("m2_legacy_skip_nond");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "game_free_camera_shim = true\n";
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    // After migrate, value is false and the sentinel was emitted by
+    // SaveToPath. The file now reads `= false` + sentinel.
+    {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const std::string content = ss.str();
+        EXPECT_TRUE(content.find("game_free_camera_shim = false") !=
+                    std::string::npos);
+        EXPECT_TRUE(content.find("# walkercore:managed:game_free_camera_shim") !=
+                    std::string::npos);
+    }
+    std::remove(path.c_str());
+}
+
+// --- M2.5 hotfix: auto-managed sentinel ---------------------------------
+//
+// The SaveToPath first-time defaults write and the M2 true→false migrate
+// both auto-emit a `# walkercore:managed:<keyname>` comment immediately
+// after the key line. The loader skips setting the `*_explicit` flag for
+// those keys — the sentinel is the loader's signal that "the DLL wrote
+// this, not the user". Without the sentinel, a user upgrading from a
+// pre-M2.5 DLL has the line auto-migrated into their INI and the smart-
+// default auto-enable never fires even when the gates pass. The four
+// tests below pin the four scenarios:
+//
+//   1. Auto-written `= false` + sentinel       →  explicit = false
+//   2. User-written `= false` (no sentinel)    →  explicit = true
+//   3. Auto-written `= false` (no sentinel — bug repro)
+//                                                →  explicit = true (bug)
+//                                                (this is the regression
+//                                                case the hotfix exists to
+//                                                prevent — pinned to make
+//                                                sure the sentinel is the
+//                                                ONLY way to suppress the
+//                                                flag)
+//   4. Auto-written `dev_camera_toggle_vk = 0x60` + sentinel
+//                                                →  explicit = false
+
+void TestIniM2SentinelSuppressesExplicitFlagForAutoWrittenFalse() {
+    // Case 1: a DLL-emitted sentinel after `game_free_camera_shim = false`
+    // suppresses the explicit flag. This is the auto-Migrate behaviour for
+    // users upgrading from a pre-M2.5 DLL (the M2 lander's old default
+    // was `true`; the M2 lander auto-migrated it to `false` on first load
+    // after the default flip; with the hotfix the migrate also emits the
+    // sentinel so the smart-default can later re-flip the value when the
+    // detection gates pass).
+    const std::string path = MakeTempIniPath("m2_sentinel_false");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "game_free_camera_shim = false\n";
+        w << "# walkercore:managed:game_free_camera_shim\n";
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_FALSE(reader.current().m2_game_free_camera_shim);
+    EXPECT_FALSE(reader.current().m2_game_free_camera_shim_explicit);
+
+    std::remove(path.c_str());
+}
+
+void TestIniM2NoSentinelMeansExplicitTrue() {
+    // Case 2: user-written `= false` (no sentinel) sets explicit=true. This
+    // is the contract for users who manually edit the INI to disable the
+    // shim — the smart-default must respect their veto.
+    const std::string path = MakeTempIniPath("m2_no_sentinel");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "game_free_camera_shim = false\n";
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_FALSE(reader.current().m2_game_free_camera_shim);
+    EXPECT_TRUE(reader.current().m2_game_free_camera_shim_explicit);
+
+    std::remove(path.c_str());
+}
+
+void TestIniM2SentinelForDevCameraToggleVk() {
+    // Case 4: same sentinel contract for dev_camera_toggle_vk. The DLL
+    // writes `dev_camera_toggle_vk = 0x60` on every first-time defaults
+    // save (because that's the code default), and the
+    // controls.sii auto-detect must remain alive on the next load — which
+    // it can only do if the explicit flag is suppressed by the sentinel.
+    const std::string path = MakeTempIniPath("m2_sentinel_vk");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "dev_camera_toggle_vk = 0x60\n";
+        w << "# walkercore:managed:dev_camera_toggle_vk\n";
+    }
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x60U);
+    EXPECT_FALSE(reader.current().m2_dev_camera_toggle_vk_explicit);
+
+    std::remove(path.c_str());
+}
+
+void TestIniSaveToPathEmitsSentinelForDefaultValues() {
+    // SaveToPath must emit the sentinel when it writes a value that
+    // matches the code default. Pin so the dump format and the parser
+    // agree on what "DLL wrote this" means.
+    const std::string path = MakeTempIniPath("m2_save_emits_sentinel");
+    std::remove(path.c_str());
+
+    SettingsStore saver;
+    // SaveToPath writes the current state — defaults are loaded first so
+    // game_free_camera_shim = false (code default) and the sentinel must
+    // appear after that line.
+    saver.SetCurrent(WalkerSettings::Defaults());
+    EXPECT_TRUE(saver.SaveToPath(path));
+
+    {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const std::string content = ss.str();
+        EXPECT_TRUE(content.find("game_free_camera_shim = false") !=
+                    std::string::npos);
+        EXPECT_TRUE(content.find("# walkercore:managed:game_free_camera_shim") !=
+                    std::string::npos);
+        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x60") !=
+                    std::string::npos);
+        EXPECT_TRUE(content.find("# walkercore:managed:dev_camera_toggle_vk") !=
+                    std::string::npos);
+    }
+
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_FALSE(reader.current().m2_game_free_camera_shim_explicit);
+    EXPECT_FALSE(reader.current().m2_dev_camera_toggle_vk_explicit);
+
+    std::remove(path.c_str());
+}
+
+void TestIniSaveToPathOmitsSentinelForNonDefaultValues() {
+    // SaveToPath must OMIT the sentinel when the value is non-default —
+    // that is the loader's signal that the line is user-vetted (e.g. the
+    // user pinned `dev_camera_toggle_vk = 0x7A` via the M11 settings
+    // menu). The next load sees explicit=true and the smart-default
+    // respects the user's choice.
+    //
+    // Note: `game_free_camera_shim` is NOT exercised here because the
+    // M2 auto-migrate forces `= true` back to `= false` on every load
+    // (pre-existing behaviour from the 26f858a commit; the migrate is
+    // unconditional for that key because old DLLs wrote `= true` as the
+    // default and the migrate is the only signal to those users that
+    // the new default is `= false`). `dev_camera_toggle_vk` has no
+    // migrate, so it round-trips cleanly and is the right key to pin
+    // the "sentinel omitted when value is non-default" contract.
+    const std::string path = MakeTempIniPath("m2_save_no_sentinel_nondefault");
+    std::remove(path.c_str());
+
+    SettingsStore saver;
+    WalkerSettings s = WalkerSettings::Defaults();
+    s.m2_dev_camera_toggle_vk = 0x7A;   // non-default (F11)
+    saver.SetCurrent(s);
+    EXPECT_TRUE(saver.SaveToPath(path));
+
+    {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const std::string content = ss.str();
+        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x7a") !=
+                    std::string::npos);
+        EXPECT_TRUE(content.find("# walkercore:managed:dev_camera_toggle_vk") ==
+                    std::string::npos);
+    }
+
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x7AU);
+    EXPECT_TRUE(reader.current().m2_dev_camera_toggle_vk_explicit);
+
+    std::remove(path.c_str());
+}
+
 }  // namespace walkercore

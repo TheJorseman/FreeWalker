@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <fstream>
+#include <set>
 #include <sstream>
+#include <vector>
 
 #include "walkercore/FrameLoop.h"
 #include "walkercore/Log.h"
@@ -206,12 +208,49 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
         return false;
     }
 
+    // Read the entire file into memory so the parser can do look-ahead
+    // for the M2.5 `# walkercore:managed:<keyname>` sentinel comments
+    // that the SaveToPath / migrate paths emit right after every
+    // auto-written key. The sentinel tells the loader "this key was
+    // auto-written by the DLL (first-time defaults write or the
+    // auto-migrate true→false flip), so the `*_explicit` flag should
+    // NOT be set — otherwise the M2.5 smart-default auto-enable would
+    // never flip the shim for users who upgraded from a pre-M2.5 DLL
+    // where these lines were auto-migrated into their INI". The
+    // sentinel is opt-in: lines that lack it are treated as
+    // user-written (the previous behaviour, which is what we want for
+    // every manually-edited INI).
+    std::vector<std::string> raw_lines;
+    {
+        std::string line;
+        while (std::getline(f, line)) {
+            raw_lines.push_back(line);
+        }
+    }
+    // First pass: collect every `# walkercore:managed:<keyname>` sentinel.
+    // The key name in the sentinel is whatever the auto-write path
+    // produced (always lowercase, matches the parser's normalised lkey).
+    std::set<std::string> managed_keys;
+    for (const std::string &l : raw_lines) {
+        const std::string t = Trim(l);
+        if (t.empty()) continue;
+        // Sentinel shape: `# walkercore:managed:<keyname>` (keyname is a
+        // single token — no spaces, no commas, no equals).
+        constexpr const char *kPrefix = "# walkercore:managed:";
+        if (t.rfind(kPrefix, 0) == 0) {
+            std::string key = Trim(t.substr(strlen(kPrefix)));
+            if (!key.empty()) {
+                managed_keys.insert(ToLower(key));
+            }
+        }
+    }
+
     WalkerSettings loaded = WalkerSettings::Defaults();
     std::string section;
     int unknown_count = 0;
 
-    std::string line;
-    while (std::getline(f, line)) {
+    for (size_t idx = 0; idx < raw_lines.size(); ++idx) {
+        const std::string &line = raw_lines[idx];
         const std::string tline = Trim(line);
         if (tline.empty() || tline[0] == '#' || tline[0] == ';') continue;
         if (tline.front() == '[' && tline.back() == ']') {
@@ -222,6 +261,13 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
         std::string key, value;
         if (!TryParseKeyValue(line.c_str(), &key, &value)) continue;
         const std::string lkey = ToLower(key);
+        // Helper: returns true iff the line IMMEDIATELY following this
+        // one carries the auto-managed sentinel for `lkey`. The
+        // sentinel is consumed by the next-iteration comment skip in
+        // the loop above, so this is purely a parser-side flag for the
+        // current `*_explicit` decision. The sentinel does NOT change
+        // the parsed value — only the explicit flag.
+        const bool auto_managed = (managed_keys.count(lkey) != 0);
 
         // Dispatch by section + key. We use lowercase to make the parser
         // tolerant of user formatting.
@@ -339,7 +385,22 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                 // because auto-enable would otherwise flip a value
                 // the user has explicitly vetted (and may have set to
                 // false on purpose).
-                loaded.m2_game_free_camera_shim_explicit = true;
+                //
+                // M2.5 hotfix: skip the flag if the line was
+                // auto-written by the DLL. The sentinel comment
+                // `# walkercore:managed:game_free_camera_shim` is
+                // emitted by SaveToPath (first-time defaults write)
+                // and by the migrate block (true→false flip). Without
+                // this exception, a user upgrading from a pre-M2.5 DLL
+                // ends up with `game_free_camera_shim = false` + the
+                // explicit flag set in their INI, and the smart-default
+                // never fires even when the gates pass. Users who
+                // deliberately write the line themselves (no sentinel)
+                // still get the explicit flag — only auto-writes are
+                // exempt.
+                if (!auto_managed) {
+                    loaded.m2_game_free_camera_shim_explicit = true;
+                }
             } else if (lkey == "camera_hijack" && TryParseBool(value, &bv)) {
                 // M2 long-term: MinHook the camera state dispatcher at
                 // RVA 0xC22F40 and replace the matrices the SCS state
@@ -384,7 +445,18 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                     // explicit-vs-default distinction matters because
                     // auto-detect would otherwise try to "improve" a
                     // value the user has already vetted.
-                    loaded.m2_dev_camera_toggle_vk_explicit = true;
+                    //
+                    // M2.5 hotfix: skip the flag if the line was
+                    // auto-written by the DLL (the sentinel
+                    // `# walkercore:managed:dev_camera_toggle_vk` was
+                    // emitted). Same rationale as for
+                    // game_free_camera_shim — pre-M2.5 DLLs wrote
+                    // `dev_camera_toggle_vk = 0x60` on every
+                    // SaveToPath, so without this exemption the
+                    // controls.sii auto-detect is dead on upgrade.
+                    if (!auto_managed) {
+                        loaded.m2_dev_camera_toggle_vk_explicit = true;
+                    }
                 } else {
                     WALKERCORE_LOG_WARN(
                         "Settings: [m2] dev_camera_toggle_vk='%s' is not a "
@@ -458,6 +530,22 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     // or accept that this auto-migration re-runs every time the file
     // is loaded. The migration is idempotent and cheap (one boolean
     // compare + one SaveToPath on the upgrade load only).
+    //
+    // M2.5 hotfix: the migrate runs regardless of the explicit flag
+    // for `game_free_camera_shim` specifically — old DLLs did not
+    // emit the `# walkercore:managed:game_free_camera_shim` sentinel,
+    // so we cannot distinguish a user who deliberately wrote
+    // `= true` from a user whose old DLL wrote it as the default.
+    // The migrate fires once, saves the file with the sentinel
+    // (emitted by SaveToPath), and from that load onward the smart-
+    // default can flip the value. Users who genuinely want to keep
+    // `= true` on a clean stack can delete the line from their INI
+    // entirely (no line + no sentinel = no migrate) or set the value
+    // to something non-default that survives the migrate round-trip.
+    // The migrate fires only when the on-disk value is `true` —
+    // once forced to `false`, the second load sees `false` and the
+    // migrate is a no-op (the sentinel persists the not-explicit
+    // status).
     bool migrated = false;
     if (current_.m2_game_free_camera_shim) {
         // The shim is currently no-op for the stock ATS 1.61.x
@@ -528,6 +616,26 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     if (migrated) {
         SaveToPath(path);
     }
+
+    // M2.5 hotfix: in-place sentinel patch for legacy INIs. Users who
+    // upgraded from a pre-M2.5 DLL have `game_free_camera_shim = false`
+    // (and/or `dev_camera_toggle_vk = 0x60`) in their INI without the
+    // `# walkercore:managed:<key>` sentinel — those DLLs did not emit
+    // the sentinel. Without it, the loader treats the line as
+    // user-written and sets `*_explicit = true`, which blocks the M2.5
+    // smart-default auto-enable. The sentinel is the loader's only
+    // signal that the line was auto-written by an old DLL or a
+    // first-time defaults save — there is no other way to distinguish.
+    //
+    // The patch is in-place (line-level insert, not full-file rewrite)
+    // so it preserves every user-customised key the SaveToPath path
+    // does not know about. It fires at most once per key per INI
+    // lifetime: once the sentinel is present, the load no longer
+    // marks the key as needing a patch. If the value is non-default
+    // (e.g. user pinned `= true` or `dev_camera_toggle_vk = 0x7A`),
+    // the patch is skipped — that line is user-vetted, not auto.
+    PatchSentinelsForLegacyIni(path);
+
     ApplyAll();
 
     // Prime the mtime cache so the very next CheckFileChanged() call does
@@ -537,6 +645,133 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     // log line on the first per-frame tick.
     PrimeMtimeCache();
     return true;
+}
+
+// M2.5 hotfix: in-place sentinel patch for legacy INIs. Walks every
+// line in the file. For each `key = value` line whose key is in the
+// M2.5-managed set (`game_free_camera_shim` or `dev_camera_toggle_vk`)
+// and whose value matches the code default, appends a
+// `# walkercore:managed:<key>` comment line directly below it. The
+// loader uses this sentinel to suppress the `*_explicit` flag, which
+// is what unblocks the smart-default auto-enable for users whose INI
+// was written by a pre-M2.5 DLL (those DLLs did not emit the
+// sentinel). The patch is idempotent (no-op if the sentinel is
+// already present) and preserves every other line including any
+// user-customised keys that the SaveToPath full-rewrite path would
+// drop. The patch is run after the migrate block has had a chance
+// to fire — the sentinel-aware SaveToPath emits the sentinel on the
+// migrate path, but the migrate only runs when the value is `true`;
+// the patch covers the rest (the value is already at default).
+void SettingsStore::PatchSentinelsForLegacyIni(const std::string &path) {
+    // We only patch the two M2.5-managed keys. Each entry is the key
+    // name (lowercase, matches the parser's normalised lkey) plus the
+    // expected default value as a string. The default-value string
+    // match is what lets us decide whether to emit the sentinel —
+    // non-default values are user-vetted and must be left alone.
+    struct Target {
+        const char *key;
+        const char *default_value_str;  // expected on-disk value at default
+    };
+    static const Target kTargets[] = {
+        {"game_free_camera_shim", "false"},
+        {"dev_camera_toggle_vk", "0x60"},
+    };
+
+    // Read the entire file into memory. If the file does not exist
+    // (e.g. a partial install), there is nothing to patch — the
+    // next first-time defaults write will emit the sentinel for us.
+    std::ifstream in(path);
+    if (!in.is_open()) return;
+    std::vector<std::string> lines;
+    {
+        std::string line;
+        while (std::getline(in, line)) {
+            lines.push_back(line);
+        }
+    }
+
+    // Build a set of sentinels already present so we know which keys
+    // still need patching. The sentinel survives across edits — once
+    // emitted, the loader no longer flags the key as explicit, and
+    // future runs short-circuit the patch on the same file.
+    std::set<std::string> already_managed;
+    for (const std::string &l : lines) {
+        const std::string t = Trim(l);
+        constexpr const char *kPrefix = "# walkercore:managed:";
+        if (t.rfind(kPrefix, 0) == 0) {
+            already_managed.insert(ToLower(Trim(t.substr(strlen(kPrefix)))));
+        }
+    }
+
+    // Walk every line, identifying target key=value lines that are
+    // (a) at the default value, and (b) missing their sentinel. For
+    // each such line, append a sentinel comment immediately after it.
+    // We record insertion points in (line_index, sentinel_text) pairs
+    // and apply them in reverse order so the indices stay valid.
+    struct Insertion {
+        size_t line_index;       // insert AFTER this index
+        std::string sentinel;
+    };
+    std::vector<Insertion> insertions;
+    std::string current_section;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const std::string t = Trim(lines[i]);
+        if (t.empty() || t[0] == '#' || t[0] == ';') continue;
+        if (t.front() == '[' && t.back() == ']') {
+            current_section = ToLower(t.substr(1, t.size() - 2));
+            continue;
+        }
+        // Only the [m2] section is in scope for the M2.5-managed
+        // sentinel. Other sections do not contain these keys.
+        if (current_section != "m2") continue;
+        std::string key, value;
+        if (!TryParseKeyValue(lines[i].c_str(), &key, &value)) continue;
+        const std::string lkey = ToLower(key);
+        const std::string lvalue = ToLower(Trim(value));
+        for (const Target &tgt : kTargets) {
+            if (lkey != tgt.key) continue;
+            if (lvalue != tgt.default_value_str) continue;
+            if (already_managed.count(lkey) != 0) continue;
+            insertions.push_back({i, std::string("# walkercore:managed:") + lkey});
+            // Mark as already-managed so a duplicate target entry
+            // (defensive — kTargets has unique keys today) does not
+            // insert twice. Breaks because each target key only
+            // appears once in the file.
+            already_managed.insert(lkey);
+            break;
+        }
+    }
+
+    if (insertions.empty()) return;
+
+    // Apply insertions in reverse so earlier indices stay valid.
+    std::sort(insertions.begin(), insertions.end(),
+              [](const Insertion &a, const Insertion &b) {
+                  return a.line_index > b.line_index;
+              });
+    for (const Insertion &ins : insertions) {
+        lines.insert(lines.begin() +
+                  static_cast<std::ptrdiff_t>(ins.line_index) + 1,
+              ins.sentinel);
+    }
+
+    // Write the patched file back. Use atomic-ish open + write so a
+    // crash mid-write does not leave a half-written INI.
+    std::ofstream out(path, std::ios::trunc);
+    if (!out.is_open()) {
+        WALKERCORE_LOG_WARN(
+            "Settings: sentinel patch could not rewrite %s — smart-default "
+            "may stay blocked until you manually add the sentinel",
+            path.c_str());
+        return;
+    }
+    for (const std::string &l : lines) {
+        out << l << "\n";
+    }
+    WALKERCORE_LOG_INFO(
+        "Settings: patched %zu sentinel(s) into %s — pre-M2.5 INI upgraded "
+        "in-place so smart-default can fire on the next load",
+        insertions.size(), path.c_str());
 }
 
 bool SettingsStore::LoadFromDefaultPath() {
@@ -619,6 +854,22 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "# `uset g_developer \"1\"` in the game's config.cfg). Default 0\n";
     f << "# so out-of-the-box behaviour stays unchanged.\n";
     f << "game_free_camera_shim = " << (current_.m2_game_free_camera_shim ? "true" : "false") << "\n";
+    // M2.5 hotfix: emit the `# walkercore:managed:<key>` sentinel ONLY
+    // when the value matches the code default. The sentinel tells the
+    // loader "this was auto-written by the DLL, not by the user" so the
+    // `m2_game_free_camera_shim_explicit` flag is not set — without this,
+    // a user upgrading from a pre-M2.5 DLL has the line auto-migrated to
+    // `= false` in their INI and the M2.5 smart-default never fires. If
+    // the user changes the value to `true` (non-default), the sentinel
+    // is omitted too — the absence is the loader's signal that the line
+    // is user-vetted. Users who later flip back to `false` would re-arm
+    // the sentinel on the next settings-menu save; this is an accepted
+    // trade-off — the smart-default only flips when binding +
+    // g_developer are also detected, and a user who wants to truly pin
+    // `= false` can delete the sentinel comment manually.
+    if (!current_.m2_game_free_camera_shim) {
+        f << "# walkercore:managed:game_free_camera_shim\n";
+    }
     f << "camera_hijack = " << (current_.m2_camera_hijack ? "true" : "false") << "\n";
     f << "d3d11_hook = " << (current_.m2_d3d11_hook ? "true" : "false") << "\n";
     f << "d3d12_hook = " << (current_.m2_d3d12_hook ? "true" : "false") << "\n";
@@ -636,6 +887,12 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "# found is adopted; if nothing is bound, the shim logs a\n";
     f << "# copy-pasteable fix to game.log.\n";
     f << "dev_camera_toggle_vk = 0x" << std::hex << current_.m2_dev_camera_toggle_vk << std::dec << "\n";
+    // Same auto-managed sentinel as above — controls.sii auto-detect is
+    // dead if the explicit flag is set, and the default-value line is
+    // what pre-M2.5 DLLs wrote.
+    if (current_.m2_dev_camera_toggle_vk == 0x60u) {
+        f << "# walkercore:managed:dev_camera_toggle_vk\n";
+    }
     f << "\n";
     f << "[m3]\n";
     f << "# PxScene::addActor MinHook install gate. Default 0 — the\n";

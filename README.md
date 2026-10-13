@@ -96,7 +96,7 @@ Si pasa, excluir `bin\win_x64\plugins\` del juego en el antivirus.
 
 | Tecla | Acción |
 |---|---|
-| **F10** | Toggle walk mode (Driving ↔ Walking). Cuando `[m2] game_free_camera_shim = true` está activo y `g_developer = 1` en el `config.cfg` del juego, sintetiza Numpad-0 para tomar la SCS free camera. |
+| **F10** | Toggle walk mode (Driving ↔ Walking). Cuando el shim está activo y `g_developer = 1` en el `config.cfg` del juego, sintetiza la tecla bindeada en `controls.sii` a `dev_camera_toggle` (default Numpad-0) para tomar la SCS free camera. M2.5: el shim se auto-activa cuando detecta el binding + `g_developer=1` — no requiere editar `WalkerCore.ini`. |
 | **Ctrl + F10** | Abre / cierra el menú de settings en juego. |
 | **F** | Interact (entrar / salir de cab, fuel, coupling). |
 | **F12** | Dump completo de estado a `game.log.txt` (todos los `walker_dump_*`). |
@@ -119,7 +119,7 @@ están en `include/walkercore/InputHook.h:33-50`.
 
 | Sección | Key | Default | Descripción |
 |---|---|---|---|
-| `[m2]` | `game_free_camera_shim` | `false` | OFF por defecto. Cuando `true`, F10 sintetiza Numpad-0 para que el SCS developer free camera (`g_developer 1`) haga el toggle. Auto-detecta `g_developer` en `OneDrive\Documentos\American Truck Simulator\config.cfg` (también es_ES / OneDrive Personal). |
+| `[m2]` | `game_free_camera_shim` | `false` (M2.5: smart-default auto-flips a `true` cuando binding + `g_developer=1`) | Cuando activo, F10 sintetiza la tecla bindeada a `dev_camera_toggle` en `controls.sii` (default Numpad-0; configurable vía `[m2] dev_camera_toggle_vk`) para que el SCS developer free camera (`g_developer 1`) haga el toggle. Auto-detecta `g_developer` en `OneDrive\Documentos\American Truck Simulator\config.cfg` (también es_ES / OneDrive Personal) y auto-detecta el binding del usuario en `controls.sii`. |
 | `[m11]` | `imgui_overlay` | `false` | OFF por defecto. Cuando `true`, overlay ImGui sobre el swap chain con state en vivo + 2 botones (Dump state / Dump PxScene) + PxScene live status. |
 
 ## Referencias

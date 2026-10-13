@@ -195,8 +195,34 @@ public:
     // first in the source line. Reverse-order tokens are tolerated
     // because some profiles put `keyboard.f10?0 | semantical.foo?0`
     // in either order.
+    //
+    // As a recovery path for a known copy-paste typo
+    // (`` \` `` instead of `` ` ``, an artifact from editors that
+    // auto-escape markdown-style backticks), the scanner falls back
+    // to `mix <action> \`...\` ` (escaped-backtick form) when the
+    // plain form misses. The fallback form is a SYNTAX ERROR from
+    // SCS's perspective — game.log will contain
+    // `<ERROR> Expecting string literal, found '"mix ...'` — but
+    // WalkerCore can still recover the keyboard token. Callers that
+    // care about the typo (for user-facing warnings) should use
+    // `ReadControlsSiiKeyForActionWithDiagForTesting` and inspect
+    // the `had_escaped_backtick_typo` out-param.
     static std::string ReadControlsSiiKeyForActionForTesting(
         const std::string &path, const std::string &action);
+
+    // Same as `ReadControlsSiiKeyForActionForTesting` but with an
+    // extra out-param that tells the caller whether the binding
+    // was recovered via the escaped-backtick fallback. When true,
+    // the controls.sii file has a typo (`\`` instead of `` ` ``)
+    // that the SCS parser will reject at game load; the keyboard
+    // token is still returned so the runtime can attempt the
+    // dispatch, but the user needs to fix the typo for the
+    // dispatch to actually reach the dev_camera_toggle action
+    // (the game's action registry never saw the malformed binding).
+    // `had_escaped_backtick_typo` is optional and may be null.
+    static std::string ReadControlsSiiKeyForActionWithDiagForTesting(
+        const std::string &path, const std::string &action,
+        bool *had_escaped_backtick_typo);
 
     // `ScsKeyNameToVkForTesting(name)` converts an SCS keyboard
     // token (e.g. `keyboard.num5`, `keyboard.f10`, `keyboard.f11`,

@@ -615,6 +615,117 @@ void TestGameFreeCameraShimReadControlsSiiKeyHandlesMalformedNoBacktick() {
     std::remove(path.c_str());
 }
 
+// --- ReadControlsSiiKeyForActionWithDiagForTesting ----------------------
+//
+// The diagnostic variant of the parser carries an extra out-param
+// (`had_escaped_backtick_typo`) that signals whether the binding
+// line was matched via the escaped-backtick fallback (a real-world
+// copy-paste typo). The flag drives the typo-specific warning log
+// line emitted from AutoDetectToggleVkFromControlsSii.
+
+void TestGameFreeCameraShimReadControlsSiiKeyDiagPlainFormNoTypo() {
+    // The plain form (`` ` ``) is matched first and the typo flag
+    // stays false. This is the happy-path for stock profiles.
+    const std::string path = MakeTempPath("controls_diag_plain");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[499]: \"mix dev_camera_toggle `keyboard.f11?0 | "
+        "semantical.dev_camera_toggle?0`\"\n"));
+    bool typo = true;  // sentinel: must be cleared by the parser
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionWithDiagForTesting(
+            path, std::string("dev_camera_toggle"), &typo),
+        std::string("keyboard.f11"));
+    EXPECT_FALSE(typo);
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyDiagEscapedFormSetsTypo() {
+    // The user pasted the binding with `\`` instead of `` ` `` —
+    // a known copy-paste artifact. The parser recovers the
+    // keyboard token (so the dispatch can still attempt the key)
+    // AND flags the typo so the runtime can warn the user.
+    const std::string path = MakeTempPath("controls_diag_escaped");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[499]: \"mix dev_camera_toggle "
+        "\\`keyboard.f11?0 | semantical.dev_camera_toggle?0\\`\"\n"));
+    bool typo = false;  // sentinel: must be set by the parser
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionWithDiagForTesting(
+            path, std::string("dev_camera_toggle"), &typo),
+        std::string("keyboard.f11"));
+    EXPECT_TRUE(typo);
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyDiagEscapedFormNoKeyboard() {
+    // Typo with a non-keyboard.* source — the token is empty but
+    // the typo flag is still set so the user knows to fix the
+    // file (the SCS parser rejected it at game load).
+    const std::string path = MakeTempPath("controls_diag_escaped_joy");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix dev_camera_toggle "
+        "\\`joy.button5?0 | semantical.dev_camera_toggle?0\\`\"\n"));
+    bool typo = false;
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionWithDiagForTesting(
+            path, std::string("dev_camera_toggle"), &typo),
+        std::string());
+    EXPECT_TRUE(typo);
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyDiagMissingActionNoTypo() {
+    // controls.sii exists but the action is not bound (and there
+    // is no escaped-backtick line either). The parser returns
+    // empty and leaves the typo flag at its initial false value.
+    const std::string path = MakeTempPath("controls_diag_missing");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix screenshot `keyboard.f10?0`\"\n"));
+    bool typo = true;  // sentinel: must NOT be set
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionWithDiagForTesting(
+            path, std::string("dev_camera_toggle"), &typo),
+        std::string());
+    EXPECT_FALSE(typo);
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyDiagNullOutParam() {
+    // The out-param is optional — the parser must accept a null
+    // pointer and still recover the token (matches the behaviour
+    // of the legacy single-arg wrapper).
+    const std::string path = MakeTempPath("controls_diag_null");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix dev_camera_toggle `keyboard.num5?0`\"\n"));
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionWithDiagForTesting(
+            path, std::string("dev_camera_toggle"), nullptr),
+        std::string("keyboard.num5"));
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyDiagEscapedWalkMode() {
+    // The fallback must work for the `walk_mode` and `free_camera`
+    // action names too — the typo is independent of the action.
+    const std::string path = MakeTempPath("controls_diag_walkmode");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix walk_mode "
+        "\\`keyboard.num5?0 | semantical.walk_mode?0\\`\"\n"));
+    bool typo = false;
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionWithDiagForTesting(
+            path, std::string("walk_mode"), &typo),
+        std::string("keyboard.num5"));
+    EXPECT_TRUE(typo);
+    std::remove(path.c_str());
+}
+
 // --- ScsKeyNameToVkForTesting -------------------------------------------
 //
 // The lookup table maps SCS keyboard tokens to Win32 VK_* codes.

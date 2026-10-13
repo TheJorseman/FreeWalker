@@ -264,6 +264,17 @@ std::string GameFreeCameraShim::ReadGDeveloperValueForTesting(
 // ATS profile controls.sii is ~30 KiB; 64 KiB is a 2× safety margin.
 std::string GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
     const std::string &path, const std::string &action) {
+    bool unused = false;
+    return ReadControlsSiiKeyForActionWithDiagForTesting(
+        path, action, &unused);
+}
+
+std::string GameFreeCameraShim::ReadControlsSiiKeyForActionWithDiagForTesting(
+    const std::string &path, const std::string &action,
+    bool *had_escaped_backtick_typo) {
+    if (had_escaped_backtick_typo != nullptr) {
+        *had_escaped_backtick_typo = false;
+    }
     if (path.empty() || action.empty()) {
         return std::string();
     }
@@ -284,19 +295,53 @@ std::string GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
     // literal find (cheap, deterministic) and bail at the first hit
     // because controls.sii is well-ordered — the binding for a given
     // action appears exactly once.
-    const std::string needle = "mix " + action + " `";
-    auto pos = content.find(needle);
+    const std::string needle_plain = "mix " + action + " `";
+    auto pos = content.find(needle_plain);
+    bool escaped_typo = false;
+    // offset_after_delim is the byte offset, relative to pos, where
+    // the first source token (e.g. `keyboard.f11`) starts. For the
+    // plain form the delimiter is `mix <action> \`` (size 22 for
+    // dev_camera_toggle) and the token follows immediately. For the
+    // escaped form the delimiter is `mix <action> \`` (one extra
+    // backslash byte) so we have to skip an additional `\` byte
+    // before reaching the token.
+    size_t offset_after_delim = needle_plain.size();
     if (pos == std::string::npos) {
-        return std::string();
+        // Fallback: the user has escaped backticks (`\``) around the
+        // binding — a copy-paste accident (some editors auto-escape
+        // markdown backticks inside code-block-adjacent snippets).
+        // The SCS parser rejects this at game load
+        // (`<ERROR> Expecting string literal, found '"mix ...'`),
+        // so the binding never reaches the game's action registry
+        // and a SendInput dispatch will hit the wrong action. We
+        // still recover the keyboard token so the user gets a
+        // actionable log line ("here is what we tried, here is how
+        // to fix it") instead of a silent miss.
+        const std::string needle_escaped = "mix " + action + " \\`";
+        pos = content.find(needle_escaped);
+        if (pos == std::string::npos) {
+            return std::string();
+        }
+        escaped_typo = true;
+        // needle_escaped.size() == needle_plain.size() + 1 (one
+        // extra `\` byte before the backtick).
+        offset_after_delim = needle_escaped.size();
     }
     // Walk to the closing backtick. The grammar is `.... `|....|....`
     // — there is exactly one closing backtick on the binding line.
-    auto end = content.find('`', pos + needle.size());
+    // For escaped-typo lines the closing backtick is also escaped
+    // (`?\``), so we search for a plain backtick AFTER the opening
+    // delimiter; the find lands on the `60` byte of the `5C 60`
+    // escape sequence and `inside` retains the leading `\` as the
+    // last byte (which the tokenize loop below never reads — the
+    // `rfind("keyboard.", 0)` prefix check rejects any token not
+    // beginning with `keyboard.`).
+    auto end = content.find('`', pos + offset_after_delim);
     if (end == std::string::npos) {
         return std::string();
     }
     const std::string inside =
-        content.substr(pos + needle.size(), end - (pos + needle.size()));
+        content.substr(pos + offset_after_delim, end - (pos + offset_after_delim));
 
     // Tokenize on `|` and pick the first token whose device is
     // `keyboard.` (case-sensitive — SCS uses lowercase `keyboard`).
@@ -336,9 +381,19 @@ std::string GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
         // The qualifier may also appear without a trailing value
         // (rare in stock profiles). Fall through.
         if (token.rfind("keyboard.", 0) == 0) {
+            if (had_escaped_backtick_typo != nullptr) {
+                *had_escaped_backtick_typo = escaped_typo;
+            }
             return token;
         }
         i = (j < inside.size()) ? j + 1 : j;
+    }
+    // No `keyboard.*` token on this line. If we matched the
+    // escaped-typo form, still flag it: the SCS parser rejected
+    // the line at game load, and the user should know to remove
+    // the stray backslashes.
+    if (had_escaped_backtick_typo != nullptr) {
+        *had_escaped_backtick_typo = escaped_typo;
     }
     return std::string();
 }
@@ -725,13 +780,22 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
         return;
     }
     // Scan the three known action names in priority order. The first
-    // hit wins; subsequent actions are ignored.
+    // hit wins; subsequent actions are ignored. We also track
+    // whether any of the three scans matched via the escaped-
+    // backtick typo fallback so we can emit a specific warning
+    // when the user has a malformed binding (game.log shows
+    // `<ERROR> Expecting string literal, found '"mix ...'`).
     const char *hit_action = nullptr;
     std::string token;
+    bool detected_typo = false;
     for (const char *action :
          {"dev_camera_toggle", "walk_mode", "free_camera"}) {
-        token = ReadControlsSiiKeyForActionForTesting(
-            path, std::string(action));
+        bool action_typo = false;
+        token = ReadControlsSiiKeyForActionWithDiagForTesting(
+            path, std::string(action), &action_typo);
+        if (action_typo) {
+            detected_typo = true;
+        }
         if (!token.empty()) {
             hit_action = action;
             break;
@@ -743,6 +807,33 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
         // sensible default (keyboard.f11) — the user's profile
         // binds F10 to screenshot, so F11 is almost certainly
         // unbound.
+        if (detected_typo) {
+            // Typo-aware variant: we DID find a binding line but
+            // the SCS parser rejected it (`\`` instead of `` ` ``).
+            // The dispatch will silently fail because the game's
+            // action registry never saw the malformed entry, so
+            // we surface the corrected line explicitly.
+            WALKERCORE_LOG_WARN(
+                "GameFreeCameraShim: controls.sii at %s has a "
+                "MALFORMED binding for dev_camera_toggle / walk_mode "
+                "/ free_camera (escaped backticks `\\`` instead of "
+                "plain `` ` ``). The SCS parser REJECTED the line at "
+                "game load (game.log shows `<ERROR> Expecting string "
+                "literal, found '\"mix ...'`) and the binding never "
+                "reached the action registry, so a SendInput dispatch "
+                "will hit the wrong action. Replace the bad line in %s "
+                "with this exact text (plain backticks, no backslash):",
+                path.c_str(), path.c_str());
+            WALKERCORE_LOG_WARN(
+                "    mix dev_camera_toggle `keyboard.f11?0 | "
+                "semantical.dev_camera_toggle?0`");
+            WALKERCORE_LOG_WARN(
+                "    (alternative keys: keyboard.f10, keyboard.num5, "
+                "keyboard.numpad5 — pick one that does not collide "
+                "with an existing binding. WalkerCore will auto-detect "
+                "the corrected binding on next launch.)");
+            return;
+        }
         WALKERCORE_LOG_WARN(
             "GameFreeCameraShim: controls.sii at %s has NO binding "
             "for dev_camera_toggle / walk_mode / free_camera. Default "
@@ -795,6 +886,33 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
     const unsigned int prev_vk = toggle_vk_;
     toggle_vk_ = vk;
     auto_detected_key_name_ = token;
+    if (detected_typo) {
+        // We recovered the token via the escaped-backtick
+        // fallback, but the SCS parser rejected the file at game
+        // load — the action registry has no `dev_camera_toggle`
+        // entry. The dispatch we are about to make will hit
+        // whatever F11 is bound to (e.g. `menustereo`), NOT the
+        // dev camera. Adopt the VK anyway (so a future corrected
+        // controls.sii Just Works on next launch) but warn loudly
+        // so the user knows F10 will not toggle the dev camera
+        // until they fix the typo.
+        WALKERCORE_LOG_WARN(
+            "GameFreeCameraShim: auto-detected %s=%s in %s but the "
+            "binding line has ESCAPED BACKTICKS (`\\``) — the SCS "
+            "parser rejected the file at game load and the dispatch "
+            "will hit the wrong action. Replace the bad line in %s "
+            "with plain backticks:",
+            hit_action, token.c_str(), path.c_str(), path.c_str());
+        WALKERCORE_LOG_WARN(
+            "    mix %s `%s?0 | semantical.%s?0`",
+            hit_action,
+            // Derive the keyboard token we found, with the
+            // trailing `?0` qualifier and matching `semantical.`
+            // alias name. The token we have is already stripped of
+            // its `?0` qualifier (see the parser), so we just
+            // append `?0` for the corrected line.
+            token.c_str(), hit_action);
+    }
     WALKERCORE_LOG_INFO(
         "GameFreeCameraShim: auto-detected %s=%s (VK 0x%X) in "
         "%s — adopted as the toggle VK (was 0x%X default Numpad-0).",

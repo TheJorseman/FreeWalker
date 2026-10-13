@@ -42,3 +42,8 @@ gamedumps/
 procdump.exe
 procdump64.exe
 procdump64a.exe
+
+# One-off debug scripts (.ps1 inspectors, etc.) created during
+# diagnosis of a specific user issue. Not part of the public surface
+# and not load-bearing for the build. Safe to delete at any time.
+scratch/

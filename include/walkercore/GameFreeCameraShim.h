@@ -311,27 +311,40 @@ private:
     int walks_entered_ = 0;
     int toggles_dispatched_ = 0;
     int last_dispatch_ms_ = 0;
-    unsigned int toggle_vk_ = 0x7A;     // VK_F11 — SCS dev free camera
-                                         // toggle in amtrucks.exe 1.61.3.1s
-                                         // (verified live Oct 2026: pressing
-                                         // F11 with g_developer=1 AND
-                                         // g_console=1 takes the camera to
-                                         // the dev free-roaming view, debug
-                                         // overlay and all). Earlier
-                                         // defaults VK_NUMPAD0 (0x60) and
-                                         // VK_0 (0x30, top-row zero) were
-                                         // RE guesses that turned out wrong
-                                         // on user live-verify. The SCS
-                                         // input parser has no
-                                         // 'dev_camera_toggle' / 'camdbg'
-                                         // / 'walk_mode' / 'free_camera'
-                                         // action entry for this build
-                                         // (zero hits in amtrucks.exe
-                                         // strings). The dev free camera
-                                         // shortcut is intercepted before
-                                         // the action registry, so even
-                                         // the user's `menustereo` binding
-                                         // for F11 is bypassed in dev mode.
+    unsigned int toggle_vk_ = 0x7A;     // VK_F11 — best-effort default
+                                         // for the SCS dev free camera
+                                         // toggle in amtrucks.exe 1.61.3.1s.
+                                         // The shim dispatches a
+                                         // SendInput keystroke that the
+                                         // game's action registry
+                                         // translates into the dev free
+                                         // camera mode (requires
+                                         // `g_developer=1` AND
+                                         // `g_console=1` in config.cfg).
+                                         // Earlier defaults VK_NUMPAD0
+                                         // (0x60) and VK_0 (0x30,
+                                         // top-row zero) were RE guesses
+                                         // that turned out not to map to
+                                         // the dev free camera path; the
+                                         // shim's SendInput approach made
+                                         // F11 the most plausible default
+                                         // for amtrucks.exe 1.61.x.
+                                         // NOTE (Oct 2026): live user
+                                         // verification shows F11 also
+                                         // has a native in-game effect
+                                         // (cycles camera to index 0),
+                                         // so a second hand-bound key
+                                         // like `keyboard.f10` may be
+                                         // less collision-prone. The
+                                         // shim's user can override via
+                                         // `[m2] dev_camera_toggle_vk =
+                                         // 0xHH` in WalkerCore.ini. The
+                                         // shim's known action name is
+                                         // `o_im_freecam` (RE-confirmed,
+                                         // zero hits in amtrucks.exe for
+                                         // `dev_camera_toggle`,
+                                         // `camdbg`, `walk_mode`,
+                                         // `free_camera`).
                                          // See docs/observations/
                                          // dev-free-camera.md.
     unsigned int exit_press_vk_ = 0;    // 0 = no separate exit press

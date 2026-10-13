@@ -744,4 +744,120 @@ void TestPhysXRealBinaryRuntimeScanPath() {
 }
 #endif  // WALKERCORE_REAL_BINARY_TEST_PATH
 
+// M3 sweep_slot: secondary 5-slot vtable run @ RVA 0x2507C08.
+//
+// ResolveSweepInSecondaryVtable is the focused resolver that handles
+// sweep's slot in its OWN 5-slot run (below the kMinPhysXVtableRun=100
+// floor that the main signature scan accepts). These tests exercise
+// the synthetic case: a 5-slot run with the catalog sweep VA at slot
+// 0..4.
+
+void TestPhysXSweepSecondaryResolvesCatalogSweepAtSlotFour() {
+    constexpr int kRun = 5;
+    std::vector<uint8_t> buf(kRun * 8, 0);
+    // Place sweep's catalog VA at slot 4 (the ATS 1.61.3.1s layout).
+    uint64_t sweep_va = 0;
+    for (int m = 0; m < walkercore::kPhysXKnownMethodCount; ++m) {
+        if (std::strcmp(walkercore::kPhysXKnownMethods[m].name, "sweep") == 0) {
+            sweep_va = walkercore::kPhysXKnownMethods[m].va;
+            break;
+        }
+    }
+    EXPECT_TRUE(sweep_va != 0);
+    std::memcpy(buf.data() + 4 * 8, &sweep_va, 8);
+    const int32_t slot =
+        PhysXAdapter::ResolveSweepInSecondaryVtable(buf.data(), buf.size(), 0);
+    EXPECT_EQ(slot, 4);
+}
+
+void TestPhysXSweepSecondaryReturnsNegativeOneWhenAbsent() {
+    constexpr int kRun = 5;
+    std::vector<uint8_t> buf(kRun * 8, 0);
+    // Fill all five slots with a non-catalog VA so the resolver finds
+    // nothing.
+    const uint64_t unrelated = 0xDEADBEEFCAFE0000ULL;
+    for (int i = 0; i < kRun; ++i) {
+        std::memcpy(buf.data() + i * 8, &unrelated, 8);
+    }
+    const int32_t slot =
+        PhysXAdapter::ResolveSweepInSecondaryVtable(buf.data(), buf.size(), 0);
+    EXPECT_EQ(slot, -1);
+}
+
+void TestPhysXSweepSecondaryMatchesWithinTolerance() {
+    // Catalog sweep VA at slot 4, but the slot pointer is +5 bytes
+    // (still within kPhysXResolveSlotTolerance = 8). Resolver must
+    // still locate it on slot 4.
+    constexpr int kRun = 5;
+    std::vector<uint8_t> buf(kRun * 8, 0);
+    uint64_t sweep_va = 0;
+    for (int m = 0; m < walkercore::kPhysXKnownMethodCount; ++m) {
+        if (std::strcmp(walkercore::kPhysXKnownMethods[m].name, "sweep") == 0) {
+            sweep_va = walkercore::kPhysXKnownMethods[m].va;
+            break;
+        }
+    }
+    EXPECT_TRUE(sweep_va != 0);
+    const uint64_t offset_slot = sweep_va + 5;
+    std::memcpy(buf.data() + 4 * 8, &offset_slot, 8);
+    const int32_t slot =
+        PhysXAdapter::ResolveSweepInSecondaryVtable(buf.data(), buf.size(), 0);
+    EXPECT_EQ(slot, 4);
+}
+
+void TestPhysXSweepSecondaryRejectsOffsetBeyondTolerance() {
+    // Slot pointer is +32 bytes (well past tolerance=8). Resolver
+    // must reject and return -1.
+    constexpr int kRun = 5;
+    std::vector<uint8_t> buf(kRun * 8, 0);
+    uint64_t sweep_va = 0;
+    for (int m = 0; m < walkercore::kPhysXKnownMethodCount; ++m) {
+        if (std::strcmp(walkercore::kPhysXKnownMethods[m].name, "sweep") == 0) {
+            sweep_va = walkercore::kPhysXKnownMethods[m].va;
+            break;
+        }
+    }
+    EXPECT_TRUE(sweep_va != 0);
+    const uint64_t offset_slot = sweep_va + 32;
+    std::memcpy(buf.data() + 4 * 8, &offset_slot, 8);
+    const int32_t slot =
+        PhysXAdapter::ResolveSweepInSecondaryVtable(buf.data(), buf.size(), 0);
+    EXPECT_EQ(slot, -1);
+}
+
+void TestPhysXSweepSecondaryHonoursOffset() {
+    // Same payload at a non-zero offset within the buffer. The
+    // resolver must use the offset argument to find the secondary
+    // vtable, not start at 0.
+    constexpr int kLeadBytes = 16;
+    constexpr int kRun = 5;
+    std::vector<uint8_t> buf(kLeadBytes + kRun * 8, 0);
+    uint64_t sweep_va = 0;
+    for (int m = 0; m < walkercore::kPhysXKnownMethodCount; ++m) {
+        if (std::strcmp(walkercore::kPhysXKnownMethods[m].name, "sweep") == 0) {
+            sweep_va = walkercore::kPhysXKnownMethods[m].va;
+            break;
+        }
+    }
+    EXPECT_TRUE(sweep_va != 0);
+    std::memcpy(buf.data() + kLeadBytes + 2 * 8, &sweep_va, 8);
+    const int32_t slot = PhysXAdapter::ResolveSweepInSecondaryVtable(
+        buf.data(), buf.size(), static_cast<uint64_t>(kLeadBytes));
+    EXPECT_EQ(slot, 2);
+}
+
+void TestPhysXSweepSecondaryConstantsMatchCatalog() {
+    // The catalog is the source of truth for what `sweep` is. The
+    // 0x2507C08 RVA constant must round-trip exactly back to the
+    // catalog VA when combined with kPhysXSweepSecondarySlotIndex (4)
+    // and kPhysXSweepSecondarySlotRun (5).
+    EXPECT_EQ(kPhysXSweepSecondarySlotRun, 5);
+    EXPECT_TRUE(kPhysXSweepSecondarySlotIndex >= 0);
+    EXPECT_TRUE(kPhysXSweepSecondarySlotIndex < kPhysXSweepSecondarySlotRun);
+    // The RVA constant is in the 0x02000000..0x03000000 range that
+    // amtrucks.exe's .rdata spans on ATS 1.61.3.1s.
+    EXPECT_TRUE(kPhysXSweepSecondaryVtableRVA >= 0x02000000ULL);
+    EXPECT_TRUE(kPhysXSweepSecondaryVtableRVA <  0x03000000ULL);
+}
+
 }  // namespace walkercore

@@ -210,6 +210,15 @@ struct PhysXVtableResolveResult {
     // calls the per-type detach helper. -1 when the catalog did not
     // match.
     int32_t remove_actor_slot = -1;
+    // True when sweep was located via the secondary 5-slot vtable
+    // run @ RVA 0x2507C08 (ResolveSweepInSecondaryVtable), not the
+    // main 0x25020A0 PxScene vtable. When true, sweep_slot is the
+    // SECONDARY-LOCAL slot index (0..4 on ATS 1.61.3.1s; usually 4),
+    // not the main vtable numbering. Callers that need the absolute
+    // pointer read (rdata_ptr + kPhysXSweepSecondaryVtableRVA -
+    // rdata_rva + sweep_slot * 8) at runtime; for static RE the
+    // pointer is at the supplied catalog VA 0x141B06F10.
+    bool has_secondary_sweep = false;
 };
 
 // Result of a memory scan over a module's .rdata. success is true when
@@ -270,6 +279,15 @@ constexpr int kMinPhysXVtableRun = 100;
 // tolerance-match slot 12 at VA 0x141AE0F80 (delta +16) before
 // reaching slot 13 at VA 0x141AE0F70 (delta 0)).
 constexpr uint64_t kPhysXResolveSlotTolerance = 8;
+
+// ATS 1.61.3.1s secondary vtable target for PxScene::sweep. The main
+// 0x25020A0 PxScene vtable does NOT contain sweep — sweep's catalog
+// VA 0x141B06F10 lives in a separate 5-slot run at RVA 0x2507C08
+// (slot 4). The slot index is zero-based relative to that run; -1
+// when the secondary scan misses.
+constexpr uint64_t kPhysXSweepSecondaryVtableRVA = 0x2507C08;
+constexpr int32_t kPhysXSweepSecondarySlotRun = 5;
+constexpr int32_t kPhysXSweepSecondarySlotIndex = 4;
 
 // Verbatim copy of every probe string the adapter looks for. C++17
 // inline constexpr gives every translation unit the same array without
@@ -419,6 +437,20 @@ public:
                                     uint64_t vtable_base,
                                     int32_t accepted_run,
                                     PhysXVtableResolveResult *out);
+
+    // Sweep-specific secondary vtable resolver. PxScene::sweep is the
+    // only catalog entry that does NOT live in the main PxScene
+    // vtable @ RVA 0x25020A0 — on ATS 1.61.3.1s it lives in a
+    // separate 5-slot run at RVA 0x2507C08 (slot 4). The main
+    // resolver uses kMinPhysXVtableRun=100 to reject spurious runs;
+    // a 5-slot run is below that floor. This resolver walks exactly
+    // 5 slots at the supplied offset (relative to `bytes`) and looks
+    // for the catalog sweep VA. Returns the slot index (0..4) when
+    // matched; returns -1 when the secondary vtable is not at the
+    // supplied offset or the catalog VA is absent.
+    static int32_t ResolveSweepInSecondaryVtable(const uint8_t *bytes,
+                                                 size_t size,
+                                                 uint64_t secondary_vtable_offset);
 
     // Cached install-time results. PhysXAdapter::Install() runs the
     // real-binary scan + ResolveKnownMethods against the live

@@ -289,6 +289,48 @@ static bool PhysXAdapter_RuntimeScan(PhysXAdapter::RuntimeCache *cache) {
         cache->scan.vtable.accepted_run,
         &cache->resolve);
     cache->have_resolve = ok;
+
+    // M3 sweep_slot: PxScene::sweep is the only catalog entry not in
+    // the main PxScene vtable @ RVA 0x25020A0 — it lives in a 5-slot
+    // run at RVA 0x2507C08, below the kMinPhysXVtableRun floor (100)
+    // that the signature scan accepts. The catalog VA was located by
+    // walking from the LEA ref to the assertion string
+    // "PxScene::sweep(): first geometry object ..." in .text. The
+    // ResolveKnownMethods call above returns sweep_slot=-1; the focused
+    // ResolveSweepInSecondaryVtable below walks the smaller 5-slot
+    // run and reports a slot index in the secondary vtable's local
+    // numbering (slot 4 on ATS 1.61.3.1s). The slot is intentionally
+    // local to the secondary run — ResolveKnownMethods would slot
+    // 4+offset_in_main if forced into the main numbering, so callers
+    // reading sweep_slot should remember it's secondary-local, but
+    // the pointer VALUE at that slot is the sweep function pointer
+    // the IWorldGeometry::SphereSweep wrapper calls through.
+    if (kPhysXSweepSecondaryVtableRVA >= rdata_sec.rva &&
+        kPhysXSweepSecondaryVtableRVA <
+            static_cast<uint64_t>(rdata_sec.rva) +
+                static_cast<uint64_t>(rdata_sec.size)) {
+        const uint64_t secondary_offset =
+            kPhysXSweepSecondaryVtableRVA - rdata_sec.rva;
+        const int32_t sweep_slot_secondary =
+            PhysXAdapter::ResolveSweepInSecondaryVtable(
+                rdata_ptr, rdata_size, secondary_offset);
+        if (sweep_slot_secondary >= 0) {
+            // Encode the secondary slot as the SLOT INDEX in the
+            // secondary run (0..4). The caller can resolve to a
+            // pointer by reading (rdata_ptr + secondary_offset +
+            // sweep_slot_secondary * 8). We leave the cache field as
+            // the secondary-local slot so walker_dump_physx can
+            // distinguish "sweep found in secondary @slot N" from
+            // "sweep found in main @slot N". To make the contract
+            // explicit, we tag the slot value with a sentinel offset
+            // when found via the secondary path: sweep_slot in the
+            // cache stores the secondary-local slot (0..4) directly,
+            // and a new has_secondary_sweep bool records the
+            // provenance.
+            cache->resolve.sweep_slot = sweep_slot_secondary;
+            cache->resolve.has_secondary_sweep = true;
+        }
+    }
     return ok;
 #endif  // _WIN32
 }
@@ -703,6 +745,60 @@ bool PhysXAdapter::ResolveKnownMethods(const uint8_t *bytes,
         }
     }
     return matched > 0;
+}
+
+int32_t PhysXAdapter::ResolveSweepInSecondaryVtable(const uint8_t *bytes,
+                                                   size_t size,
+                                                   uint64_t secondary_vtable_offset) {
+    // PxScene::sweep is the ONLY catalog entry not present in the main
+    // 0x25020A0 PxScene vtable. The signature scan's kMinPhysXVtableRun
+    // floor (100) rejects the 5-slot run that contains sweep, so the
+    // main resolver reports sweep_slot=-1. This helper walks exactly
+    // kPhysXSweepSecondarySlotRun (5) slots at the supplied offset and
+    // matches each pointer against the catalog `sweep` VA within
+    // kPhysXResolveSlotTolerance bytes.
+    //
+    // `secondary_vtable_offset` is the byte offset INTO `bytes` of the
+    // secondary vtable; the caller (Install path) converts the catalog
+    // RVA (kPhysXSweepSecondaryVtableRVA = 0x2507C08) by subtracting
+    // the .rdata section's RVA. Tests can pass any offset that yields
+    // a 5-slot run inside [bytes, bytes+size).
+    if (bytes == nullptr || size < 8) {
+        return -1;
+    }
+    // Bounds-check the 5-slot run against the buffer.
+    const uint64_t run_bytes =
+        static_cast<uint64_t>(kPhysXSweepSecondarySlotRun) * 8ULL;
+    if (secondary_vtable_offset >= size ||
+        run_bytes > size - secondary_vtable_offset) {
+        return -1;
+    }
+    // Locate the sweep catalog VA. The catalog ships 8 entries; sweep
+    // is the 5th (index 4 — same order as the comments above
+    // kPhysXKnownMethods). We resolve by name to avoid relying on the
+    // array position if the table is ever reordered.
+    uint64_t sweep_va = 0;
+    for (int m = 0; m < kPhysXKnownMethodCount; ++m) {
+        if (std::strcmp(kPhysXKnownMethods[m].name, "sweep") == 0) {
+            sweep_va = kPhysXKnownMethods[m].va;
+            break;
+        }
+    }
+    if (sweep_va == 0) {
+        return -1;
+    }
+    for (int32_t slot = 0; slot < kPhysXSweepSecondarySlotRun; ++slot) {
+        const size_t off =
+            secondary_vtable_offset + static_cast<size_t>(slot) * 8;
+        uint64_t val = 0;
+        std::memcpy(&val, bytes + off, 8);
+        const uint64_t delta = (val > sweep_va) ? (val - sweep_va)
+                                                 : (sweep_va - val);
+        if (delta <= kPhysXResolveSlotTolerance) {
+            return slot;
+        }
+    }
+    return -1;
 }
 
 }  // namespace walkercore

@@ -305,6 +305,12 @@ void TestPhysXKnownMethodsSweepIsTheHighestVA();
 void TestPhysXKnownMethodsCatalogVAsInPhysXRange();
 void TestPhysXKnownMethodsCatalogNamesMatchSDK();
 void TestPhysXKnownMethodsCatalogOrderIsStable();
+void TestPhysXSweepSecondaryResolvesCatalogSweepAtSlotFour();
+void TestPhysXSweepSecondaryReturnsNegativeOneWhenAbsent();
+void TestPhysXSweepSecondaryMatchesWithinTolerance();
+void TestPhysXSweepSecondaryRejectsOffsetBeyondTolerance();
+void TestPhysXSweepSecondaryHonoursOffset();
+void TestPhysXSweepSecondaryConstantsMatchCatalog();
 #ifdef WALKERCORE_REAL_BINARY_TEST_PATH
 void TestPhysXRealBinaryMatchesCatalog();
 void TestPhysXRealBinaryRuntimeScanPath();
@@ -1037,6 +1043,12 @@ int main() {
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogVAsInPhysXRange);
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogNamesMatchSDK);
     RUN_TEST(walkercore::TestPhysXKnownMethodsCatalogOrderIsStable);
+    RUN_TEST(walkercore::TestPhysXSweepSecondaryResolvesCatalogSweepAtSlotFour);
+    RUN_TEST(walkercore::TestPhysXSweepSecondaryReturnsNegativeOneWhenAbsent);
+    RUN_TEST(walkercore::TestPhysXSweepSecondaryMatchesWithinTolerance);
+    RUN_TEST(walkercore::TestPhysXSweepSecondaryRejectsOffsetBeyondTolerance);
+    RUN_TEST(walkercore::TestPhysXSweepSecondaryHonoursOffset);
+    RUN_TEST(walkercore::TestPhysXSweepSecondaryConstantsMatchCatalog);
 #ifdef WALKERCORE_REAL_BINARY_TEST_PATH
     RUN_TEST(walkercore::TestPhysXRealBinaryMatchesCatalog);
     RUN_TEST(walkercore::TestPhysXRealBinaryRuntimeScanPath);

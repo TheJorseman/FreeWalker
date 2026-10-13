@@ -79,6 +79,18 @@ struct WalkerSettings {
     // `m2_game_free_camera_shim` is also true; with the shim off,
     // this knob has no effect.
     unsigned int m2_dev_camera_toggle_vk = 0x60;  // VK_NUMPAD0
+    // M2.5: did the INI explicitly set `dev_camera_toggle_vk` (any
+    // value, including the default 0x60)? When true, the
+    // GameFreeCameraShim's controls.sii auto-detect is skipped — the
+    // user has signalled "I know what I want, leave me alone". When
+    // false (key was not present in the INI), the shim auto-probes
+    // the user's controls.sii for `dev_camera_toggle` /
+    // `walk_mode` / `free_camera` and adopts the first keyboard.*
+    // binding it finds. The flag is distinct from the value itself
+    // because a user can explicitly set
+    // `dev_camera_toggle_vk = 0x60` (Numpad-0) and that is still an
+    // explicit override even though it happens to match the default.
+    bool m2_dev_camera_toggle_vk_explicit = false;
     // M2 long-term camera hijack gate. False by default — opt in via
     // `[m2] camera_hijack = 1`. When enabled, WalkerCore captures
     // amtrucks.exe's image base via GetModuleHandleA and MinHooks the

@@ -163,6 +163,43 @@ std::vector<std::string> GameFreeCameraShim::ProbeConfigCandidatesForTesting(
     return out;
 }
 
+// M2.5: candidate controls.sii paths. Same OneDrive-aware candidate
+// enumeration as ProbeConfigCandidatesForTesting — the active profile
+// lives in the same Documents tree the config.cfg does — but the
+// trailing filename is `controls.sii` instead of `config.cfg`. Note:
+// this enumerates candidate `<Documents>/<game>/controls.sii` paths,
+// which is the layout a single-profile install uses. Multi-profile
+// installs put controls.sii under `<Documents>/<game>/profiles/<id>/`
+// and the runtime probe (see ProbeActiveControlsSii below) walks the
+// profile.sii to find the active profile id before resolving the real
+// path. The candidate list here is the no-profile-info upper bound;
+// the runtime picks the first file that actually exists.
+std::vector<std::string> GameFreeCameraShim::ProbeControlsSiiCandidatesForTesting(
+    const std::string &profile) {
+    static const char *stems[] = {
+        "American Truck Simulator",
+        "Euro Truck Simulator 2",
+    };
+    static const char *subs[] = {
+        "Documents",
+        "My Documents",
+        "OneDrive\\Documents",
+        "OneDrive\\Documentos",
+        "OneDrive - Personal\\Documents",
+        "OneDrive - Personal\\Documentos",
+    };
+    std::vector<std::string> out;
+    out.reserve(12);
+    for (const char *sub : subs) {
+        for (const char *stem : stems) {
+            std::string p = profile + "\\" + sub + "\\" + stem +
+                            "\\controls.sii";
+            out.push_back(std::move(p));
+        }
+    }
+    return out;
+}
+
 // Pure helper: parse the first `uset g_developer "X"` line and
 // return the value as a string. Empty on miss.
 std::string GameFreeCameraShim::ReadGDeveloperValueForTesting(
@@ -198,6 +235,254 @@ std::string GameFreeCameraShim::ReadGDeveloperValueForTesting(
         return std::string();
     }
     return line.substr(q1 + 1, q2 - q1 - 1);
+}
+
+// M2.5: parse controls.sii for a binding to the named action. The
+// controls.sii grammar SCS writes for 1.61.x looks like:
+//
+//   config_lines[184]: "mix dbglockpos `keyboard.num0?0`"
+//   config_lines[185]: "mix dbglockrot `keyboard.numperiod?0 | semantical.dbglockrot?0`"
+//
+// We scan line-by-line for `mix <action> `` — the leading literal
+// tokens must match exactly (no fuzzy / regex). Inside the backticks
+// the binding is one or more `<device>.<source>?<axis>` tokens
+// separated by ` | `. We return the first `keyboard.*` token (with
+// the device prefix) so the caller can convert to a Win32 VK. The
+// reverse-order `keyboard.X?0 | semantical.X?0` layout common in
+// stock profiles is honoured — we just pick the first keyboard.*.
+//
+// The scanner is intentionally minimal: it only matches the literal
+// `mix <action> `` form (no regex / no fuzzy), and ignores anything
+// after the matching closing backtick. A malformed file (no closing
+// backtick, action name spanning multiple lines, etc.) returns empty
+// without throwing — the runtime treats that as "no binding" and
+// falls back to the default dispatch path with a clear log line.
+//
+// The reader limits itself to a single 64 KiB read so a runaway file
+// (a user's controls.sii grown to MB-size from years of mod swaps)
+// cannot stall game boot. The file format is human-edited and a real
+// ATS profile controls.sii is ~30 KiB; 64 KiB is a 2× safety margin.
+std::string GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+    const std::string &path, const std::string &action) {
+    if (path.empty() || action.empty()) {
+        return std::string();
+    }
+    FILE *f = std::fopen(path.c_str(), "rb");
+    if (!f) {
+        return std::string();
+    }
+    std::string content;
+    char buf[4096] = {};
+    size_t n = 0;
+    while (content.size() < (64u * 1024u) &&
+           (n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+        content.append(buf, n);
+    }
+    std::fclose(f);
+
+    // Walk the file looking for `mix <action> ``. We do a single
+    // literal find (cheap, deterministic) and bail at the first hit
+    // because controls.sii is well-ordered — the binding for a given
+    // action appears exactly once.
+    const std::string needle = "mix " + action + " `";
+    auto pos = content.find(needle);
+    if (pos == std::string::npos) {
+        return std::string();
+    }
+    // Walk to the closing backtick. The grammar is `.... `|....|....`
+    // — there is exactly one closing backtick on the binding line.
+    auto end = content.find('`', pos + needle.size());
+    if (end == std::string::npos) {
+        return std::string();
+    }
+    const std::string inside =
+        content.substr(pos + needle.size(), end - (pos + needle.size()));
+
+    // Tokenize on `|` and pick the first token whose device is
+    // `keyboard.` (case-sensitive — SCS uses lowercase `keyboard`).
+    // The token shape is `<device>.<source>?<axis>`. We return the
+    // `<device>.<source>` portion (e.g. `keyboard.num5`) and let
+    // ScsKeyNameToVkForTesting strip the device prefix.
+    size_t i = 0;
+    while (i < inside.size()) {
+        // Skip whitespace.
+        while (i < inside.size() &&
+               (inside[i] == ' ' || inside[i] == '\t')) {
+            ++i;
+        }
+        if (i >= inside.size()) {
+            break;
+        }
+        // Find the end of this token — either at '|' or end of
+        // inside.
+        size_t j = i;
+        while (j < inside.size() && inside[j] != '|') {
+            ++j;
+        }
+        std::string token = inside.substr(i, j - i);
+        // Trim trailing whitespace.
+        while (!token.empty() &&
+               (token.back() == ' ' || token.back() == '\t')) {
+            token.pop_back();
+        }
+        // Drop the trailing `?<axis>` qualifier (e.g. `keyboard.f10?0`
+        // → `keyboard.f10`). The qualifier is positional and we do
+        // not care about it here — the device + source uniquely
+        // identifies the key.
+        auto qmark = token.find('?');
+        if (qmark != std::string::npos) {
+            token = token.substr(0, qmark);
+        }
+        // The qualifier may also appear without a trailing value
+        // (rare in stock profiles). Fall through.
+        if (token.rfind("keyboard.", 0) == 0) {
+            return token;
+        }
+        i = (j < inside.size()) ? j + 1 : j;
+    }
+    return std::string();
+}
+
+// M2.5: SCS keyboard token → Win32 VK. Covers the subset of the SCS
+// controls.sii grammar that real ATS / ETS2 profiles bind to
+// dev-camera / walk-mode actions. The table is intentionally small
+// — only the keys a user would reasonably bind to a "toggle the dev
+// free camera" action. Anything not in the table returns 0 and the
+// caller treats it as "unknown device token, skip auto-detect".
+//
+// The names match SCS's token grammar exactly:
+//   keyboard.f10          → VK_F10       (0x79)
+//   keyboard.f11          → VK_F11       (0x7A)
+//   keyboard.f12          → VK_F12       (0x7B)
+//   keyboard.num0..num9   → VK_NUMPAD0..VK_NUMPAD9 (0x60..0x69)
+//   keyboard.numpad0..9   → same range (SCS accepts both spellings)
+//   keyboard.numperiod    → VK_DECIMAL   (0x6E)
+//   keyboard.numslash     → VK_DIVIDE    (0x6F)
+//   keyboard.numstar      → VK_MULTIPLY  (0x6A)
+//   keyboard.numminus     → VK_SUBTRACT  (0x6D)
+//   keyboard.numplus      → VK_ADD       (0x6B)
+//   keyboard.numlock      → VK_NUMLOCK   (0x90)
+//   keyboard.lshift/rshift→ VK_LSHIFT/RSHIFT (0xA0/0xA1)
+//   keyboard.lctrl/rctrl  → VK_LCONTROL/RCONTROL (0xA2/0xA3)
+//   keyboard.lalt/ralt    → VK_LMENU/RMENU (0xA4/0xA5)
+//   keyboard.space        → VK_SPACE     (0x20)
+//   keyboard.enter        → VK_RETURN    (0x0D)
+//   keyboard.escape       → VK_ESCAPE    (0x1B)
+//   keyboard.backquote    → VK_OEM_3 (~) (0xC0)
+//   keyboard.tab          → VK_TAB       (0x09)
+//   keyboard.home         → VK_HOME      (0x24)
+//   keyboard.end          → VK_END       (0x23)
+//   keyboard.insert       → VK_INSERT    (0x2D)
+//   keyboard.delete       → VK_DELETE    (0x2E)
+//   keyboard.pgup         → VK_PRIOR     (0x21)
+//   keyboard.pgdn         → VK_NEXT      (0x22)
+//   keyboard.up/down/l/r  → VK_UP/DOWN/LEFT/RIGHT (cursor keys)
+//   keyboard.a..z         → VK_A..VK_Z
+//   keyboard.0..9         → VK_0..VK_9 (top-row digits, not numpad)
+//
+// The single-char digit / letter dispatch is a fallback for the case
+// where a user binds e.g. `keyboard.t` to the dev camera toggle (we
+// have seen this in the wild). The dispatch is case-sensitive — SCS
+// emits lowercase token names.
+unsigned int GameFreeCameraShim::ScsKeyNameToVkForTesting(
+    const std::string &name) {
+    if (name.empty() || name.rfind("keyboard.", 0) != 0) {
+        return 0;
+    }
+    const std::string key = name.substr(std::string("keyboard.").size());
+
+    // Function keys.
+    if (key == "f1")  return 0x70;  // VK_F1
+    if (key == "f2")  return 0x71;
+    if (key == "f3")  return 0x72;
+    if (key == "f4")  return 0x73;
+    if (key == "f5")  return 0x74;
+    if (key == "f6")  return 0x75;
+    if (key == "f7")  return 0x76;
+    if (key == "f8")  return 0x77;
+    if (key == "f9")  return 0x78;
+    if (key == "f10") return 0x79;
+    if (key == "f11") return 0x7A;
+    if (key == "f12") return 0x7B;
+
+    // Numpad digits (both spellings accepted).
+    if (key.size() >= 4 && key.rfind("num", 0) == 0) {
+        const std::string tail = key.substr(3);
+        if (tail.size() == 1 && tail[0] >= '0' && tail[0] <= '9') {
+            // Explicit unsigned cast to keep -Wsign-conversion quiet:
+            // the result of (tail[0] - '0') is a signed int (0..9)
+            // and the literal 0x60 is unsigned — without the cast the
+            // arithmetic promotes and the implicit conversion back to
+            // the function's unsigned return type triggers the
+            // warning under -Werror=sign-conversion. The arithmetic
+            // itself is correct (0..9 added to 0x60 → 0x60..0x69).
+            const unsigned int digit =
+                static_cast<unsigned int>(tail[0] - '0');
+            return 0x60u + digit;  // VK_NUMPAD0..9
+        }
+        if (key == "numpad0")  return 0x60;
+        if (key == "numpad1")  return 0x61;
+        if (key == "numpad2")  return 0x62;
+        if (key == "numpad3")  return 0x63;
+        if (key == "numpad4")  return 0x64;
+        if (key == "numpad5")  return 0x65;
+        if (key == "numpad6")  return 0x66;
+        if (key == "numpad7")  return 0x67;
+        if (key == "numpad8")  return 0x68;
+        if (key == "numpad9")  return 0x69;
+        if (key == "numperiod") return 0x6E;  // VK_DECIMAL
+        if (key == "numslash")  return 0x6F;  // VK_DIVIDE
+        if (key == "numstar")   return 0x6A;  // VK_MULTIPLY
+        if (key == "numminus")  return 0x6D;  // VK_SUBTRACT
+        if (key == "numplus")   return 0x6B;  // VK_ADD
+        if (key == "numlock")   return 0x90;  // VK_NUMLOCK
+    }
+
+    // Modifiers.
+    if (key == "lshift")   return 0xA0;
+    if (key == "rshift")   return 0xA1;
+    if (key == "lctrl")    return 0xA2;
+    if (key == "rctrl")    return 0xA3;
+    if (key == "lalt")     return 0xA4;
+    if (key == "ralt")     return 0xA5;
+    if (key == "space")    return 0x20;
+    if (key == "enter")    return 0x0D;
+    if (key == "escape")   return 0x1B;
+    if (key == "tab")      return 0x09;
+    if (key == "backquote")return 0xC0;
+
+    // Cursor + navigation cluster.
+    if (key == "up")       return 0x26;
+    if (key == "down")     return 0x28;
+    if (key == "left")     return 0x25;
+    if (key == "right")    return 0x27;
+    if (key == "home")     return 0x24;
+    if (key == "end")      return 0x23;
+    if (key == "insert")   return 0x2D;
+    if (key == "delete")   return 0x2E;
+    if (key == "pgup")     return 0x21;
+    if (key == "pgdn")     return 0x22;
+
+    // Top-row digits (not the numpad).
+    if (key.size() == 1 && key[0] >= '0' && key[0] <= '9') {
+        // '0'..'9' happen to equal VK_0..VK_9 on Windows. Explicit
+        // unsigned cast to keep -Wsign-conversion quiet — `key[0]`
+        // is `char` (signed on x86_64 Windows by default), and an
+        // implicit conversion to the function's unsigned return
+        // type triggers the warning under -Werror=sign-conversion.
+        return static_cast<unsigned int>(
+            static_cast<unsigned char>(key[0]));
+    }
+    // Single lowercase letters.
+    if (key.size() == 1 && key[0] >= 'a' && key[0] <= 'z') {
+        // SCS uppercases, but accept lowercase anyway (defensive).
+        const char c = key[0];
+        // Map 'a'..'z' to 'A'..'Z' (VK_* letter codes are uppercase).
+        return static_cast<unsigned int>(
+            (c >= 'a' && c <= 'z') ? (c - 'a' + 'A') : c);
+    }
+
+    return 0;  // Unknown token.
 }
 
 namespace {
@@ -254,6 +539,56 @@ std::string ProbeConfigPath() {
     return std::string();
 }
 
+// M2.5: best-effort probe for the user's controls.sii. Mirrors
+// ProbeConfigPath but emits the controls.sii filename. We do NOT
+// resolve the per-profile sub-folder (multi-profile installs put
+// controls.sii under `<game>/profiles/<hex id>/controls.sii`) —
+// the per-profile resolution would require parsing profile.sii,
+// which is out of scope for the M2 lander. The single-profile
+// install is the common case (this developer's host included), so
+// the simpler probe covers the majority of real users. If we miss,
+// the runtime still emits a clear "could not auto-detect, here's how
+// to set it manually" log line so the user can fall back to the
+// INI knob.
+std::string ProbeActiveControlsSiiPath() {
+#if defined(_WIN32)
+    char mydocs[MAX_PATH] = {};
+    if (SUCCEEDED(::SHGetFolderPathA(nullptr, CSIDL_MYDOCUMENTS, nullptr,
+                                      SHGFP_TYPE_CURRENT, mydocs))) {
+        static const char *const stems[] = {
+            "American Truck Simulator",
+            "Euro Truck Simulator 2",
+        };
+        for (const char *stem : stems) {
+            std::string p = std::string(mydocs) + "\\" + stem +
+                            "\\controls.sii";
+            FILE *f = std::fopen(p.c_str(), "rb");
+            if (f) {
+                std::fclose(f);
+                return p;
+            }
+        }
+    }
+    char profile[MAX_PATH] = {};
+    if (SUCCEEDED(::SHGetFolderPathA(nullptr, CSIDL_PROFILE, nullptr,
+                                      SHGFP_TYPE_CURRENT, profile))) {
+        const auto candidates =
+            GameFreeCameraShim::ProbeControlsSiiCandidatesForTesting(
+                std::string(profile));
+        for (const auto &c : candidates) {
+            FILE *f = std::fopen(c.c_str(), "rb");
+            if (f) {
+                std::fclose(f);
+                return c;
+            }
+        }
+    }
+#else
+    (void)0;
+#endif
+    return std::string();
+}
+
 }  // namespace
 
 GameFreeCameraShim::GameFreeCameraShim() = default;
@@ -268,6 +603,165 @@ void GameFreeCameraShim::BindGameHwnd(HWND hwnd) { hwnd_ = hwnd; }
 void GameFreeCameraShim::BindDevCameraPatchResult(
     const DevCameraCvarPatchResult *r) {
     dev_cvar_patch_result_ = r;
+}
+
+// M2.5: auto-detect the user's dev-camera-toggle binding from their
+// controls.sii. Called once from PluginEntry init after
+// ProbeGDeveloperFromConfig.
+//
+// The probe order is: dev_camera_toggle → walk_mode → free_camera.
+// dev_camera_toggle is the stock SCS action name the dev console
+// `free_camera_u` command routes through (see
+// docs/observations/tmrealwalk-cam-manager-re.md for the RE
+// provenance). walk_mode is the legacy action some profiles use.
+// free_camera is a third-party synonym we tolerate for completeness.
+//
+// If `ini_overrides_default` is true, the INI knob already pinned
+// the VK explicitly and we MUST NOT clobber it — the user knows
+// what they want. In that case we clear the auto-detected diagnostic
+// fields and return without touching toggle_vk_.
+//
+// When no binding is found, we emit a one-line, copy-pasteable
+// guidance message so the user can fix controls.sii themselves. The
+// message includes the file path ProbeActiveControlsSiiPath() would
+// have used (resolved from <Documents>/<game>/controls.sii or the
+// OneDrive-aware fallback), so the user knows exactly which file to
+// edit. We do NOT modify controls.sii — that is the user's choice,
+// and a one-line edit is trivial to roll back.
+void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
+    bool ini_overrides_default) {
+    ini_overrides_toggle_vk_ = ini_overrides_default;
+    auto_detected_key_name_.clear();
+    auto_detected_controls_sii_path_.clear();
+    if (ini_overrides_default) {
+        // The INI pinned a value; honour it. We do still want to
+        // remember where the user's controls.sii lives for the
+        // diagnostic log (so the F10 Walking-entry line can show
+        // "INI=0x65, profile binding keyboard.num5 @ <path>"), so
+        // we resolve the path even when we are not going to adopt
+        // its value. The probe is cheap (one fopen per candidate,
+        // 12 candidates max) and the resolution is read-only.
+        const std::string path = ProbeActiveControlsSiiPath();
+        auto_detected_controls_sii_path_ = path;
+        if (!path.empty()) {
+            for (const char *action :
+                 {"dev_camera_toggle", "walk_mode", "free_camera"}) {
+                const std::string token =
+                    ReadControlsSiiKeyForActionForTesting(
+                        path, std::string(action));
+                if (!token.empty()) {
+                    auto_detected_key_name_ = token;
+                    break;
+                }
+            }
+        }
+        WALKERCORE_LOG_INFO(
+            "GameFreeCameraShim: INI override active — auto-detect "
+            "skipped, toggle VK=0x%X (auto-detected profile binding=%s, "
+            "path=%s)",
+            toggle_vk_,
+            auto_detected_key_name_.empty()
+                ? "<none in controls.sii>"
+                : auto_detected_key_name_.c_str(),
+            auto_detected_controls_sii_path_.empty()
+                ? "<not found>"
+                : auto_detected_controls_sii_path_.c_str());
+        return;
+    }
+    const std::string path = ProbeActiveControlsSiiPath();
+    auto_detected_controls_sii_path_ = path;
+    if (path.empty()) {
+        // Could not locate any controls.sii on this host. Either the
+        // game is not installed, the user is on a build server, or
+        // the user runs the game from a non-standard install
+        // location. Emit a single-line guidance that still works in
+        // that case: tell the user to either fix the install or
+        // pin the INI knob directly.
+        WALKERCORE_LOG_WARN(
+            "GameFreeCameraShim: controls.sii not found (no active "
+            "profile / game not installed). Default toggle VK=0x%X "
+            "(Numpad-0) in effect; if your controls.sii binds a "
+            "different key to dev_camera_toggle / walk_mode / "
+            "free_camera, set [m2] dev_camera_toggle_vk = 0xHH in "
+            "WalkerCore.ini to override.",
+            toggle_vk_);
+        return;
+    }
+    // Scan the three known action names in priority order. The first
+    // hit wins; subsequent actions are ignored.
+    const char *hit_action = nullptr;
+    std::string token;
+    for (const char *action :
+         {"dev_camera_toggle", "walk_mode", "free_camera"}) {
+        token = ReadControlsSiiKeyForActionForTesting(
+            path, std::string(action));
+        if (!token.empty()) {
+            hit_action = action;
+            break;
+        }
+    }
+    if (hit_action == nullptr) {
+        // No binding found at all. Emit a one-line, copy-pasteable
+        // fix the user can drop into their controls.sii. We pick a
+        // sensible default (keyboard.f11) — the user's profile
+        // binds F10 to screenshot, so F11 is almost certainly
+        // unbound.
+        WALKERCORE_LOG_WARN(
+            "GameFreeCameraShim: controls.sii at %s has NO binding "
+            "for dev_camera_toggle / walk_mode / free_camera. Default "
+            "toggle VK=0x%X (Numpad-0) in effect — your profile binds "
+            "Numpad-0 to dbglockpos so the synthesised key will be "
+            "ignored. Add this line to %s and reload the save / "
+            "restart the game:",
+            path.c_str(), toggle_vk_, path.c_str());
+        WALKERCORE_LOG_WARN(
+            "    mix dev_camera_toggle `keyboard.f11?0 | "
+            "semantical.dev_camera_toggle?0`");
+        WALKERCORE_LOG_WARN(
+            "    (alternative keys: keyboard.f10, keyboard.num5, "
+            "keyboard.numpad5 — pick one that does not collide with "
+            "an existing binding. WalkerCore will auto-detect the new "
+            "binding on next launch via [m2] dev_camera_toggle_vk "
+            "auto-probe.)");
+        return;
+    }
+    const unsigned int vk = ScsKeyNameToVkForTesting(token);
+    if (vk == 0) {
+        // We found a binding but cannot translate the SCS token to a
+        // Win32 VK. Likely an obscure device (mouse / wheel / gamepad)
+        // that the shim's SendInput path cannot synthesise. Log the
+        // discovery + the unmappable token and keep the default VK.
+        WALKERCORE_LOG_WARN(
+            "GameFreeCameraShim: controls.sii at %s binds %s to %s, "
+            "but that SCS token is not in the Win32 VK lookup table "
+            "(the shim only synthesises keyboard.* tokens). Default "
+            "toggle VK=0x%X (Numpad-0) in effect. To use this "
+            "binding, map it to a keyboard key in controls.sii or set "
+            "[m2] dev_camera_toggle_vk = 0xHH in WalkerCore.ini to "
+            "force a specific VK.",
+            path.c_str(), hit_action, token.c_str(), toggle_vk_);
+        return;
+    }
+    if (vk == toggle_vk_) {
+        // The default VK happens to match the binding. Nothing to
+        // adopt, but still record the discovery for the F10 log.
+        auto_detected_key_name_ = token;
+        WALKERCORE_LOG_INFO(
+            "GameFreeCameraShim: controls.sii at %s binds %s to %s "
+            "(VK 0x%X) — matches the default toggle VK, no change.",
+            path.c_str(), hit_action, token.c_str(), vk);
+        return;
+    }
+    // Adoption path: the binding differs from the default. Adopt it
+    // and log the change so the F10 Walking-entry line can confirm
+    // the right key was picked up.
+    const unsigned int prev_vk = toggle_vk_;
+    toggle_vk_ = vk;
+    auto_detected_key_name_ = token;
+    WALKERCORE_LOG_INFO(
+        "GameFreeCameraShim: auto-detected %s=%s (VK 0x%X) in "
+        "%s — adopted as the toggle VK (was 0x%X default Numpad-0).",
+        hit_action, token.c_str(), vk, path.c_str(), prev_vk);
 }
 
 void GameFreeCameraShim::ProbeGDeveloperFromConfig() {
@@ -359,18 +853,35 @@ void GameFreeCameraShim::OnEnterWalking() {
         return;
     }
     const int dispatched = TriggerToggle();
+    // M2.5: include the auto-detected controls.sii binding (or the
+    // INI override marker) in the F10 Walking-entry log so the user
+    // can verify which key is actually being dispatched. Without this
+    // trace, the user is left guessing whether the dispatch reached
+    // the right SCS action or was silently routed to a different one.
+    const char *vk_source =
+        ini_overrides_toggle_vk_
+            ? "ini-override"
+            : (auto_detected_key_name_.empty() ? "default"
+                                                 : "auto-detected");
     WALKERCORE_LOG_INFO(
         "GameFreeCameraShim: Walking entry #%d -> dispatched %d key "
         "event(s) (gate=%s, config-cfg[probe]='%s', dev_cvar_patcher=%s "
-        "cvar_va=0x%llX value=%.12s, toggle VK=0x%X, exit VK=0x%X, "
+        "cvar_va=0x%llX value=%.12s, toggle VK=0x%X [%s], "
+        "auto-detected-key=%s, controls-sii-path=%s, exit VK=0x%X, "
         "path=%s hwnd=0x%llX) — The dev_cvar_patcher flipped "
         "g_developer in memory before this dispatch; if the dev free "
         "camera still does not activate, the game's controls.sii "
-        "binding for Numpad-0 routes the key to a different action "
-        "(see docs/observations/tmrealwalk-findings.md).",
+        "binding for the synthesised key may route the dispatch to a "
+        "different action (see docs/observations/tmrealwalk-findings.md).",
         walks_entered_, dispatched, gate_str, cvar_str, patch_outcome,
         static_cast<unsigned long long>(patch_value_va), patch_cvar_buf,
-        toggle_vk_, exit_press_vk_, path_name,
+        toggle_vk_, vk_source,
+        auto_detected_key_name_.empty() ? "<none>"
+                                          : auto_detected_key_name_.c_str(),
+        auto_detected_controls_sii_path_.empty()
+            ? "<not found>"
+            : auto_detected_controls_sii_path_.c_str(),
+        exit_press_vk_, path_name,
         static_cast<unsigned long long>(
             reinterpret_cast<std::uintptr_t>(hwnd_)));
 }

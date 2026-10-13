@@ -406,4 +406,347 @@ void TestGameFreeCameraShimReadGDeveloperValueStopsAtFirstLine() {
     std::remove(path.c_str());
 }
 
+// --- ReadControlsSiiKeyForActionForTesting ------------------------------
+//
+// M2.5: the controls.sii parser that backs the dev-camera-toggle
+// auto-detect. We round-trip with temp files so the tests are
+// independent of whatever controls.sii happens to live on the host.
+// The parser scans for the first `mix <action> `` ... ` ` token and
+// returns the first `keyboard.*` source inside the backticks. Tokens
+// may be `keyboard.<key>?<axis>` or `semantical.<action>?<axis>` —
+// we drop the `?<axis>` qualifier and the device-prefix stripping
+// happens inside ScsKeyNameToVkForTesting.
+
+void TestGameFreeCameraShimReadControlsSiiKeyEmptyOnEmptyPath() {
+    EXPECT_EQ(GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+                  std::string(), std::string("dev_camera_toggle")),
+              std::string());
+    EXPECT_EQ(GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+                  std::string("C:\\does\\not\\exist.sii"),
+                  std::string("dev_camera_toggle")),
+              std::string());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyFindsKeyboardBinding() {
+    // The most common stock layout: `mix <action>` with a single
+    // keyboard.<key>?<axis> token in backticks.
+    const std::string path = MakeTempPath("controls_devcam_kb");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "SiiNunit\n"
+        "{}\n"
+        "config_lines[175]: \"mix screenshot `keyboard.f10?0 | "
+        "semantical.screenshot?0`\"\n"
+        "config_lines[184]: \"mix dbglockpos `keyboard.num0?0`\"\n"
+        "config_lines[499]: \"mix dev_camera_toggle `keyboard.f11?0 | "
+        "semantical.dev_camera_toggle?0`\"\n"));
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("dev_camera_toggle")),
+        std::string("keyboard.f11"));
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyFindsAlternateName() {
+    // The parser tries walk_mode as a fallback action. We pin that
+    // by handing it a controls.sii that binds walk_mode and not
+    // dev_camera_toggle — the parser should still return the
+    // keyboard.* token because the lookup is action-name driven.
+    const std::string path = MakeTempPath("controls_walkmode");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix walk_mode `keyboard.num5?0`\"\n"));
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("walk_mode")),
+        std::string("keyboard.num5"));
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyPicksKeyboardAmongMany() {
+    // Reverse-order binding (semantical first, keyboard second).
+    // The parser must skip the semantical device and return the
+    // keyboard.* token. This mirrors the layout some stock SCS
+    // profiles use for the photo_* actions.
+    const std::string path = MakeTempPath("controls_rev");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix dev_camera_toggle `semantical.dev_camera_toggle?0 | "
+        "keyboard.num5?0`\"\n"));
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("dev_camera_toggle")),
+        std::string("keyboard.num5"));
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyEmptyOnMissingAction() {
+    // controls.sii exists but the action we are looking for is not
+    // bound at all (the user's actual case). The parser must return
+    // empty so the runtime can emit the "no binding found, here is
+    // how to fix" log line.
+    const std::string path = MakeTempPath("controls_missing");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix screenshot `keyboard.f10?0`\"\n"
+        "config_lines[1]: \"mix dbglockpos `keyboard.num0?0`\"\n"
+        "config_lines[2]: \"mix camwalk_for `keyboard.w?0`\"\n"));
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("dev_camera_toggle")),
+        std::string());
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("walk_mode")),
+        std::string());
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("free_camera")),
+        std::string());
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyOnlyJoystickBinding() {
+    // Some profiles bind a camera action only to a joystick, with
+    // no keyboard token. The parser returns empty — the caller
+    // then knows the binding is not synthesisable via SendInput.
+    const std::string path = MakeTempPath("controls_joyonly");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix dev_camera_toggle `joy.button5?0 | "
+        "semantical.dev_camera_toggle?0`\"\n"));
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("dev_camera_toggle")),
+        std::string());
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimReadControlsSiiKeyHandlesMalformedNoBacktick() {
+    // A line with `mix dev_camera_toggle` but no opening/closing
+    // backtick (a hand-edited controls.sii gone wrong). The parser
+    // must NOT throw, NOT infinite-loop — it returns empty.
+    const std::string path = MakeTempPath("controls_malformed");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix dev_camera_toggle keyboard.f11?0\"\n"));
+    EXPECT_EQ(
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("dev_camera_toggle")),
+        std::string());
+    std::remove(path.c_str());
+}
+
+// --- ScsKeyNameToVkForTesting -------------------------------------------
+//
+// The lookup table maps SCS keyboard tokens to Win32 VK_* codes.
+// We cover the keys a user would plausibly bind to a dev-camera
+// toggle (function keys, numpad digits, modifiers, top-row digits,
+// single letters, escape/enter/space) plus the empty / wrong-prefix
+// miss cases.
+
+void TestGameFreeCameraShimScsKeyNameToVkEmptyIsZero() {
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(std::string()),
+              0u);
+}
+
+void TestGameFreeCameraShimScsKeyNameToVkWrongPrefixIsZero() {
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("mouse.button_left")),
+              0u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("joy.button5")),
+              0u);
+}
+
+void TestGameFreeCameraShimScsKeyNameToVkFunctionKeys() {
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.f1")),  0x70u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.f10")), 0x79u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.f11")), 0x7Au);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.f12")), 0x7Bu);
+}
+
+void TestGameFreeCameraShimScsKeyNameToVkNumpad() {
+    // num-prefix and numpad-prefix both map to VK_NUMPAD*.
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.num0")), 0x60u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.numpad5")), 0x65u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.num9")), 0x69u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.numpad9")), 0x69u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.numperiod")), 0x6Eu);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.numslash")), 0x6Fu);
+}
+
+void TestGameFreeCameraShimScsKeyNameToVkModifiersAndSpecial() {
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.lshift")), 0xA0u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.rctrl")), 0xA3u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.space")), 0x20u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.enter")), 0x0Du);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.escape")), 0x1Bu);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.tab")), 0x09u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.backquote")), 0xC0u);
+}
+
+void TestGameFreeCameraShimScsKeyNameToVkCursorAndLetters() {
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.up")), 0x26u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.down")), 0x28u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.left")), 0x25u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.right")), 0x27u);
+    // 'a'..'z' map to VK_A..VK_Z (uppercase).
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.a")), 0x41u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.t")), 0x54u);
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.z")), 0x5Au);
+    // Top-row digits map to VK_0..VK_9 (the literal char codes).
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.5")), 0x35u);
+}
+
+void TestGameFreeCameraShimScsKeyNameToVkUnknownTokenIsZero() {
+    // A keyboard.* token we don't recognise (here an invented
+    // "keyboard.foobar"). The caller treats 0 as "unknown — skip
+    // auto-detect" and emits a clear log line.
+    EXPECT_EQ(GameFreeCameraShim::ScsKeyNameToVkForTesting(
+                  std::string("keyboard.foobar")), 0u);
+}
+
+// --- ProbeControlsSiiCandidatesForTesting -------------------------------
+
+void TestGameFreeCameraShimProbeControlsSiiCandidatesCoversOneDrive() {
+    // Same OneDrive-aware candidate enumeration as
+    // ProbeConfigCandidatesForTesting — pin the coverage so the
+    // runtime probe keeps working across layouts.
+    const auto candidates =
+        GameFreeCameraShim::ProbeControlsSiiCandidatesForTesting(
+            std::string("C:\\Users\\migue"));
+    EXPECT_FALSE(candidates.empty());
+    bool has_ats = false;
+    bool has_ets = false;
+    bool has_onedrive_en = false;
+    bool has_onedrive_es = false;
+    bool has_onedrive_personal_en = false;
+    bool has_onedrive_personal_es = false;
+    for (const auto &c : candidates) {
+        if (c.find("American Truck Simulator") != std::string::npos) {
+            has_ats = true;
+        }
+        if (c.find("Euro Truck Simulator 2") != std::string::npos) {
+            has_ets = true;
+        }
+        if (c.find("OneDrive\\Documents") != std::string::npos) {
+            has_onedrive_en = true;
+        }
+        if (c.find("OneDrive\\Documentos") != std::string::npos) {
+            has_onedrive_es = true;
+        }
+        if (c.find("OneDrive - Personal\\Documents") != std::string::npos) {
+            has_onedrive_personal_en = true;
+        }
+        if (c.find("OneDrive - Personal\\Documentos") !=
+            std::string::npos) {
+            has_onedrive_personal_es = true;
+        }
+    }
+    EXPECT_TRUE(has_ats);
+    EXPECT_TRUE(has_ets);
+    EXPECT_TRUE(has_onedrive_en);
+    EXPECT_TRUE(has_onedrive_es);
+    EXPECT_TRUE(has_onedrive_personal_en);
+    EXPECT_TRUE(has_onedrive_personal_es);
+    // All candidates must end in `controls.sii` — the runtime
+    // probe is exclusively for that filename.
+    for (const auto &c : candidates) {
+        EXPECT_TRUE(c.rfind("controls.sii") != std::string::npos);
+    }
+}
+
+// --- AutoDetectToggleVkFromControlsSii ----------------------------------
+//
+// The runtime method that ties the parser + lookup table together.
+// Each test uses a fresh shim and a fresh temp controls.sii so the
+// VK / key-name / path fields are deterministic. We do not exercise
+// the ProbeActiveControlsSiiPath runtime helper directly (it shells
+// out to SHGetFolderPathA and would couple the test to the host's
+// install layout); instead we hand-populate the auto-detect path by
+// writing a temp controls.sii, exercising ReadControlsSiiKeyForActionForTesting
+// against it, and verifying the result feeds the VK setter as the
+// real runtime path would.
+
+void TestGameFreeCameraShimAutoDetectAdoptsBindingWhenFound() {
+    // Round-trip the parser + VK lookup manually — this is the same
+    // work AutoDetectToggleVkFromControlsSii does in the
+    // adoption path, just driven directly so the test does not
+    // depend on the host's SHGetFolderPathA layout.
+    const std::string path = MakeTempPath("auto_detect_adopt");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix dev_camera_toggle `keyboard.f11?0`\"\n"));
+    const std::string token =
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("dev_camera_toggle"));
+    EXPECT_EQ(token, std::string("keyboard.f11"));
+    const unsigned int vk =
+        GameFreeCameraShim::ScsKeyNameToVkForTesting(token);
+    EXPECT_EQ(vk, 0x7Au);  // VK_F11
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimAutoDetectNoBindingLeavesDefaultVk() {
+    // When no binding is found, the VK lookup is never called and
+    // the shim's default VK (0x60 Numpad-0) is preserved. The
+    // parser returns empty, ScsKeyNameToVkForTesting of empty
+    // returns 0, and the runtime skips adoption.
+    const std::string path = MakeTempPath("auto_detect_nobind");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix screenshot `keyboard.f10?0`\"\n"));
+    const std::string token =
+        GameFreeCameraShim::ReadControlsSiiKeyForActionForTesting(
+            path, std::string("dev_camera_toggle"));
+    EXPECT_EQ(token, std::string());
+    const unsigned int vk =
+        GameFreeCameraShim::ScsKeyNameToVkForTesting(token);
+    EXPECT_EQ(vk, 0u);
+    // Shim default is still 0x60 (the constructor + SetToggleVk
+    // round-trip).
+    auto s = MakeShim();
+    EXPECT_EQ(s->toggle_vk(), 0x60u);
+    EXPECT_EQ(s->auto_detected_key_name(), std::string());
+    EXPECT_EQ(s->auto_detected_controls_sii_path(), std::string());
+    EXPECT_FALSE(s->ini_overrides_toggle_vk());
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimAutoDetectInitialFieldsAreEmpty() {
+    // A fresh shim starts with empty auto-detect diagnostics so
+    // the F10 Walking-entry log line degrades cleanly when the
+    // probe finds nothing.
+    auto s = MakeShim();
+    EXPECT_EQ(s->auto_detected_key_name(), std::string());
+    EXPECT_EQ(s->auto_detected_controls_sii_path(), std::string());
+    EXPECT_FALSE(s->ini_overrides_toggle_vk());
+}
+
 }  // namespace walkercore

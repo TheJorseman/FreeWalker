@@ -355,18 +355,25 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                 // M2: virtual key the shim synthesises on every
                 // Walking entry. SCS convention is VK_NUMPAD0
                 // (0x60). Users whose controls.sii binds Numpad-0 to
-                // a non-camera action can re-point the shim to
-                // whichever key their profile actually binds to a
-                // free-camera action. Accepts decimal or 0x-prefixed
-                // hex. Range 0..255; values outside that are dropped
-                // to the default VK_NUMPAD0 so a typo in the INI
-                // does not produce a 16-bit SendInput that the
-                // keyboard driver silently drops.
+                // a non-camera action can re-point the shim to whichever
+                // key their profile actually binds to a free-camera
+                // action. Accepts decimal (96) or 0xHH (0x60). Out-of-
+                // range values fall back to the default VK_NUMPAD0
+                // and emit a one-shot warning so a typo in the INI is
+                // not silently accepted.
                 char *end = nullptr;
                 const unsigned long parsed =
                     strtoul(value.c_str(), &end, 0);
                 if (end != value && *end == '\0' && parsed <= 0xFF) {
                     loaded.m2_dev_camera_toggle_vk = static_cast<unsigned int>(parsed);
+                    // M2.5: even if the value happens to equal the
+                    // default 0x60, the user has explicitly named the
+                    // knob in the INI — set the explicit flag so the
+                    // controls.sii auto-detect is skipped. The
+                    // explicit-vs-default distinction matters because
+                    // auto-detect would otherwise try to "improve" a
+                    // value the user has already vetted.
+                    loaded.m2_dev_camera_toggle_vk_explicit = true;
                 } else {
                     WALKERCORE_LOG_WARN(
                         "Settings: [m2] dev_camera_toggle_vk='%s' is not a "
@@ -611,7 +618,12 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "# controls.sii binds Numpad-0 to a non-camera action can\n";
     f << "# re-point the shim to whichever key their profile actually\n";
     f << "# binds to a free-camera action. Accepts decimal or 0xHH.\n";
-    f << "# Default 0x60 (VK_NUMPAD0).\n";
+    f << "# Default 0x60 (VK_NUMPAD0). When unset (no `dev_camera_toggle_vk`\n";
+    f << "# line in this file), the shim auto-detects the user's binding\n";
+    f << "# from controls.sii (looking for `dev_camera_toggle`,\n";
+    f << "# `walk_mode`, then `free_camera`). The first keyboard.* source\n";
+    f << "# found is adopted; if nothing is bound, the shim logs a\n";
+    f << "# copy-pasteable fix to game.log.\n";
     f << "dev_camera_toggle_vk = 0x" << std::hex << current_.m2_dev_camera_toggle_vk << std::dec << "\n";
     f << "\n";
     f << "[m3]\n";

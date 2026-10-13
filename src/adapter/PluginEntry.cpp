@@ -640,6 +640,16 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
       // dispatch the new key, not the boot-time value.
       g_game_free_camera_shim->SetToggleVk(
           g_settings->current().m2_dev_camera_toggle_vk);
+      // M2.5: re-probe controls.sii when the explicit flag flipped
+      // (e.g. the user just added the `dev_camera_toggle_vk = 0x65`
+      // line and now wants to confirm the value). We call the
+      // auto-detect unconditionally on reload — it is a no-op when
+      // the INI value is already correct, and a single fopen per
+      // candidate is cheap enough that re-running it on every INI
+      // change is fine. The toggle_vk_ itself only flips if the
+      // explicit flag flipped AND the new binding differs.
+      g_game_free_camera_shim->AutoDetectToggleVkFromControlsSii(
+          g_settings->current().m2_dev_camera_toggle_vk_explicit);
       WALKERCORE_LOG_INFO(
           "M2 shim: enabled=%d toggle_vk=0x%X (after INI reload)",
           g_game_free_camera_shim->isEnabled() ? 1 : 0,
@@ -1077,6 +1087,15 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
       g_game_free_camera_shim->toggle_vk(),
       g_game_free_camera_shim->toggle_vk());
   g_game_free_camera_shim->ProbeGDeveloperFromConfig();
+  // M2.5: auto-detect the user's controls.sii binding for
+  // dev_camera_toggle / walk_mode / free_camera. Skipped when the
+  // INI explicitly named the knob — the user has signalled
+  // "I know what I want". When skipped, this still resolves the
+  // controls.sii path so the F10 log line can show the profile's
+  // binding alongside the INI value (cross-check surface).
+  g_game_free_camera_shim->AutoDetectToggleVkFromControlsSii(
+      g_settings != nullptr &&
+      g_settings->current().m2_dev_camera_toggle_vk_explicit);
   // Bind the game window for the shim's PostMessage dispatch path.
   // FindGameHwnd() enumerates top-level windows owned by the current
   // process and picks the first visible, non-empty one (which is

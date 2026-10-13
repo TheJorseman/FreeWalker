@@ -92,6 +92,21 @@ public:
     // FrameLoop behaves as if InitHeadTracker was never called.
     void ShutdownHeadTracker();
 
+    // Test-only hook. Feeds a sample directly into the head tracker
+    // provider, bypassing the opentrack UDP socket. Production code
+    // never calls this — the per-frame conductor drives
+    // OpentrackReceiver::Tick() inside PhaseApplyMouseLook, and the
+    // receiver drains the socket non-blockingly on every frame. Test
+    // code uses this hook to drive specific head-tracker scenarios
+    // (e.g. "user turned head 30° left this frame") without standing
+    // up a real opentrack instance. No-op when head tracking is not
+    // initialised (head_tracker_ == nullptr). The sample is added to
+    // the provider's cumulative accumulator; the smoothed value
+    // converges on it through successive Sample() calls, which
+    // PhaseApplyMouseLook fires every Walking frame.
+    void feedHeadTrackerSampleForTesting(HeadTrackerSource source,
+                                         const HeadTrackerSample &s);
+
     // Movement / camera configuration. Defaults match TMRealWalk; M6 INI
     // overrides at runtime.
     void SetMovementConfig(const MovementConfig &cfg);
@@ -262,6 +277,33 @@ private:
     // the start of every RunOnce the cache stays current.
     float cached_sin_yaw_ = 0.0f;
     float cached_cos_yaw_ = 0.0f;
+
+    // M7 lander math — head tracker pose offsets (radians). These are
+    // the SMOOTHED absolute offsets from neutral reported by
+    // HeadTrackerProvider::Sample() at the start of every Walking
+    // frame. They are applied to camera_.yaw_radians / camera_.pitch_radians
+    // AFTER CameraState_AdoptPlayer copies the player body's yaw/pitch
+    // into the camera, so the head tracker rotates the camera RELATIVE
+    // to the player body rather than moving the body itself. This
+    // mirrors the TrackIR / opentrack mental model: turning your head
+    // left moves the camera left, but the body stays put — when the
+    // head returns to neutral, the camera returns to looking where the
+    // body faces, with no permanent drift.
+    //
+    // The split accumulator matters: mouse deltas go into player_.yaw_radians
+    // (persistent, where the player's "body" looks); head tracker
+    // offsets stay in head_tracker_yaw_offset_ (transient, the camera-
+    // relative head turn). Mixing them in player_.yaw_radians would
+    // make the camera snap back to a stale yaw when the head tracker
+    // disconnects (the previous bug), and would also double-count when
+    // both inputs are active in the same frame.
+    //
+    // Both offsets stay at 0.0f when head tracking is not initialised
+    // (head_tracker_ == nullptr), so the addition in Phase 6 is a no-op
+    // for the mouse-only path and the wire-up is safe on hosts without
+    // an opentrack install.
+    float head_tracker_yaw_offset_ = 0.0f;
+    float head_tracker_pitch_offset_ = 0.0f;
 
     // Camera override (set by OverrideCamera, consumed by RunOnce).
     bool camera_override_pending_ = false;

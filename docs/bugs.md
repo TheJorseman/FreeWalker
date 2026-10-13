@@ -106,12 +106,18 @@
 **Para completar M7 hoy** (post M7.1, queda pendiente el lander):
 
   - ✅ Pasos 1-4 del wiring (ver arriba).
-  - ⏳ Pendiente M7 lander: separar mouse-vs-head-tracker en acumuladores
-    distintos y sumar la pose-offset a `player_.yaw_radians`. La arquitectura
-    actual de `PhaseApplyMouseLook` trata la rotación como un campo
-    absolute — el offset EMA-smoothed del head tracker encaja como additivo,
-    pero hay que validar que no produce drift frame-a-frame. Estimación:
-    30-60 min + 2-3 tests + una live-test con opentrack corriendo.
+  - ✅ M7 lander math (commits próximos, this cycle): separar mouse-vs-head-tracker en acumuladores
+    distintos. PhaseApplyMouseLook ahora hace (a) `opentrack_receiver_->Tick()` (drain UDP),
+    (b) `head_tracker_->Sample()` (advance EMA), (c) captura `head_tracker_yaw_offset_` /
+    `head_tracker_pitch_offset_` como slots separados en FrameLoop. Phase 6 (AdoptPlayer y
+    override) suma estos offsets a `camera_.yaw_radians` / `camera_.pitch_radians` AFTER
+    `CameraState_AdoptPlayer`, invalida `precomputed_yaw_trig_valid_` para que BuildViewRotation
+    recompute desde el yaw post-offset, y clampa el pitch combinado a ±kMaxPitchRadians.
+    ShutdownHeadTracker resetea los offset fields a 0 explícitamente para que un disconnect
+    mid-session no deje la cámara congelada en la última pose. 7 nuevos tests verifican cada
+    caso: mouse-only path, head-tracker no toca player.yaw, offset suma a camera.yaw/pitch,
+    pitch clamp post-add, shutdown devuelve camera = body, trig cache invalidated cuando
+    offset > 0. Total ahora: 16,180 checks, 0 failed.
   - ⏳ Pendiente: M11 settings menu exponiendo `cfg.use_opentrack` /
     `cfg.smoothing_factor` como toggles. Hookearlos a M6 INI keys.
   - ⏳ Pendiente: thread de UDP receive. Actualmente `OpentrackReceiver::Tick`
@@ -146,7 +152,7 @@ Del game.log más reciente (DLL `6CF26C84…`, pre-M2.7 build):
 | 838 | ⚠️ Mayor | `PhysXAdapter::Install: amtrucks.exe not in-process or scan failed` | Esperado en test environment. Producción live en juego. |
 | 849 | ⚠️ Menor | `DevCameraCvarPatcher: skipped (could not discover value field for g_developer within +/- 8 kB of name VA 0x7FF631EF08C0)` | Workaround: `g_developer=1` ya está en `config.cfg`. |
 | 850 | ℹ️ Info | `M3 lander: PxScene::addActor hook SKIPPED (INI gate px_scene_hook_install = false)` | Por diseño, default-off porque rompe mod stack. |
-| 852 | ⚠️ Menor | `PolishProvider HeadTrackerProvider: stub active` | M7 lander partial. |
+| 852 | ⚠️ Menor | `PolishProvider HeadTrackerProvider: stub active` | M7 lander math done (this cycle); el stub warning se sigue emitiendo porque FreeTrackClient.dll y el path de TrackIR no están implementados, pero el path opentrack UDP→Sample→camera offset es real. |
 | 854-855 | ℹ️ Info | `D3D11 / D3D12 hook SKIPPED` | Por diseño, default-off porque rompe mod stack. |
 | 1355 | ⚠️ Mayor | `GameFreeCameraShim: Walking entry #1 (gate=off, ...)` | El shim está apagado en el INI del usuario. Acción: `game_free_camera_shim = true` o añadir `mix o_im_freecam` en controls.sii. |
 | 1357 | ⚠️ Menor | `FuelProvider: stub active — station position is a truck-local placeholder (M8 partial)` | M8 partial. Real impl needs prefab RE. |

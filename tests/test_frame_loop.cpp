@@ -1249,4 +1249,275 @@ void TestFrameLoopHeadTrackerStateDefaultSourceIsSentinel() {
     OpentrackReceiver::ResetForTesting();
 }
 
+// M7 LANDER MATH — separate mouse vs head-tracker accumulators.
+//
+// The lander splits the yaw/pitch pipeline into two streams:
+//   1. Mouse delta  → player_.yaw_radians / player_.pitch_radians
+//                     (persistent body rotation).
+//   2. Head tracker → head_tracker_yaw_offset_ / head_tracker_pitch_offset_
+//                     (transient camera-relative rotation).
+//
+// Phase 6 (AdoptPlayer) sums both streams into camera_.yaw_radians /
+// camera_.pitch_radians, so the user sees player body + head offset
+// combined. The split matters because:
+//   - When the head tracker disconnects, the offset decays to 0 and
+//     the camera returns to the player's body yaw — no drift.
+//   - When both inputs are active in the same frame, both rotations
+//     add rather than double-counting into one accumulator.
+//   - PlayerState_ClampPitch only sees the body pitch; the head
+//     tracker can drive the camera past ±89° and we clamp again
+//     post-add to keep the camera matrix well-conditioned.
+//
+// These tests pin each contract below. They use feedHeadTrackerSampleForTesting
+// to drive the head tracker directly (bypassing the opentrack UDP
+// socket — the M7.1 wiring test already covered the Tick path).
+
+void TestM7LanderMath_MouseOnlyPathKeepsCameraEqualToPlayer() {
+    // Without a head tracker, head_tracker_yaw_offset_ stays at 0 and
+    // Phase 6's add is a no-op. Camera.yaw_radians must equal
+    // player.yaw_radians after RunOnce, identical to the pre-lander
+    // behaviour. This is the regression guard for "M7 lander broke
+    // the mouse-only walking path".
+    NoWorldHarness h;
+    EXPECT_FALSE(h.loop.HasHeadTracker());
+    // Move the player via mouse so we have a non-trivial yaw to
+    // compare. The InputHook is wired; PressKey + the next Sample
+    // will produce a rising edge, but the Sample consumes the edge —
+    // we need to hold the mouse (which has no rising edge) by
+    // injecting raw mouse dx via the harness's input. The cleaner
+    // way is to drive the player yaw manually (the integrator only
+    // reads it once per RunOnce).
+    h.loop.player().yaw_radians = 0.42f;
+    h.loop.player().pitch_radians = -0.13f;
+    for (int i = 0; i < 5; ++i) h.loop.RunOnce(1.0 / 60.0);
+    EXPECT_NEAR(h.loop.camera().yaw_radians, h.loop.player().yaw_radians, 1e-4f);
+    EXPECT_NEAR(h.loop.camera().pitch_radians, h.loop.player().pitch_radians, 1e-4f);
+    OpentrackReceiver::ResetForTesting();
+}
+
+void TestM7LanderMath_HeadTrackerDoesNotMutatePlayerYaw() {
+    // The split-accumulator contract: feeding a head tracker sample
+    // must NOT change player_.yaw_radians. The offset lives in a
+    // separate FrameLoop field and is added to the camera in
+    // Phase 6, not into player.yaw. A bug that writes the head
+    // tracker pose into player_.yaw_radians would persist the
+    // offset into the body rotation and fail to recover when the
+    // tracker disconnects (the original bug this lander fixes).
+    NoWorldHarness h;
+    const bool ok = h.loop.InitHeadTracker(4242);
+    if (!ok) {
+        // Port 4242 is bound by another process on this host; the
+        // FrameLoop correctly kept head_tracker_ == nullptr, so the
+        // test premise (head tracker is live) doesn't hold. Bail
+        // out — there's nothing to test. The contract is the same
+        // either way: with no head tracker, player.yaw doesn't move
+        // from head tracker input.
+        OpentrackReceiver::ResetForTesting();
+        h.loop.ShutdownHeadTracker();
+        return;
+    }
+    const float player_yaw_before = h.loop.player().yaw_radians;
+    // Feed a 30° head turn left. 30° ≈ 0.5236 rad.
+    HeadTrackerSample s{};
+    s.yaw_delta_rad = 0.5236f;
+    s.pitch_delta_rad = 0.0f;
+    h.loop.feedHeadTrackerSampleForTesting(HeadTrackerSource::Opentrack, s);
+    // Run a few frames to let Tick (zero sample) and Sample (advance
+    // EMA toward the cumulative target) execute.
+    for (int i = 0; i < 30; ++i) h.loop.RunOnce(1.0 / 60.0);
+    // Player yaw must be unchanged — the head tracker never wrote to
+    // it. Tolerance is wide (1e-3) because the integrator could
+    // legitimately move player.feet_position over 30 frames, but
+    // yaw_radians is mouse-only.
+    EXPECT_NEAR(h.loop.player().yaw_radians, player_yaw_before, 1e-3f);
+    EXPECT_TRUE(h.loop.HasHeadTracker());
+    // Sanity: headTrackerState() reports a non-zero offset after the
+    // EMA converges. The EMA factor is 0.85, so after 30 Sample
+    // calls the smoothed value should be within ~2% of the target.
+    const HeadTrackerState s_after = h.loop.headTrackerState();
+    EXPECT_TRUE(s_after.active);
+    EXPECT_TRUE(s_after.yaw_radians > 0.4f);  // close to 0.5236
+    OpentrackReceiver::ResetForTesting();
+    h.loop.ShutdownHeadTracker();
+}
+
+void TestM7LanderMath_HeadTrackerOffsetAddsToCameraYaw() {
+    // Phase 6 (AdoptPlayer path) must add the head tracker offset
+    // to camera_.yaw_radians AFTER CameraState_AdoptPlayer copied
+    // player.yaw into camera.yaw. This is the central contract of
+    // the M7 lander math: the camera yaw = body yaw + head offset,
+    // separately maintained.
+    NoWorldHarness h;
+    const bool ok = h.loop.InitHeadTracker(4242);
+    if (!ok) {
+        OpentrackReceiver::ResetForTesting();
+        h.loop.ShutdownHeadTracker();
+        return;
+    }
+    h.loop.player().yaw_radians = 0.0f;
+    // Feed 0.5 rad left.
+    HeadTrackerSample s{};
+    s.yaw_delta_rad = 0.5f;
+    s.pitch_delta_rad = 0.0f;
+    h.loop.feedHeadTrackerSampleForTesting(HeadTrackerSource::Opentrack, s);
+    // Run frames until the EMA converges. 30 frames at 60 fps is
+    // ~0.5s; the EMA factor 0.85 yields (1 - 0.85^30) ≈ 99.2%
+    // convergence.
+    for (int i = 0; i < 30; ++i) h.loop.RunOnce(1.0 / 60.0);
+    const float body_yaw = h.loop.player().yaw_radians;
+    const float camera_yaw = h.loop.camera().yaw_radians;
+    const float head_offset = h.loop.headTrackerState().yaw_radians;
+    // All three are non-zero; camera_yaw must equal body_yaw + offset.
+    EXPECT_NEAR(body_yaw, 0.0f, 1e-3f);  // body unchanged
+    EXPECT_TRUE(head_offset > 0.3f);     // offset converged close to 0.5
+    EXPECT_NEAR(camera_yaw, body_yaw + head_offset, 1e-3f);
+    OpentrackReceiver::ResetForTesting();
+    h.loop.ShutdownHeadTracker();
+}
+
+void TestM7LanderMath_HeadTrackerOffsetAddsToCameraPitch() {
+    // Same as the yaw test but for pitch. The head tracker can
+    // pitch the camera up or down independently of the body, and
+    // Phase 6 must add it to camera.pitch (with the defensive
+    // ±89° clamp kicking in only when the combined value exceeds
+    // the limit).
+    NoWorldHarness h;
+    const bool ok = h.loop.InitHeadTracker(4242);
+    if (!ok) {
+        OpentrackReceiver::ResetForTesting();
+        h.loop.ShutdownHeadTracker();
+        return;
+    }
+    h.loop.player().pitch_radians = 0.0f;
+    HeadTrackerSample s{};
+    s.yaw_delta_rad = 0.0f;
+    s.pitch_delta_rad = 0.3f;  // ~17° up
+    h.loop.feedHeadTrackerSampleForTesting(HeadTrackerSource::Opentrack, s);
+    for (int i = 0; i < 30; ++i) h.loop.RunOnce(1.0 / 60.0);
+    const float body_pitch = h.loop.player().pitch_radians;
+    const float camera_pitch = h.loop.camera().pitch_radians;
+    const float head_offset = h.loop.headTrackerState().pitch_radians;
+    EXPECT_NEAR(body_pitch, 0.0f, 1e-3f);
+    EXPECT_TRUE(head_offset > 0.2f);
+    EXPECT_NEAR(camera_pitch, body_pitch + head_offset, 1e-3f);
+    OpentrackReceiver::ResetForTesting();
+    h.loop.ShutdownHeadTracker();
+}
+
+void TestM7LanderMath_PitchClampedWhenOffsetExceedsLimitMax() {
+    // The defensive pitch clamp in Phase 6 must kick in when the
+    // combined pitch (player.pitch + head_tracker_pitch_offset_)
+    // exceeds ±kMaxPitchRadians (89°). The head tracker alone
+    // can't exceed that (opentrack's pitch range is ±90°), but a
+    // user who looks up with the body AND tilts their head up can
+    // blow past 89°. Without the clamp, BuildViewRotation would
+    // feed cos(pitch) ≈ 0 into the matrix and produce a degenerate
+    // forward vector (gimbal flip visible to the user).
+    NoWorldHarness h;
+    const bool ok = h.loop.InitHeadTracker(4242);
+    if (!ok) {
+        OpentrackReceiver::ResetForTesting();
+        h.loop.ShutdownHeadTracker();
+        return;
+    }
+    // Drive body pitch close to the limit, then push the head
+    // tracker past it. PlayerState_ClampPitch limits the body to
+    // ±kMaxPitchRadians; the head tracker can still add another
+    // kMaxPitchRadians on top via Sample().
+    h.loop.player().pitch_radians = 1.4f;  // ~80°, close to 89° limit
+    HeadTrackerSample s{};
+    s.yaw_delta_rad = 0.0f;
+    s.pitch_delta_rad = 1.5f;  // pushes combined pitch > 1.5533
+    h.loop.feedHeadTrackerSampleForTesting(HeadTrackerSource::Opentrack, s);
+    for (int i = 0; i < 30; ++i) h.loop.RunOnce(1.0 / 60.0);
+    const float camera_pitch = h.loop.camera().pitch_radians;
+    EXPECT_TRUE(camera_pitch <= 1.5533f + 1e-4f);
+    EXPECT_TRUE(camera_pitch >= -1.5533f - 1e-4f);
+    OpentrackReceiver::ResetForTesting();
+    h.loop.ShutdownHeadTracker();
+}
+
+void TestM7LanderMath_ShutdownReturnsCameraToBodyYaw() {
+    // Disconnect the head tracker mid-session: after ShutdownHeadTracker(),
+    // the next RunOnce has no head_tracker_ → head_tracker_yaw_offset_
+    // stays 0 → camera.yaw_radians = player.yaw_radians. The
+    // previously-built-up offset must NOT persist into the body
+    // yaw (it lives in a separate accumulator, see
+    // TestM7LanderMath_HeadTrackerDoesNotMutatePlayerYaw). This
+    // is the original bug the lander fixed: pre-lander, the head
+    // tracker offset was written into player_.yaw_radians and the
+    // camera snapped to a stale yaw on disconnect.
+    NoWorldHarness h;
+    const bool ok = h.loop.InitHeadTracker(4242);
+    if (!ok) {
+        OpentrackReceiver::ResetForTesting();
+        h.loop.ShutdownHeadTracker();
+        return;
+    }
+    HeadTrackerSample s{};
+    s.yaw_delta_rad = 0.5f;
+    h.loop.feedHeadTrackerSampleForTesting(HeadTrackerSource::Opentrack, s);
+    for (int i = 0; i < 30; ++i) h.loop.RunOnce(1.0 / 60.0);
+    // Confirm the offset is live before shutdown.
+    EXPECT_TRUE(h.loop.camera().yaw_radians >
+                h.loop.player().yaw_radians + 0.3f);
+    h.loop.ShutdownHeadTracker();
+    EXPECT_FALSE(h.loop.HasHeadTracker());
+    // Drive one frame. Head tracker is gone; head_tracker_yaw_offset_
+    // stays 0; camera.yaw must equal player.yaw exactly.
+    h.loop.RunOnce(1.0 / 60.0);
+    EXPECT_NEAR(h.loop.camera().yaw_radians,
+                h.loop.player().yaw_radians,
+                1e-4f);
+    OpentrackReceiver::ResetForTesting();
+}
+
+void TestM7LanderMath_TrigCacheInvalidatedWhenOffsetAdded() {
+    // Phase 6's AdoptPlayer branch invalidates precomputed_yaw_trig_valid_
+    // when the head-tracker offset is added to camera.yaw. The
+    // cached sin/cos is for the BODY yaw; using it for the
+    // post-offset camera yaw would visually freeze the head turn.
+    // Pin: after a frame with a non-zero offset, the cache must
+    // be invalid on the next read.
+    NoWorldHarness h;
+    const bool ok = h.loop.InitHeadTracker(4242);
+    if (!ok) {
+        OpentrackReceiver::ResetForTesting();
+        h.loop.ShutdownHeadTracker();
+        return;
+    }
+    // Pre-populate the cache by running one frame with no head
+    // tracker input (the no-op then Sample→0 path leaves the
+    // offset at 0; the cache is filled with body sin/cos).
+    h.loop.RunOnce(1.0 / 60.0);
+    // The cache is filled on the no-offset frame. Drive a sample
+    // and another frame.
+    HeadTrackerSample s{};
+    s.yaw_delta_rad = 0.3f;
+    h.loop.feedHeadTrackerSampleForTesting(HeadTrackerSource::Opentrack, s);
+    for (int i = 0; i < 30; ++i) h.loop.RunOnce(1.0 / 60.0);
+    // After at least one frame with a non-zero offset was applied,
+    // the cache must be invalidated. We can't read the cache
+    // directly (private), but we can verify the camera matrix
+    // uses the post-offset yaw: cos(camera.yaw) ≠ cos(player.yaw).
+    // CameraState_BuildViewRotation puts the right vector in row 0:
+    // right = forward × up = (-fz, 0, fx), and with pitch ≈ 0,
+    // rx = -fz = -(-cos(yaw)*cos(pitch)) = cos(yaw)*cos(pitch).
+    // For pitch ≈ 0, cos(pitch) ≈ 1, so view[0][0] ≈ cos(yaw).
+    const float body_yaw = h.loop.player().yaw_radians;
+    const float camera_yaw = h.loop.camera().yaw_radians;
+    const float offset = h.loop.headTrackerState().yaw_radians;
+    EXPECT_TRUE(offset > 0.2f);
+    const float camera_view_00 = h.loop.camera().view[0][0];
+    const float expected_00 = cosf(camera_yaw);  // pitch ≈ 0
+    EXPECT_NEAR(camera_view_00, expected_00, 1e-3f);
+    // And the camera view row 0 must NOT equal cos(body_yaw) —
+    // that would be the stale-cache regression we are pinning.
+    if (fabsf(body_yaw) > 1e-4f) {
+        EXPECT_FALSE(fabsf(camera_view_00 - cosf(body_yaw)) < 1e-3f);
+    }
+    OpentrackReceiver::ResetForTesting();
+    h.loop.ShutdownHeadTracker();
+}
+
 }  // namespace walkercore

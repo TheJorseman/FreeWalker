@@ -127,6 +127,13 @@ void TestFrameLoopInitHeadTrackerIsIdempotent();
 void TestFrameLoopHeadTrackerShutdownRestoresBaseline();
 void TestFrameLoopHeadTrackerTickIsNoOpWithoutReceiver();
 void TestFrameLoopHeadTrackerStateDefaultSourceIsSentinel();
+void TestM7LanderMath_MouseOnlyPathKeepsCameraEqualToPlayer();
+void TestM7LanderMath_HeadTrackerDoesNotMutatePlayerYaw();
+void TestM7LanderMath_HeadTrackerOffsetAddsToCameraYaw();
+void TestM7LanderMath_HeadTrackerOffsetAddsToCameraPitch();
+void TestM7LanderMath_PitchClampedWhenOffsetExceedsLimitMax();
+void TestM7LanderMath_ShutdownReturnsCameraToBodyYaw();
+void TestM7LanderMath_TrigCacheInvalidatedWhenOffsetAdded();
 void TestWalkerFsmInputsPointerRefactorContract();
 void TestWalkerFsmTransitionOutCameraFromMatchesCabinSeatWhenPointerAliases();
 void TestCameraStateBuildViewRotationPitchZeroSkipsNormalisation();
@@ -827,6 +834,21 @@ int main() {
     RUN_TEST(walkercore::TestFrameLoopHeadTrackerShutdownRestoresBaseline);
     RUN_TEST(walkercore::TestFrameLoopHeadTrackerTickIsNoOpWithoutReceiver);
     RUN_TEST(walkercore::TestFrameLoopHeadTrackerStateDefaultSourceIsSentinel);
+
+    // M7 lander math — separate mouse vs head-tracker accumulators.
+    // The lander splits yaw/pitch into two streams (player body +
+    // camera-relative head offset) and sums them in Phase 6. These
+    // tests pin the split: head tracker never touches player.yaw,
+    // Phase 6 adds the offset to camera.yaw, the cache is invalidated
+    // when the offset is applied, the offset returns to 0 on
+    // disconnect, and the post-add pitch is clamped to ±89°.
+    RUN_TEST(walkercore::TestM7LanderMath_MouseOnlyPathKeepsCameraEqualToPlayer);
+    RUN_TEST(walkercore::TestM7LanderMath_HeadTrackerDoesNotMutatePlayerYaw);
+    RUN_TEST(walkercore::TestM7LanderMath_HeadTrackerOffsetAddsToCameraYaw);
+    RUN_TEST(walkercore::TestM7LanderMath_HeadTrackerOffsetAddsToCameraPitch);
+    RUN_TEST(walkercore::TestM7LanderMath_PitchClampedWhenOffsetExceedsLimitMax);
+    RUN_TEST(walkercore::TestM7LanderMath_ShutdownReturnsCameraToBodyYaw);
+    RUN_TEST(walkercore::TestM7LanderMath_TrigCacheInvalidatedWhenOffsetAdded);
 
     // WalkerFsmInputs pointer-refactor contract. The per-frame
     // conductor uses UpdateFromPointers to avoid a 152-byte/frame

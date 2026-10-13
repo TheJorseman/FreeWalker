@@ -78,6 +78,17 @@ void FrameLoop::ShutdownHeadTracker() {
         head_tracker_->Uninstall();
         head_tracker_.reset();
     }
+    // Reset the offset fields so a stale pose from the previous
+    // opentrack session cannot persist into the camera after the
+    // tracker is gone. Phase 6 adds these offsets unconditionally
+    // (the mouse-only tests rely on the no-op behaviour when the
+    // tracker never installed, which requires the fields to stay at
+    // 0.0f). Without this reset, a subsequent FrameLoop that
+    // ShutdownHeadTracker'd mid-session would briefly render the
+    // camera at player.yaw + last_known_offset (the very bug the M7
+    // lander math was written to prevent).
+    head_tracker_yaw_offset_ = 0.0f;
+    head_tracker_pitch_offset_ = 0.0f;
 }
 
 HeadTrackerState FrameLoop::headTrackerState() const {
@@ -90,6 +101,22 @@ HeadTrackerState FrameLoop::headTrackerState() const {
         return out;
     }
     return head_tracker_->Peek();
+}
+
+void FrameLoop::feedHeadTrackerSampleForTesting(HeadTrackerSource source,
+                                                  const HeadTrackerSample &s) {
+    // Test-only escape hatch. Forwards the sample to the head tracker
+    // provider's FeedSample, which adds it to the cumulative
+    // accumulator and advances the EMA target. Subsequent RunOnce()
+    // calls will Tick() the (empty) opentrack socket, call Sample() to
+    // advance the EMA, and pick up the new smoothed offset in
+    // Phase 6's camera construction. Production code never calls
+    // this — it exists so the M7 lander-math test suite can drive
+    // specific scenarios without standing up a real opentrack
+    // instance on the test host.
+    if (head_tracker_) {
+        head_tracker_->FeedSample(source, s);
+    }
 }
 
 // Out-of-line definition; required because the default destructor needs
@@ -256,6 +283,28 @@ void FrameLoop::RunOnce(double dt_seconds) {
         camera_.eye_position = camera_override_.eye_position;
         camera_.yaw_radians = camera_override_.yaw_radians;
         camera_.pitch_radians = camera_override_.pitch_radians;
+        // M7 lander math: apply the head tracker offset to the camera
+        // even on the override frame — the M5 transition tween targets
+        // the body pose, but the user's head should still rotate the
+        // camera relative to it. Without this, switching modes
+        // (cabin → on-foot) would visually freeze the head-tracker's
+        // pose until the transition completes. The override path
+        // already invalidated the trig cache (view_rotation_dirty_ +
+        // precomputed_yaw_trig_valid_ = false), so BuildViewRotation
+        // recomputes from scratch and the new offset is included.
+        camera_.yaw_radians += head_tracker_yaw_offset_;
+        camera_.pitch_radians += head_tracker_pitch_offset_;
+        // Defensive clamp: the head-tracker offset can otherwise push
+        // the post-override pitch past ±kMaxPitchRadians (89°), which
+        // BuildViewRotation does not clip and which causes a visible
+        // gimbal flip. PlayerState_ClampPitch only sees the player's
+        // pitch; the camera's pitch can land anywhere once we add the
+        // offset.
+        if (camera_.pitch_radians > kMaxPitchRadians) {
+            camera_.pitch_radians = kMaxPitchRadians;
+        } else if (camera_.pitch_radians < kMinPitchRadians) {
+            camera_.pitch_radians = kMinPitchRadians;
+        }
         // Force BuildViewRotation's rotation cache miss on the override
         // frame (yaw / pitch may have moved). The precomputed_yaw_trig_valid_
         // is invalidated so BuildViewRotation recomputes sin/cos fresh.
@@ -266,6 +315,37 @@ void FrameLoop::RunOnce(double dt_seconds) {
     } else {
         CameraState_AdoptPlayer(camera_, player_);
         camera_.eye_position.x += lateral_bob_m_;
+        // M7 lander math: add the head-tracker pose offset to the
+        // camera AFTER AdoptPlayer copies the body yaw/pitch. The
+        // body rotation stays in player_.yaw_radians (persistent);
+        // the head offset stays in head_tracker_yaw_offset_ (transient,
+        // camera-relative). When the user closes opentrack the next
+        // RunOnce's Tick() will not produce a new sample, the EMA
+        // decays the smoothed offset toward 0, and the camera returns
+        // to looking where the body faces — no permanent drift, no
+        // need to subtract a stale offset.
+        camera_.yaw_radians += head_tracker_yaw_offset_;
+        camera_.pitch_radians += head_tracker_pitch_offset_;
+        // Same defensive pitch clamp as the override branch — the
+        // head tracker can drive the post-AdoptPlayer pitch past
+        // ±89° when the user looks straight up + tilts their head,
+        // which BuildViewRotation does not clip.
+        if (camera_.pitch_radians > kMaxPitchRadians) {
+            camera_.pitch_radians = kMaxPitchRadians;
+        } else if (camera_.pitch_radians < kMinPitchRadians) {
+            camera_.pitch_radians = kMinPitchRadians;
+        }
+        // The precomputed_yaw_trig_* cache holds sin/cos of
+        // player_.yaw_radians (NOT camera_.yaw_radians after we added
+        // the offset). Invalidate the cache so BuildViewRotation's
+        // rotation-rebuild path recomputes sin/cos of the post-offset
+        // yaw value rather than feeding the player's sin/cos into the
+        // post-offset rotation matrix (which would visually freeze the
+        // head turn). The next RunOnce's PhaseApplyMouseLook will
+        // repopulate the cache from player_.yaw_radians (which hasn't
+        // changed) and the cache hits again on the next frame, so the
+        // one-frame miss cost is bounded to a single Walking tick.
+        camera_.precomputed_yaw_trig_valid_ = false;
         // Forward the cached sin/cos from PhaseApplyMouseLook into the
         // CameraState so BuildViewRotation's cache-miss path can skip
         // the local sinf/cosf for yaw (pitch still computes locally —
@@ -275,7 +355,13 @@ void FrameLoop::RunOnce(double dt_seconds) {
         // RunOnce's PhaseApplyMouseLook.
         camera_.precomputed_sin_yaw_ = cached_sin_yaw_;
         camera_.precomputed_cos_yaw_ = cached_cos_yaw_;
-        camera_.precomputed_yaw_trig_valid_ = true;
+        // NB: precomputed_yaw_trig_valid_ was set to false above; the
+        // precomputed_sin_yaw_ / precomputed_cos_yaw_ values are stale
+        // from the player body, but BuildViewRotation will skip them
+        // and recompute from camera_.yaw_radians directly. Writing the
+        // stale values here is kept only to avoid leaving the fields in
+        // an undefined state for any external reader (the diagnostic
+        // dump in M11 reads them).
         CameraState_Update(camera_);
     }
 
@@ -297,19 +383,32 @@ void FrameLoop::PhaseSampleInput() {
 }
 
 void FrameLoop::PhaseApplyMouseLook() {
-    // M7: pump the opentrack UDP socket first. Tick() is a no-op if
-    // the receiver is null or the socket failed to install (port
-    // conflict on 4242). On a tick that produces a new sample, the
-    // receiver feeds the OpentrackSource HeadTrackerSample into the
-    // HeadTrackerProvider; the smoothed pose offset is then visible
-    // through headTrackerState(). The full integration of that
-    // offset into player_.yaw_radians is the M7 lander's job —
-    // this commit closes the wiring gap (Tick called every frame,
-    // receiver constructed, provider wired) without changing the
-    // yaw math. The mouse-only path below stays source-of-truth
-    // when no head tracker is connected.
-    if (opentrack_receiver_) {
+    // M7 lander math — separate mouse vs head-tracker accumulators.
+    //
+    // The head tracker provides an ABSOLUTE pose offset (yaw/pitch
+    // relative to neutral), smoothed by an exponential moving average
+    // inside HeadTrackerProvider. The EMA only advances when somebody
+    // calls HeadTrackerProvider::Sample() — Tick() merely feeds the
+    // raw delta via FeedSample(). Without Sample(), smooth_yaw_ stays
+    // at its initial 0 and the camera never reacts to opentrack input.
+    //
+    // Call order: Tick() (drain UDP, push delta into FeedSample) →
+    // Sample() (advance the EMA, read smoothed pose) → store the
+    // smoothed offsets in the FrameLoop's separate accumulator slots
+    // (NOT into player_.yaw_radians). Phase 6 then adds them to the
+    // CAMERA after AdoptPlayer, so the head tracker rotates the
+    // camera relative to the body rather than the body itself.
+    //
+    // Skip the whole block when head_tracker_ is null (the receiver
+    // is null in lockstep — InitHeadTracker constructs both or neither).
+    // The pre-existing fields head_tracker_yaw_offset_ /
+    // head_tracker_pitch_offset_ stay at 0.0f and Phase 6's add is a
+    // no-op, which is the exact pre-lander behaviour.
+    if (head_tracker_) {
         opentrack_receiver_->Tick(head_tracker_.get());
+        const HeadTrackerState state = head_tracker_->Sample();
+        head_tracker_yaw_offset_ = state.yaw_radians;
+        head_tracker_pitch_offset_ = state.pitch_radians;
     }
 
     // Sensitivity in config is "radians per raw input unit". Each unit is
@@ -324,6 +423,15 @@ void FrameLoop::PhaseApplyMouseLook() {
     // Raw input: mouse_dx>0 means mouse moved right (turning the player
     // right means turning the camera CW from above, which is yaw -= dx).
     // mouse_dy>0 means mouse moved DOWN (looking down means pitch -= dy).
+    //
+    // Mouse writes into player_.yaw_radians / player_.pitch_radians
+    // (persistent body rotation). Head tracker writes into
+    // head_tracker_yaw_offset_ / head_tracker_pitch_offset_ (transient
+    // camera-relative head rotation, see above). The two are kept
+    // strictly separate so a head-tracker disconnect returns the
+    // camera to the player's body yaw (no drift) and a simultaneous
+    // mouse + head-tracker frame adds both rotations rather than
+    // double-counting into one accumulator.
     const float sens = movement_cfg_.mouseSensitivityRadPerUnit;
     player_.yaw_radians -= static_cast<float>(last_input_.mouse_dx) * sens;
     player_.pitch_radians -= static_cast<float>(last_input_.mouse_dy) * sens;

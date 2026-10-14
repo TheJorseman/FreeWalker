@@ -30,6 +30,8 @@
 - ⚠️ Pendiente MAYOR: el user debe activar el shim manualmente (`game_free_camera_shim = true` en INI) o añadir `mix o_im_freecam \`keyboard.f8?0\`` en `controls.sii`. El smart-default no flipea si no encuentra binding a `o_im_freecam` en el profile del usuario (la mayoría de las configs stock no lo tienen). Documentado en `docs/walkthrough.md` §3.
 - ⚠️ Pendiente MAYOR: el shim requiere `g_console=1` (no solo `g_developer=1`) para que la dispatch llegue al dev free cam. La mayoria de las configs stock NO tienen `g_console=1` — hay que editar `config.cfg` a mano o ejecutar `g_console 1` en la dev console del juego. Documentado en walkthrough §4.
 - ⚠️ Pendiente MAYOR (Oct 2026 user report): F11 nativo en ATS tiene un efecto visible no controlado por WalkerCore (cycles to camera 0). Para evitar la interacción, el user puede fijar `dev_camera_toggle_vk = 0x77` (F8) u otro VK que no choque con el binding nativo del juego.
+- ✅ Bug CERRADO en F4.0d (`3650fae`, Oct 2026): la guarda `if (g_developer_value_ == 1) { /* skip auto-pin */ }` añadida por `ef63d4d` se basaba en la premisa **falsa** de que "SCS intercepta F11 antes de la action registry cuando `g_developer=1`". Live test (ATS 1.61.3.1s, `g_developer "1"` AND `g_console "1"` en config.cfg, `mix camdbg \`keyboard.f11?0\`` en controls.sii) demostró que F11 SIEMPRE va a `camdbg` primero — el SCS dev free camera shortcut NO intercepta F11 antes de la action registry en este build. La guarda fue eliminada: ahora el auto-pin re-pinea a 0x77 (F8) cuando hay conflicto, **independientemente** del valor de `g_developer`. Tres nuevos tests regresivos cubren `g_developer ∈ {1, 2, -1}` + el path `g_developer=0` previo. La nota en `GameFreeCameraShim.cpp:945-954` describe el cambio y la advertencia "AUTO-RE-PIN skipped — g_developer=1 enables SCS F11 interception" desapareció.
+- ⚠️ Pendiente MAYOR (Oct 2026, sin resolver tras F4.0d): el dev free camera toggle real NO está enlazado a ningún VK bindable en ATS 1.61.3.1s. El re-pin a F8 (0x77) sólo detiene el shadow de `camdbg`; **no activa el dev free camera**. El workaround manual es abrir la consola dev (`~` por defecto) y ejecutar el concommand `free_camera`. WalkerCore's `dev_cvar_patcher` ya fija `g_developer=1` en memoria; la pieza que falta es el toggle key concommand (o un hook al concommand processor, fuera del scope de este ciclo).
 
 ## M2 long-term — Camera state dispatcher hijack (in-process)
 **Estado general.** Stub MinHook-ready, default `false` (safe). RE-bloqueado para producción — la signature del dispatcher de SCS camera state en `amtrucks.exe` no se ha encontrado todavía.
@@ -57,6 +59,7 @@
 
 ## M6 — Configuración (INI)
 - ✅ CERRADO en `c46fc23` (M2.7): migration block one-shot en LoadFromPath para sentinel-managed values con defaults legacy (0x30/0x60 → 0x7A). Ver `src/adapter/Settings.cpp`.
+- ✅ CERRADO en `3650fae` (F4.0 + F4.0d): la migración F4.0 ahora solo fuerza `game_free_camera_shim = false` cuando `dev_camera_toggle_vk ∈ {0x30, 0x60}` (los dos defaults legacy broken). Con F11 (0x7A, default moderno) la preferencia `= true` del user se preserva. La guarda F4.0d del auto-pin (ver M2 arriba) garantiza que cualquier colisión `mix camdbg/f11` re-pinea el dispatch a un fallback no-bound (F8/F9/F7/F6) sin importar `g_developer`.
 - ✅ CERRADO en `c46fc23`: comentario "Default VK_NUMPAD0 (0x60)" en `dev_camera_toggle_vk` save-block reemplazado por docs VK_F11. Validated por el test round-trip.
 - ⚠️ Menor: los hot-paths de sentinel management requieren que el archivo INI esté bien-formado (UTF-8 sin BOM, líneas LF/CRLF aceptadas). Una edición manual con caracteres non-ASCII puede romper el sentinel parser. No documentado en walkthrough — pendiente.
 
@@ -175,7 +178,7 @@ Del game.log más reciente (DLL `6CF26C84…`, pre-M2.7 build):
 
 ## Próximos pasos sugeridos (orden de impacto)
 
-1. **HIGH — shim M2.7 verification.** Confirmar que tras reiniciar ATS con la DLL `764A5724…`, el INI se migra a `0x7a`, y F10 + `game_free_camera_shim = true` activa dev free cam. Si no, investigar g_console=1 missing.
+1. **HIGH — shim M2.7 + F4.0d verification.** Confirmar que tras reiniciar ATS con la DLL `E7F535BD…` (HEAD `3650fae`), el INI se preserva con `game_free_camera_shim = true` + `dev_camera_toggle_vk = 0x7a` (F4.0 conditional), y que el GLE `game.log.txt` muestra el `AUTO-RE-PIN -> dispatched VK re-pinned from 0x7A to 0x77 (no controls.sii collision for 0x77, g_developer=1)` (F4.0d unconditional). Si no aparece el AUTO-RE-PIN, los `controls_sii_conflict_*` counters en el F12 dump indicarán si el shim está escaneando el path correcto. Después del fix, **el dev free camera aún requiere `~` + `free_camera`** — el re-pin solo detiene el shadow de camdbg.
 2. **MEDIUM — M2 long-term RE plan.** Live debugger (LLDB o WinDbg) atachado a `amtrucks.exe` corriendo para:
    - Identificar el camera state dispatcher (camera free-roaming manager vtable slot)
    - Identificar el slot 14 de PxScene (probablemente `addActors` por contexto de firma)

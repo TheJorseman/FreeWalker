@@ -918,37 +918,50 @@ void GameFreeCameraShim::LogControlsSiiVkConflictIfAny(
         "GameFreeCameraShim: controls.sii CONFLICT (toggle_vk=0x%X "
         "is bound to action(s): %s in %s). The shim's F10 Walking "
         "dispatch will press this key, and the SCS action registry "
-        "may route the press to the bound action(s) instead of the "
-        "dev free-camera shortcut. In g_developer=1 mode the SCS "
-        "engine intercepts F11 BEFORE the action registry, so the "
-        "dev cam toggle wins; for any other VK the bound action "
-        "shadows the dispatch. To avoid the conflict, either: "
+        "will route the press to the bound action(s) (e.g. "
+        "`mix camdbg \\`keyboard.f11?0\\``) instead of the dev "
+        "free-camera shortcut. Verified live on ATS 1.61.3.1s "
+        "(Oct 2026): the SCS engine does NOT intercept F11 BEFORE "
+        "the action registry even with `g_developer \"1\"` AND "
+        "`g_console \"1\"` set in config.cfg — F11 always hits "
+        "camdbg first. To avoid the conflict, either: "
         "(a) re-pin the dispatch VK via `[m2] dev_camera_toggle_vk = "
         "0xHH` in WalkerCore.ini (recommended: F8 = 0x77, F9 = 0x78), "
         "or (b) remove the conflicting binding from controls.sii. "
-        "See docs/integration.md §M2.7.",
+        "The auto-re-pin block below handles (a) automatically when "
+        "the user has not pinned the dispatch VK explicitly.",
         toggle_vk_, joined.c_str(), path.c_str());
     // M2.7 follow-up (Oct 2026): if the user has not pinned the
     // dispatch VK via the INI, try to auto-re-pin to the first
     // fallback key that is NOT bound in controls.sii. This way the
-    // very next F10 dispatch already activates the dev free camera
-    // via a clean key, without requiring the user to manually edit
-    // WalkerCore.ini.
+    // very next F10 Walking dispatch presses a key the action
+    // registry ignores, and the shim's log line surfaces the actual
+    // problem (the dev free camera shortcut may not be wired to ANY
+    // bindable key in this build — see the F12 dump for the manual
+    // `~` console workaround).
     //
     // Fallback list: F8=0x77, F9=0x78, F7=0x76, F6=0x75 — keys that
-    // are unlikely to be bound to camera actions but are still
-    // recognised by the SCS dev free-camera shortcut path.
+    // are unlikely to be bound to camera actions in stock ATS
+    // profiles.
     //
-    // CRITICAL GATE (Oct 2026 live test fix): the auto-pin MUST stay
-    // at F11 when `g_developer == 1`.  In that mode the SCS engine
-    // intercepts F11 BEFORE the action registry — the controls.sii
-    // camdbg binding does NOT shadow the shim's F11 dispatch, and
-    // F11 is the ONLY key that toggles the dev free camera.  Re-
-    // pinning to F8 would dispatch a key the SCS engine ignores,
-    // leaving the dev free camera still off.  When `g_developer`
-    // is not 1 (value 0, 2, or unprobed), SCS does NOT intercept F11
-    // first; the action registry wins and camdbg fires.  In that
-    // case the auto-pin MUST re-target a non-bound key.
+    // CRITICAL UPDATE (Oct 2026 live fix): the previous gate that
+    // stayed at F11 when `g_developer == 1` was REMOVED. Live test
+    // on ATS 1.61.3.1s (amtrucks.exe 1.61.3.1s, config.cfg with
+    // `g_developer \"1\"` AND `g_console \"1\"`, controls.sii binding
+    // `mix camdbg \\`keyboard.f11?0\\``) showed that pressing F11
+    // STILL cycles the interior camera (camdbg wins, SCS does NOT
+    // intercept F11 first). The premise that "g_developer=1 enables
+    // SCS F11 interception" was wrong for this build. Without the
+    // auto-pin the shim would dispatch F11 every Walking transition,
+    // the user would see the camera cycle (not dev free cam), and
+    // F10 would still take a screenshot (F10 is also bound to
+    // `mix screenshot`). The fix is unconditional auto-pin: any
+    // camdbg/F11 collision in controls.sii re-targets the dispatch to
+    // a non-bound fallback. When g_developer != 1 the same logic
+    // already worked (the old gate was a no-op). Removing the gate
+    // also removes the dead branch that emitted a misleading
+    // "AUTO-RE-PIN skipped" warning telling the user to verify
+    // g_console=1 when the real problem was the action registry.
     //
     // Implementation notes: the array is a function-local `constexpr`
     // so the linker does not emit a file-scope initializer symbol.
@@ -958,69 +971,55 @@ void GameFreeCameraShim::LogControlsSiiVkConflictIfAny(
     // game-time 00:01:00 diagnostics emit AFTER the previous 60-90 s
     // wait windows. Current smoke test uses 120 s wait and passes.
     if (!ini_overrides_toggle_vk_) {
-        if (g_developer_value_ == 1) {
-            // SCS intercepts F11 first — auto-pin would be harmful.
-            // Stay at the default 0x7A (F11) so the shim dispatches
-            // the key the dev free camera shortcut actually listens
-            // to.
-            WALKERCORE_LOG_WARN(
-                "GameFreeCameraShim: AUTO-RE-PIN skipped — "
-                "g_developer=1 enables SCS F11 interception BEFORE "
-                "the action registry, so the controls.sii camdbg "
-                "binding does NOT shadow the shim's F11 dispatch. "
-                "The shim will keep dispatching VK=0x7A (F11) and "
-                "the dev free camera should activate on the next "
-                "F10 Walking entry. (If it does not, verify "
-                "`uset g_console \"1\"` is also in config.cfg — the "
-                "SCS engine requires BOTH g_developer=1 AND "
-                "g_console=1 for the F11 shortcut to fire.)");
-        } else {
-            constexpr unsigned int kFallbackList[] = {0x77u, 0x78u, 0x76u, 0x75u};
-            bool re_pinned = false;
-            for (size_t i = 0;
-                 i < sizeof(kFallbackList) / sizeof(kFallbackList[0]);
-                 ++i) {
-                const unsigned int fb_vk = kFallbackList[i];
-                if (fb_vk == toggle_vk_) {
-                    continue;
-                }
-                const std::vector<std::string> fb_hits =
-                    FindActionsBoundToVkForTesting(path, fb_vk);
-                if (fb_hits.empty()) {
-                    WALKERCORE_LOG_WARN(
-                        "GameFreeCameraShim: AUTO-RE-PIN -> "
-                        "dispatched VK re-pinned from 0x%X to 0x%X "
-                        "(no controls.sii collision for 0x%X, and "
-                        "g_developer=%d — SCS does NOT intercept F11 "
-                        "before the action registry in this mode, so "
-                        "a F8 dispatch is the only way to reach the "
-                        "shim). To make the re-pin permanent, set "
-                        "`[m2] dev_camera_toggle_vk = 0x%X` in "
-                        "WalkerCore.ini. NOTE: when g_developer is "
-                        "not 1, the SCS dev free camera shortcut "
-                        "may not be reachable through any VK; the "
-                        "shim can still synthesise the press but "
-                        "the visual result depends on whether the "
-                        "dev free camera is active in this build.",
-                        toggle_vk_, fb_vk, fb_vk,
-                        g_developer_value_, fb_vk);
-                    toggle_vk_ = fb_vk;
-                    re_pinned = true;
-                    break;
-                }
+        constexpr unsigned int kFallbackList[] = {0x77u, 0x78u, 0x76u, 0x75u};
+        bool re_pinned = false;
+        for (size_t i = 0;
+             i < sizeof(kFallbackList) / sizeof(kFallbackList[0]);
+             ++i) {
+            const unsigned int fb_vk = kFallbackList[i];
+            if (fb_vk == toggle_vk_) {
+                continue;
             }
-            if (!re_pinned) {
+            const std::vector<std::string> fb_hits =
+                FindActionsBoundToVkForTesting(path, fb_vk);
+            if (fb_hits.empty()) {
                 WALKERCORE_LOG_WARN(
-                    "GameFreeCameraShim: AUTO-RE-PIN FAILED — every "
-                    "fallback key (F8=0x77, F9=0x78, F7=0x76, "
-                    "F6=0x75) is bound in controls.sii. The shim "
-                    "dispatch will continue to be shadowed by the "
-                    "conflicting action(s). Edit controls.sii to "
-                    "free one of the fallbacks, or set `[m2] "
-                    "dev_camera_toggle_vk = 0xHH` in WalkerCore.ini "
-                    "to a non-conflicting VK. g_developer=%d.",
-                    g_developer_value_);
+                    "GameFreeCameraShim: AUTO-RE-PIN -> dispatched "
+                    "VK re-pinned from 0x%X to 0x%X (no "
+                    "controls.sii collision for 0x%X, "
+                    "g_developer=%d). The very next F10 Walking "
+                    "dispatch will press 0x%X instead of 0x%X. To "
+                    "make the re-pin permanent, set `[m2] "
+                    "dev_camera_toggle_vk = 0x%X` in "
+                    "WalkerCore.ini. NOTE: the SCS dev free camera "
+                    "shortcut is not bound to any of the F6..F9 "
+                    "fallbacks in ATS 1.61.3.1s — the re-pin only "
+                    "stops the camdbg shadow. To actually enable "
+                    "the dev free camera, open the dev console "
+                    "(`~` key by default) and type `free_camera`, "
+                    "or press the SCS dev free camera UI button "
+                    "(`o_im_freecam` in some builds). WalkerCore's "
+                    "dev_cvar_patcher already sets g_developer=1 "
+                    "in memory; the dev camera toggle key is the "
+                    "missing piece.",
+                    toggle_vk_, fb_vk, fb_vk,
+                    g_developer_value_, fb_vk, toggle_vk_, fb_vk);
+                toggle_vk_ = fb_vk;
+                re_pinned = true;
+                break;
             }
+        }
+        if (!re_pinned) {
+            WALKERCORE_LOG_WARN(
+                "GameFreeCameraShim: AUTO-RE-PIN FAILED — every "
+                "fallback key (F8=0x77, F9=0x78, F7=0x76, "
+                "F6=0x75) is bound in controls.sii. The shim "
+                "dispatch will continue to be shadowed by the "
+                "conflicting action(s). Edit controls.sii to "
+                "free one of the fallbacks, or set `[m2] "
+                "dev_camera_toggle_vk = 0xHH` in WalkerCore.ini "
+                "to a non-conflicting VK. g_developer=%d.",
+                g_developer_value_);
         }
     } else {
         WALKERCORE_LOG_WARN(
@@ -1028,7 +1027,9 @@ void GameFreeCameraShim::LogControlsSiiVkConflictIfAny(
             "explicitly set `[m2] dev_camera_toggle_vk` in "
             "WalkerCore.ini (ini_overrides_toggle_vk_=true). The "
             "shim dispatch will use the INI-specified VK regardless "
-            "of controls.sii collisions. g_developer=%d.",
+            "of controls.sii collisions. g_developer=%d. To stop "
+            "the camdbg shadow, either edit controls.sii or change "
+            "`[m2] dev_camera_toggle_vk` to a non-bound VK.",
             g_developer_value_);
     }
 }

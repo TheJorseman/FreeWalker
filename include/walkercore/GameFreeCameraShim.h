@@ -131,6 +131,15 @@ public:
     // the tests call this. The production path sets supported_ via
     // ProbeGDeveloperFromConfig, which reads the user's config.cfg.
     void SetSupportedForTesting(bool s) { supported_ = s; }
+    // Test seam for the `g_developer_value_` cached state. The
+    // production path is ProbeGDeveloperFromConfig parsing
+    // `uset g_developer "X"` from the user's config.cfg. Tests
+    // install the value directly to exercise the camdbg/F11
+    // auto-pin path under different `g_developer` values without
+    // needing the parser. M2.7d (Oct 2026): the auto-pin gate
+    // was removed, so any non-default `g_developer` value must
+    // still trigger the re-pin when a controls.sii conflict exists.
+    void SetGDeveloperValueForTesting(int v) { g_developer_value_ = v; }
     int walks_entered() const { return walks_entered_; }
     int toggles_dispatched() const { return toggles_dispatched_; }
     int last_dispatch_ms() const { return last_dispatch_ms_; }

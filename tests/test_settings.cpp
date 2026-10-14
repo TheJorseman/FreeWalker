@@ -513,6 +513,7 @@ void TestIniM2D3DHookGatesParseAndDefault() {
         FileWriter w(path);
         w << "[m2]\n";
         w << "game_free_camera_shim = true\n";
+        w << "dev_camera_toggle_vk = 0x30\n";  // legacy top-row '0' — exercises the migration gate
         w << "camera_hijack = false\n";
         w << "d3d11_hook = true\n";
         w << "d3d12_hook = true\n";
@@ -760,8 +761,15 @@ void TestIniM2GameFreeCameraShimDefaultIsFalse() {
 
 void TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse() {
     // A pre-existing INI with the previous default of `true` for
-    // game_free_camera_shim gets auto-migrated to `false` on load
-    // and the migration persists to disk. After the migration the
+    // game_free_camera_shim AND the legacy VK=0x30 (top-row '0')
+    // gets auto-migrated to `false` on load and the migration
+    // persists to disk. The VK gate is intentional: the legacy
+    // M2.5/2.6 default paired shim=true with a top-row/Numpad-0
+    // key that does NOT toggle the dev free camera in
+    // amtrucks.exe 1.61.3.1s — the shim is a silent no-op for
+    // users on the stock profile, so we force it off to avoid
+    // confusing SendInput diagnostics. With F11 (0x7A, the SCS
+    // dev shortcut) the shim stays on. After the migration the
     // second load must NOT re-fire (idempotent).
     const std::string path = MakeTempIniPath("m2_shim_migrate");
     std::remove(path.c_str());
@@ -770,6 +778,7 @@ void TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse() {
         FileWriter w(path);
         w << "[m2]\n";
         w << "game_free_camera_shim = true\n";
+        w << "dev_camera_toggle_vk = 0x30\n";  // legacy top-row '0'
     }
 
     // First load — migration fires.
@@ -791,6 +800,44 @@ void TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse() {
     SettingsStore reader2;
     EXPECT_TRUE(reader2.LoadFromPath(path));
     EXPECT_FALSE(reader2.current().m2_game_free_camera_shim);
+
+    std::remove(path.c_str());
+}
+
+void TestIniM2GameFreeCameraShimPreservedWhenVkIsModern() {
+    // The complementary positive case: a pre-existing INI with
+    // shim=true AND dev_camera_toggle_vk=0x7A (F11, the SCS dev
+    // shortcut verified in amtrucks.exe 1.61.3.1s) must NOT be
+    // migrated. The shim is the user's explicit choice paired
+    // with a key that actually works; auto-disabling it would
+    // silently break a working setup. This is the regression
+    // guard for the F10 "F10 me da captura" bug reported on
+    // 2026-10-13: an unconditional migration would clobber the
+    // shim on every load.
+    const std::string path = MakeTempIniPath("m2_shim_modern_vk");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "game_free_camera_shim = true\n";
+        w << "dev_camera_toggle_vk = 0x7A\n";  // F11
+    }
+
+    SettingsStore reader;
+    EXPECT_TRUE(reader.LoadFromPath(path));
+    EXPECT_TRUE(reader.current().m2_game_free_camera_shim);
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x7Au);
+
+    // The migration must NOT have persisted anything to disk.
+    {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const std::string content = ss.str();
+        EXPECT_TRUE(content.find("game_free_camera_shim = true") !=
+                    std::string::npos);
+    }
 
     std::remove(path.c_str());
 }
@@ -1151,6 +1198,7 @@ void TestIniM2LegacyPatchSkipsNonDefaultValues() {
         FileWriter w(path);
         w << "[m2]\n";
         w << "game_free_camera_shim = true\n";
+        w << "dev_camera_toggle_vk = 0x30\n";  // legacy top-row '0' — exercises the migration gate
     }
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));

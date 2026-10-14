@@ -586,18 +586,30 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     // migrate is a no-op (the sentinel persists the not-explicit
     // status).
     bool migrated = false;
-    if (current_.m2_game_free_camera_shim) {
+    if (current_.m2_game_free_camera_shim &&
+        (current_.m2_dev_camera_toggle_vk == 0x30u ||
+         current_.m2_dev_camera_toggle_vk == 0x60u)) {
         // The shim is currently no-op for the stock ATS 1.61.x
-        // profile: Numpad-0 is bound to `dbglockpos` (debug lock
-        // position), not to the dev free camera toggle. The dev
-        // free camera is UI-button only (`o_im_freecam`) with no
-        // default key binding. Users who want this shim to work
-        // must bind Numpad-0 to the dev free camera action in
-        // their active profile's controls.sii AND have a clean DI8
-        // keyboard pipeline (no ReShade + OptiScaler + RenoDX + DXVK
-        // mod stack on top of DXGI exclusive fullscreen). Flip
-        // back to false so the shim doesn't spam dispatch log
-        // lines that accomplish nothing.
+        // profile when paired with a legacy VK: 0x30 (top-row
+        // '0') was the M2.6/M2.7a default and is NOT the SCS dev
+        // free camera toggle in amtrucks.exe 1.61.3.1s; 0x60
+        // (Numpad-0) is bound to `dbglockpos` (debug lock
+        // position) in the stock profile, not to the dev free
+        // camera toggle. The dev free camera toggle that ACTUALLY
+        // works in this build is VK_F11 (0x7A): SCS intercepts
+        // F11 before the action registry when g_developer=1 AND
+        // g_console=1 are set in config.cfg. With any non-legacy
+        // VK the shim is a useful feature (the F10 Walking entry
+        // -> F11 SendInput path verified live Oct 2026), so the
+        // migration only fires for the two known-broken legacy
+        // defaults. Users who want the shim paired with a legacy
+        // VK must bind the corresponding key to the dev free
+        // camera action in their active profile's controls.sii
+        // AND have a clean DI8 keyboard pipeline (no ReShade +
+        // OptiScaler + RenoDX + DXVK mod stack on top of DXGI
+        // exclusive fullscreen). Flip back to false so the shim
+        // doesn't spam dispatch log lines that accomplish
+        // nothing.
         WALKERCORE_LOG_WARN(
             "Settings: [m2] game_free_camera_shim was true; forcing "
             "to false (the stock ATS 1.61.x profile binds Numpad-0 "

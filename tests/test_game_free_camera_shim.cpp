@@ -1387,4 +1387,73 @@ void TestGameFreeCameraShimAutoRePinDoesNotFireWhenNoConflict() {
     std::remove(path.c_str());
 }
 
+void TestGameFreeCameraShimAutoRePinFiresWhenGDeveloperEqualsOne() {
+    // M2.7d (Oct 2026 live fix): the previous implementation gated the
+    // auto-pin on `g_developer_value_ != 1` and stayed at F11 when
+    // g_developer was 1, on the false premise that "SCS intercepts F11
+    // BEFORE the action registry" in g_developer=1 mode. Live test on
+    // ATS 1.61.3.1s (config.cfg with g_developer "1" AND g_console
+    // "1", controls.sii binding `mix camdbg \`keyboard.f11?0\``)
+    // showed that F11 STILL cycles the interior camera (camdbg wins,
+    // SCS does NOT intercept F11 first). The gate was wrong; auto-pin
+    // must fire regardless of the g_developer value as long as
+    // ini_overrides_toggle_vk_ is false.
+    const std::string path = MakeTempPath("auto_repin_gdev_one");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix camdbg `keyboard.f11?0`\"\n"));
+    auto s = MakeShim();
+    // Install the production value that would have come from
+    // ProbeGDeveloperFromConfig reading `uset g_developer "1"`.
+    s->SetGDeveloperValueForTesting(1);
+    EXPECT_FALSE(s->ini_overrides_toggle_vk());
+    const unsigned int prev_vk = s->toggle_vk();
+    EXPECT_EQ(prev_vk, 0x7Au);  // default F11
+    s->LogControlsSiiVkConflictIfAny(path);
+    // Auto-pin fires → first new VK is F8.
+    EXPECT_EQ(s->toggle_vk(), 0x77u);
+    EXPECT_TRUE(s->controls_sii_conflict_detected_for_testing());
+    EXPECT_EQ(s->controls_sii_conflict_actions_for_testing()[0],
+              std::string("camdbg"));
+    EXPECT_NE(s->toggle_vk(), prev_vk);
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimAutoRePinFiresWhenGDeveloperEqualsTwo() {
+    // M2.7d sibling case: g_developer="2" (the legacy "dev cvar mode"
+    // value). The previous gate stayed at F11 here too because
+    // g_developer_value_ was not 0. With the gate gone, auto-pin
+    // must fire. The behavior must match g_developer=0/1/2/-1.
+    const std::string path = MakeTempPath("auto_repin_gdev_two");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix camdbg `keyboard.f11?0`\"\n"));
+    auto s = MakeShim();
+    s->SetGDeveloperValueForTesting(2);
+    s->LogControlsSiiVkConflictIfAny(path);
+    EXPECT_EQ(s->toggle_vk(), 0x77u);
+    EXPECT_TRUE(s->controls_sii_conflict_detected_for_testing());
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimAutoRePinFiresWhenGDeveloperUnprobed() {
+    // M2.7d sibling case: g_developer_value_=-1 (unprobed, e.g. the
+    // user has no config.cfg on this host). The auto-pin must still
+    // fire because the conflict in controls.sii is unambiguous. The
+    // previous gate's `g_developer_value_ == 1` branch could not
+    // match -1, so this case already worked in the old code; the
+    // regression guard is here so a future refactor that adds another
+    // gate (e.g. `g_developer_value_ >= 0`) is caught.
+    const std::string path = MakeTempPath("auto_repin_gdev_unprobed");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix camdbg `keyboard.f11?0`\"\n"));
+    auto s = MakeShim();
+    s->SetGDeveloperValueForTesting(-1);
+    s->LogControlsSiiVkConflictIfAny(path);
+    EXPECT_EQ(s->toggle_vk(), 0x77u);
+    EXPECT_TRUE(s->controls_sii_conflict_detected_for_testing());
+    std::remove(path.c_str());
+}
+
 }  // namespace walkercore

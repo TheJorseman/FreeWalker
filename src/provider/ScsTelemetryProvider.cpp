@@ -251,7 +251,62 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
         std::strcmp(cfg->id, SCS_TELEMETRY_CONFIG_truck) == 0;
     const bool is_trailer =
         std::strcmp(cfg->id, SCS_TELEMETRY_CONFIG_trailer) == 0;
-    if (!is_truck && !is_trailer) {
+    // M9 multi-trailer lander (cycle 2026-10-14): parse the
+    // indexed trailer id form ("trailer.0", "trailer.1", etc.) so
+    // the configuration event for each attached trailer slot is
+    // routed to the right `TrailerSlot` in `s.trailers[]`. The
+    // bare "trailer" id is the SCS convention for the primary
+    // (slot 0); we map it to index 0 for source compatibility.
+    //
+    // Index parsing strategy: scan past the "trailer" prefix
+    // looking for a literal '.' followed by zero or more ASCII
+    // digits and a null terminator. Out-of-range indices
+    // (>= kMaxTrailerSlots or non-numeric) drop the event with a
+    // one-shot warning per session so the user sees the issue
+    // without log spam.
+    int trailer_slot = -1;
+    if (is_trailer) {
+        // Case 1: bare "trailer" → primary (slot 0).
+        trailer_slot = 0;
+    } else {
+        // Case 2: "trailer.<index>" → index from the suffix.
+        static constexpr char kTrailerPrefix[] = "trailer.";
+        const size_t plen = sizeof(kTrailerPrefix) - 1;
+        if (std::strncmp(cfg->id, kTrailerPrefix, plen) == 0) {
+            const char *digits = cfg->id + plen;
+            // Require at least one digit and nothing after it.
+            if (*digits >= '0' && *digits <= '9') {
+                int parsed = 0;
+                bool overflow = false;
+                while (*digits >= '0' && *digits <= '9') {
+                    const int d = *digits - '0';
+                    if (parsed > (999 - d)) {
+                        overflow = true;
+                        break;
+                    }
+                    parsed = parsed * 10 + d;
+                    ++digits;
+                }
+                if (!overflow && *digits == '\0' &&
+                    parsed >= 0 &&
+                    static_cast<size_t>(parsed) <
+                        TruckState::kMaxTrailerSlots) {
+                    trailer_slot = parsed;
+                }
+            }
+        }
+    }
+    if (trailer_slot >= 0) {
+        // We do NOT exit early when the trailer slot is invalid:
+        // the rest of this function writes to the trailer fields,
+        // but only when the parsed slot is in range. Without this
+        // gate, an out-of-range index would silently write to
+        // stack memory outside `s.trailers[]`.
+        // The trailer_* aliases at the end of this function keep
+        // backwards compatibility for single-trailer consumers
+        // (CouplingProvider, F12 dump) by mirroring slot 0.
+    }
+    if (!is_truck && trailer_slot < 0) {
         return;
     }
     // M9 lander: log once per trailer config so the diagnostic
@@ -289,16 +344,25 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
                     s.hook_position.z = attr->value.value_dvector.z;
                     s.has_hook_position = true;
                 } else {
-                    // Trailer config: hook_position is the king-pin
-                    // in trailer-local space. Stored raw; the world
-                    // transform is computed in
-                    // CouplingProvider::WaypointForStep when both
-                    // trailer_hook_position and trailer_placement
-                    // are present.
-                    s.trailer_hook_position.x = attr->value.value_dvector.x;
-                    s.trailer_hook_position.y = attr->value.value_dvector.y;
-                    s.trailer_hook_position.z = attr->value.value_dvector.z;
-                    s.has_trailer_hook_position = true;
+                    // M9 multi-trailer lander (cycle 2026-10-14):
+                    // write to the slot selected by the parsed
+                    // `trailer.<index>` id (or slot 0 for the bare
+                    // "trailer" id, which is the primary).
+                    TruckState::TrailerSlot &slot =
+                        s.trailers[trailer_slot];
+                    slot.hook_position.x = attr->value.value_dvector.x;
+                    slot.hook_position.y = attr->value.value_dvector.y;
+                    slot.hook_position.z = attr->value.value_dvector.z;
+                    slot.has_hook_position = true;
+                    // Backwards-compat aliases: keep the primary
+                    // trailer's hook in `trailer_hook_position` so
+                    // single-trailer consumers (CouplingProvider,
+                    // DiagnosticDump F12 dump) keep working without
+                    // changes. The aliases mirror slot 0 only.
+                    if (trailer_slot == 0) {
+                        s.trailer_hook_position = slot.hook_position;
+                        s.has_trailer_hook_position = true;
+                    }
                 }
             }
         } else if (is_truck && std::strcmp(attr->name,
@@ -348,12 +412,27 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
                     s.has_model_id = (i > 0);
                 } else {
                     size_t i = 0;
+                    // M9 multi-trailer lander (cycle 2026-10-14):
+                    // write to the selected slot's model_id[] AND
+                    // mirror slot 0 into the backwards-compat
+                    // `trailer_model_id` alias so single-trailer
+                    // consumers keep working unchanged.
+                    TruckState::TrailerSlot &slot =
+                        s.trailers[trailer_slot];
                     for (; i + 1 < TruckState::kTrailerModelIdCapacity && src[i] != '\0';
                          ++i) {
-                        s.trailer_model_id[i] = src[i];
+                        slot.model_id[i] = src[i];
                     }
-                    s.trailer_model_id[i] = '\0';
-                    s.has_trailer_model_id = (i > 0);
+                    slot.model_id[i] = '\0';
+                    slot.has_model_id = (i > 0);
+                    if (trailer_slot == 0) {
+                        for (size_t j = 0;
+                             j < TruckState::kTrailerModelIdCapacity;
+                             ++j) {
+                            s.trailer_model_id[j] = slot.model_id[j];
+                        }
+                        s.has_trailer_model_id = slot.has_model_id;
+                    }
                 }
             }
         } else if (is_truck && std::strcmp(attr->name,
@@ -400,6 +479,43 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
         // rpm_limit, ...) describe the truck's powertrain and are not
         // needed for the M5 / M8 / M9 / M11 work; the diagnostic dump
         // can be extended later to surface them.
+    }
+
+    // M9 multi-trailer lander (cycle 2026-10-14): count the slots
+    // that received at least one attribute (hook_position or id) so
+    // downstream code can branch on `trailer_attached_count`. The
+    // bare "trailer" id (slot 0) is always counted when its config
+    // event arrives; the indexed "trailer.<n>" ids are counted as
+    // their events arrive. This is best-effort: the SCS SDK does
+    // not guarantee a placement update before any other attribute,
+    // so we cannot distinguish "trailer 0 attached, awaiting
+    // placement" from "trailer 0 detached, awaiting config".
+    // `CouplingProvider::WaypointForStep` only consumes the
+    // primary trailer regardless of count; multi-trailer-aware
+    // coupling is a separate feature that needs the
+    // `trailer.<n>.world.placement` channels registered
+    // (out of scope for the 2026-10-14 lander — the bare
+    // SCS_TELEMETRY_TRAILER_CHANNEL_world_placement covers slot 0
+    // only).
+    if (trailer_slot >= 0) {
+        size_t count = 0;
+        for (size_t i = 0; i < TruckState::kMaxTrailerSlots; ++i) {
+            // A slot counts as "attached" if either the config
+            // event delivered `hook_position` or `id`. We do not
+            // require `placement` because `count` is updated
+            // before the placement channel has had a chance to
+            // fire.
+            if (s.trailers[i].has_hook_position ||
+                s.trailers[i].has_model_id) {
+                ++count;
+            } else {
+                // Slot is empty: we can stop scanning because the
+                // array is dense (slot N attaches iff slot N-1
+                // attached in SCS; a gap means the loop is done).
+                break;
+            }
+        }
+        s.trailer_attached_count = count;
     }
 }
 

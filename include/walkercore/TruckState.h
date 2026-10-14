@@ -114,6 +114,46 @@ struct TruckState {
     char trailer_model_id[kTrailerModelIdCapacity] = {0};
     bool has_trailer_model_id = false;
 
+    // M9 multi-trailer (cycle 2026-10-14 lander): the SCS SDK delivers
+    // one configuration event per attached trailer. The primary
+    // trailer's id is the bare string "trailer"; subsequent trailers
+    // (when the truck pulls doubles/triples) are delivered with
+    // indexed ids "trailer.0", "trailer.1", etc. We allocate a small
+    // fixed array indexed by trailer slot. The primary slot (index 0)
+    // is what `trailer_placement`, `trailer_hook_position`, and
+    // `trailer_model_id` alias — keeping single-trailer consumers
+    // (CouplingProvider, F12 dump, DiagnosticDump) source-compatible.
+    //
+    // Capacity: 4 slots covers the realistic ATS / ETS use cases
+    // (single, doubles, road train). A higher capacity is trivial
+    // but raises the per-frame scan cost; 4 is the sweet spot.
+    // Out-of-range indices (cfg->id == "trailer.99") are logged
+    // and dropped — the user sees an actionable warning instead of
+    // silent data loss.
+    static constexpr size_t kMaxTrailerSlots = 4;
+    struct TrailerSlot {
+        bool has_hook_position = false;
+        Vec3 hook_position{0.0, 0.0, 0.0};
+        bool has_model_id = false;
+        char model_id[kTrailerModelIdCapacity] = {0};
+        // The trailer world placement, refreshed every frame from the
+        // `trailer.<index>.world.placement` channel. Same fields as
+        // the truck placement: dplacement with position + heading /
+        // pitch / roll. Until the channel fires, the value is stale
+        // and has_placement stays false.
+        bool has_placement = false;
+        Placement placement;
+    };
+    TrailerSlot trailers[kMaxTrailerSlots];
+
+    // `trailer_attached_count` is the number of slots whose config
+    // event has fired AND whose placement channel has emitted at
+    // least once. 0 means "no trailer attached"; >=1 means the M9
+    // coupling flow is enabled for slot 0 (primary); 2..kMaxTrailerSlots
+    // means the user is pulling multiples. Downstream code that only
+    // cares about the primary trailer reads slot 0 directly.
+    size_t trailer_attached_count = 0;
+
     // M5 truck configuration: cabin + head anchor positions in
     // truck-local space. Used by TruckDoorConfig to compute the
     // per-truck door pivot when the player exits (WalkerFsm
@@ -196,6 +236,16 @@ inline void TruckState_Clear(TruckState &s) {
     for (size_t i = 0; i < TruckState::kTrailerModelIdCapacity; ++i)
         s.trailer_model_id[i] = '\0';
     s.has_trailer_model_id = false;
+    for (size_t i = 0; i < TruckState::kMaxTrailerSlots; ++i) {
+        s.trailers[i].has_hook_position = false;
+        s.trailers[i].hook_position = {0.0, 0.0, 0.0};
+        s.trailers[i].has_model_id = false;
+        for (size_t j = 0; j < TruckState::kTrailerModelIdCapacity; ++j)
+            s.trailers[i].model_id[j] = '\0';
+        s.trailers[i].has_placement = false;
+        s.trailers[i].placement = {};
+    }
+    s.trailer_attached_count = 0;
     s.has_cabin_position = false;
     s.cabin_position = {0.0, 0.0, 0.0};
     s.has_head_position = false;

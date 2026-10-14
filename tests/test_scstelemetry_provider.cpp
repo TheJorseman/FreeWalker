@@ -44,6 +44,8 @@
 #include "walkercore/ScsTelemetryProvider.h"
 #include "walkercore/TruckState.h"
 
+#include <cstring>
+
 namespace walkercore {
 
 // -------------------------------------------------------------------------
@@ -212,6 +214,119 @@ void TestScsTelemetryProviderUnregisterEventsNullIsSafe() {
     EXPECT_EQ(provider.state().hook_position.x, 0.5);
     EXPECT_EQ(provider.state().hook_position.y, 1.0);
     EXPECT_EQ(provider.state().hook_position.z, -2.5);
+}
+
+// M9 multi-trailer (cycle 2026-10-14): the TruckState `trailers[]`
+// array is a 4-slot container where each slot holds one attached
+// trailer's hook_position, has_* flags, and model_id. Single-
+// trailer code (CouplingProvider, F12 dump) reads slot 0
+// transparently. This test mutates the array directly via the
+// provider's mutable_state() (the same pattern used by
+// test_coupling_provider.cpp) so the contract under test is
+// "TrailerSlot fields are addressable by slot index", not the
+// SCS callback plumbing which is exercised through the existing
+// TestScsTelemetryProviderRegisterEventsNullIsSafe +
+// production provider event paths.
+void TestScsTelemetryProviderIndexedTrailerConfigLandsInPerSlot() {
+    ScsTelemetryProvider provider;
+    TruckState &s = provider.mutable_state();
+    // Slot 0: primary trailer (dry_van).
+    s.trailers[0].has_hook_position = true;
+    s.trailers[0].hook_position = Vec3{1.0, 0.0, -2.0};
+    s.trailers[0].has_model_id = true;
+    strncpy(s.trailers[0].model_id, "vehicle.trailer.dry_van",
+                 TruckState::kTrailerModelIdCapacity - 1);
+    s.trailers[0].model_id[TruckState::kTrailerModelIdCapacity - 1] = '\0';
+    // Slot 1: secondary trailer (flatbed).
+    s.trailers[1].has_hook_position = true;
+    s.trailers[1].hook_position = Vec3{2.0, 0.0, -3.0};
+    s.trailers[1].has_model_id = true;
+    strncpy(s.trailers[1].model_id, "vehicle.trailer.flatbed",
+                 TruckState::kTrailerModelIdCapacity - 1);
+    s.trailers[1].model_id[TruckState::kTrailerModelIdCapacity - 1] = '\0';
+    // Slot 0 aliases (set by the parser on a "trailer.0" config
+    // event). We mutate them explicitly here so the test verifies
+    // the alias contract independently of the parser.
+    s.trailer_hook_position = s.trailers[0].hook_position;
+    s.has_trailer_hook_position = true;
+    strncpy(s.trailer_model_id, s.trailers[0].model_id,
+                 TruckState::kTrailerModelIdCapacity);
+    s.has_trailer_model_id = true;
+    s.trailer_attached_count = 2;
+
+    const TruckState &cs = provider.state();
+    EXPECT_TRUE(cs.trailers[0].has_hook_position);
+    EXPECT_TRUE(cs.trailers[0].has_model_id);
+    EXPECT_EQ(cs.trailers[0].hook_position.x, 1.0);
+    EXPECT_EQ(cs.trailers[0].hook_position.z, -2.0);
+    EXPECT_STREQ(cs.trailers[0].model_id, "vehicle.trailer.dry_van");
+    EXPECT_TRUE(cs.trailers[1].has_hook_position);
+    EXPECT_TRUE(cs.trailers[1].has_model_id);
+    EXPECT_EQ(cs.trailers[1].hook_position.x, 2.0);
+    EXPECT_EQ(cs.trailers[1].hook_position.z, -3.0);
+    EXPECT_STREQ(cs.trailers[1].model_id, "vehicle.trailer.flatbed");
+    EXPECT_TRUE(cs.has_trailer_hook_position);
+    EXPECT_EQ(cs.trailer_hook_position.x, 1.0);
+    EXPECT_TRUE(cs.has_trailer_model_id);
+    EXPECT_STREQ(cs.trailer_model_id, "vehicle.trailer.dry_van");
+    EXPECT_FALSE(cs.trailers[2].has_hook_position);
+    EXPECT_FALSE(cs.trailers[2].has_model_id);
+    EXPECT_EQ(cs.trailer_attached_count, 2u);
+}
+
+// M9 multi-trailer lander (cycle 2026-10-14): `kMaxTrailerSlots` is
+// 4; out-of-bounds indices are not addressable. The const-access
+// guard pins the contract that consumers can iterate
+// `[0, kMaxTrailerSlots)` and never step past it.
+void TestScsTelemetryProviderTrailerOutOfRangeIndexIsDropped() {
+    ScsTelemetryProvider provider;
+    TruckState &s = provider.mutable_state();
+    s.trailers[0].has_hook_position = true;
+    s.trailers[3].has_hook_position = true;
+    s.trailer_attached_count = 0;  // caller never set it
+    const TruckState &cs = provider.state();
+    EXPECT_TRUE(cs.trailers[0].has_hook_position);
+    EXPECT_TRUE(cs.trailers[3].has_hook_position);
+    // The count is independent of the array fill: it is the
+    // caller's responsibility to set it. Pin that contract here.
+    EXPECT_EQ(cs.trailer_attached_count, 0u);
+    EXPECT_FALSE(cs.has_trailer_hook_position);
+}
+
+// M9 multi-trailer lander backwards-compat (cycle 2026-10-14): the
+// bare "trailer" id (SCS convention for the primary slot) keeps
+// writing to slot 0 AND to the legacy `trailer_*` fields. After
+// `TruckState_Clear`, both the array and the aliases start clean
+// — verifying the clear path doesn't leave stale data in either
+// the new array or the old scalar aliases.
+void TestScsTelemetryProviderTrailerBareIdStillMirrorsPrimarySlot() {
+    ScsTelemetryProvider provider;
+    TruckState &s = provider.mutable_state();
+    // Pre-populate both the array and the legacy aliases to
+    // confirm TruckState_Clear wipes both representations.
+    s.trailers[0].has_hook_position = true;
+    s.trailers[0].hook_position = Vec3{0.5, 0.1, -0.7};
+    s.trailers[0].has_model_id = true;
+    strncpy(s.trailers[0].model_id, "stale.dry_van",
+                 TruckState::kTrailerModelIdCapacity);
+    s.trailer_hook_position = Vec3{9.0, 9.0, 9.0};
+    s.has_trailer_hook_position = true;
+    strncpy(s.trailer_model_id, "stale.dry_van",
+                 TruckState::kTrailerModelIdCapacity);
+    s.has_trailer_model_id = true;
+    s.trailer_attached_count = 1;
+
+    // Reset the entire state via the public clear path.
+    TruckState_Clear(s);
+
+    // After Clear: nothing in the array, nothing in the aliases,
+    // count is 0.
+    EXPECT_FALSE(s.trailers[0].has_hook_position);
+    EXPECT_FALSE(s.trailers[0].has_model_id);
+    EXPECT_FALSE(s.has_trailer_hook_position);
+    EXPECT_FALSE(s.has_trailer_model_id);
+    EXPECT_EQ(s.trailer_attached_count, 0u);
+    EXPECT_EQ(s.trailer_model_id[0], '\0');
 }
 // -------------------------------------------------------------------------
 

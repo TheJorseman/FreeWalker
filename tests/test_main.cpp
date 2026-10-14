@@ -335,6 +335,12 @@ void TestPhysXRealBinaryRuntimeScanPath();
 // M9 SCS configuration event + CouplingProvider real-hook probes.
 void TestScsTelemetryProviderRegisterEventsNullIsSafe();
 void TestScsTelemetryProviderUnregisterEventsNullIsSafe();
+void TestScsTelemetryProviderIndexedTrailerConfigLandsInPerSlot();
+void TestScsTelemetryProviderTrailerOutOfRangeIndexIsDropped();
+void TestScsTelemetryProviderTrailerBareIdStillMirrorsPrimarySlot();
+void TestScsTelemetryProviderIndexedTrailerConfigLandsInPerSlot();
+void TestScsTelemetryProviderTrailerOutOfRangeIndexIsDropped();
+void TestScsTelemetryProviderTrailerBareIdStillMirrorsPrimarySlot();
 void TestCouplingProviderPlaceholderWaypointWhenHookUnset();
 void TestCouplingProviderRealHookPositionTransformsToWorld();
 void TestCouplingProviderRealHookPositionRotatesWithTruckHeading();
@@ -1271,6 +1277,12 @@ RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyFindsCamdbg);
     // M9 SCS configuration event + CouplingProvider real-hook probes.
     RUN_TEST(walkercore::TestScsTelemetryProviderRegisterEventsNullIsSafe);
     RUN_TEST(walkercore::TestScsTelemetryProviderUnregisterEventsNullIsSafe);
+    RUN_TEST(walkercore::TestScsTelemetryProviderIndexedTrailerConfigLandsInPerSlot);
+    RUN_TEST(walkercore::TestScsTelemetryProviderTrailerOutOfRangeIndexIsDropped);
+    RUN_TEST(walkercore::TestScsTelemetryProviderTrailerBareIdStillMirrorsPrimarySlot);
+    RUN_TEST(walkercore::TestScsTelemetryProviderIndexedTrailerConfigLandsInPerSlot);
+    RUN_TEST(walkercore::TestScsTelemetryProviderTrailerOutOfRangeIndexIsDropped);
+    RUN_TEST(walkercore::TestScsTelemetryProviderTrailerBareIdStillMirrorsPrimarySlot);
     RUN_TEST(walkercore::TestCouplingProviderPlaceholderWaypointWhenHookUnset);
     RUN_TEST(walkercore::TestCouplingProviderRealHookPositionTransformsToWorld);
     RUN_TEST(walkercore::TestCouplingProviderRealHookPositionRotatesWithTruckHeading);

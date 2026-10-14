@@ -84,6 +84,36 @@ struct TruckState {
     bool has_hook_position = false;
     Vec3 hook_position{0.0, 0.0, 0.0};
 
+    // M9 trailer configuration from SCS_TELEMETRY_EVENT_configuration
+    // (cfg->id == "trailer"): the king-pin position in TRAILER-local
+    // space. Convention: +X is right of trailer, +Y is up, +Z is
+    // front (matches SCS SDK dvector). To obtain the world-space
+    // king-pin, transform via the trailer world placement:
+    //   king_pin_world = trailer_placement.position +
+    //                    rotate(trailer_placement.orientation,
+    //                           trailer_hook_position)
+    // Until the trailer configuration event fires, the value is
+    // stale (default 0) and CouplingProvider::WaypointForStep falls
+    // back to the truck-local placeholder. The placeholder assumes
+    // the trailer is roughly behind the cab at hook_position.z + 0.5;
+    // with the trailer hook the waypoint snaps to the real world
+    // king-pin the moment the configuration event fires.
+    bool has_trailer_hook_position = false;
+    Vec3 trailer_hook_position{0.0, 0.0, 0.0};
+
+    // M9 trailer model id (e.g. "vehicle.trailer.dry_van" for a stock
+    // ATS dry-van). Read from the trailer configuration event. Mirrors
+    // the truck's model_id buffer / capacity. Empty string + false
+    // flag means "no trailer config yet" — either the trailer is not
+    // attached, or the SCS SDK has not delivered the config for this
+    // trailer instance yet. Single trailer only: in a multi-trailer
+    // setup the SDK delivers "trailer" / "trailer.0" ids per instance
+    // but we only consume the primary id (the first trailer attached
+    // to the truck's fifth wheel).
+    static constexpr size_t kTrailerModelIdCapacity = 64;
+    char trailer_model_id[kTrailerModelIdCapacity] = {0};
+    bool has_trailer_model_id = false;
+
     // M5 truck configuration: cabin + head anchor positions in
     // truck-local space. Used by TruckDoorConfig to compute the
     // per-truck door pivot when the player exits (WalkerFsm
@@ -161,6 +191,11 @@ inline void TruckState_Clear(TruckState &s) {
     s.has_adblue_capacity = false;
     s.has_hook_position = false;
     s.hook_position = {0.0, 0.0, 0.0};
+    s.has_trailer_hook_position = false;
+    s.trailer_hook_position = {0.0, 0.0, 0.0};
+    for (size_t i = 0; i < TruckState::kTrailerModelIdCapacity; ++i)
+        s.trailer_model_id[i] = '\0';
+    s.has_trailer_model_id = false;
     s.has_cabin_position = false;
     s.cabin_position = {0.0, 0.0, 0.0};
     s.has_head_position = false;

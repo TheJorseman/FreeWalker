@@ -326,6 +326,9 @@ void TestSettingsMenuUnknownKeysAreSilentAcrossAllApis() {
     menu.SetKeyBinding("definitely_not_a_real_key", 'Z');
     EXPECT_FALSE(menu.isDirty());
 
+    menu.SetUIntValue("definitely_not_a_real_uint", 0x99u);
+    EXPECT_FALSE(menu.isDirty());
+
     EXPECT_NEAR(store.current().movement.walkSpeedMps, w_before, 1e-6);
     EXPECT_EQ(store.current().head_tracker.use_mouse, m_before);
     EXPECT_EQ(store.current().keys.forward_vk, f_before);
@@ -475,6 +478,79 @@ void TestSettingsMenuCloseWithoutDirtyDoesNotWrite() {
     EXPECT_TRUE(Contains(after, "walk_speed_mps = 1.5"));
 
     std::remove(tmp.c_str());
+}
+
+void TestSettingsMenuSetBoolM2GameFreeCameraShimDirties() {
+    // m2_game_free_camera_shim is now a real M11 menu key. Flipping
+    // it must (i) update WalkerSettings.m2_game_free_camera_shim,
+    // (ii) flip m2_game_free_camera_shim_explicit so the M2.7
+    // migration does NOT snap the value back to a sentinel default,
+    // (iii) dirty the menu so Close() persists the edit, and
+    // (iv) call ApplyAll() so any bound GameFreeCameraShim
+    // re-reads the gate on the next Walking entry.
+    SettingsStore store;
+    SettingsMenu menu;
+    menu.Bind(&store);
+
+    menu.Open();
+    EXPECT_FALSE(menu.isDirty());
+    menu.SetBoolValue("m2_game_free_camera_shim", true);
+    EXPECT_TRUE(menu.isDirty());
+    EXPECT_TRUE(store.current().m2_game_free_camera_shim);
+    EXPECT_TRUE(store.current().m2_game_free_camera_shim_explicit);
+    menu.Close();
+}
+
+void TestSettingsMenuSetBoolM2DevCvarPatcherDirties() {
+    // m2_dev_cvar_patcher is the one-shot cvar patcher gate. The
+    // menu exposes it for visibility; runtime flipping does NOT
+    // re-trigger the patch (the patch is one-shot per process),
+    // but the new value persists via Save now / Save on close.
+    SettingsStore store;
+    SettingsMenu menu;
+    menu.Bind(&store);
+
+    menu.Open();
+    const bool before = store.current().m2_dev_cvar_patcher;
+    menu.SetBoolValue("m2_dev_cvar_patcher", !before);
+    EXPECT_TRUE(menu.isDirty());
+    EXPECT_NE(store.current().m2_dev_cvar_patcher, before);
+    menu.Close();
+}
+
+void TestSettingsMenuSetUIntM2DevCameraToggleVkWritesThrough() {
+    // The dev camera toggle VK is exposed as `m2_dev_camera_toggle_vk`.
+    // The menu writes the unsigned int raw and flips the
+    // *_explicit flag so the M2.7 in-memory migration skips its
+    // legacy-default snap (0x30 / 0x60 -> 0x7A) on the next
+    // SettingsStore load.
+    SettingsStore store;
+    SettingsMenu menu;
+    menu.Bind(&store);
+
+    menu.Open();
+    menu.SetUIntValue("m2_dev_camera_toggle_vk", 0xC0u);  // '`' console key
+    EXPECT_TRUE(menu.isDirty());
+    EXPECT_EQ(store.current().m2_dev_camera_toggle_vk, 0xC0u);
+    EXPECT_TRUE(store.current().m2_dev_camera_toggle_vk_explicit);
+    menu.Close();
+}
+
+void TestSettingsMenuSetUIntUnknownKeyIsSilent() {
+    // Negative: an unknown unsigned-int key must NOT dirty the menu
+    // and must NOT mutate the store. Pins the silent-drop contract
+    // for the new SetUIntValue API alongside the existing
+    // SetSliderValue / SetBoolValue / SetKeyBinding negative cases.
+    SettingsStore store;
+    SettingsMenu menu;
+    menu.Bind(&store);
+
+    menu.Open();
+    const unsigned int before = store.current().m2_dev_camera_toggle_vk;
+    menu.SetUIntValue("definitely_not_a_real_uint", 0x99u);
+    EXPECT_FALSE(menu.isDirty());
+    EXPECT_EQ(store.current().m2_dev_camera_toggle_vk, before);
+    menu.Close();
 }
 
 void TestSettingsMenuCloseWithDirtyWritesToDisk() {

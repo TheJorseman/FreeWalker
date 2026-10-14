@@ -6,16 +6,20 @@ Plugin DLL de caminata para Euro Truck Simulator 2 y American Truck Simulator (s
 
 Inspirado en walkers comerciales como TMRealWalk; escrito desde cero sobre el SDK público de telemetría de SCS y los headers públicos de PhysX 3.4. Sin ingeniería inversa de productos de terceros.
 
-> **Estado.** DLL compilable (`libWalkerCore.dll`, 37 exports, ~3.8 MB). Locomotor
+> **Estado.** DLL compilable (`libWalkerCore.dll`, 45 exports, ~4.7 MB). Locomotor
 > (M1 + M2 MVP + M4 mouse-pump + M5 per-truck door + M6 INI) end-to-end. M7
 > opentrack + PolishProviders computan (game-side integration de sun / point
-> light / door skeletal sigue stub). M8 (station prefab) y M9 (SCS trailer
-> attach) parciales — RE-blocked sin live debugging. M10 knockout con
-> velocity-change heuristic + log de colisión (PhysX-derived collision normal
-> pendiente). M11 D3D11 ImGui overlay live con state + 2 botones interactivos
-> + PxScene live status. M3 PhysX catalog + M3.5 addActor hook activos
-> (SphereSweep/Raycast siguen no-hit sin llamada real al PxScene). Ver
-> [`docs/roadmap.md`](docs/roadmap.md) y [`docs/integration.md`](docs/integration.md).
+> light / door skeletal sigue stub). M9 single-trailer hook landed (king-pin
+> world-space real cuando SCS entrega `trailer` config event); multi-trailer
+> con `trailer.0` / `trailer.1` queda pending. M10 knockout con velocity-
+> change heuristic + log de colisión (PhysX-derived collision normal
+> pendiente). M11 D3D11 ImGui overlay live con state + botones interactivos
+> + M2 Dev camera section (shim/dev_cvar_patcher/dev_camera_toggle_vk).
+> M3 PhysX catalog + M3.5 addActor hook activos (SphereSweep/Raycast siguen
+> no-hit sin llamada real al PxScene). M2 long-term CameraHijack bloqueado
+> por `movdqa` #GP en amtrucks.exe+0x1d5300a con ReShade+OptiScaler+RenoDX.
+> Ver [`docs/roadmap.md`](docs/roadmap.md), [`docs/integration.md`](docs/integration.md),
+> y [`docs/bugs.md`](docs/bugs.md).
 
 ## Requisitos
 
@@ -122,7 +126,7 @@ están en `include/walkercore/InputHook.h:33-50`.
 
 | Sección | Key | Default | Descripción |
 |---|---|---|---|
-| `[m2]` | `game_free_camera_shim` | `false` (M2.5: smart-default auto-flips a `true` cuando binding a `o_im_freecam` + `g_developer=1`) | Cuando activo, F10 sintetiza VK_F11 (0x7A, default M2.7 — verificado live en ATS 1.61.3.1s) o el `keyboard.X` bindeado a `o_im_freecam` en `controls.sii` (la única acción SCS válida por RE), configurable vía `[m2] dev_camera_toggle_vk = 0xHH`. Auto-detecta `g_developer` en `OneDrive\Documentos\American Truck Simulator\config.cfg` (también es_ES / OneDrive Personal) y auto-detecta el binding del usuario en `controls.sii`. M2.7 migration: INIs viejos con `dev_camera_toggle_vk = 0x30` o `0x60` se reescriben automáticamente a `0x7A` en el primer boot. |
+| `[m2]` | `game_free_camera_shim` | `false` (M2.5: smart-default auto-flips a `true` cuando binding a `o_im_freecam` + `g_developer=1`) | Cuando activo, F10 sintetiza VK_F11 (0x7A, default M2.7 — verificado live en ATS 1.61.3.1s) o el `keyboard.X` bindeado a `o_im_freecam` en `controls.sii` (la única acción SCS válida por RE), configurable vía `[m2] dev_camera_toggle_vk = 0xHH`. Auto-detecta `g_developer` en `OneDrive\Documentos\American Truck Simulator\config.cfg` (también es_ES / OneDrive Personal) y auto-detecta el binding del usuario en `controls.sii`. M2.7b migration: solo fire-disablea el shim cuando `dev_camera_toggle_vk` es `0x30` (top-row '0') o `0x60` (Numpad-0) — los dos legacy defaults donde el shim no-op silenciosamente. Con F11 (0x7A) u otro VK válido, la intención del usuario se preserva. M2.7 migration (legacy): INIs viejos con `dev_camera_toggle_vk = 0x30` o `0x60` se reescriben automáticamente a `0x7A` en el primer boot. |
 | `[m11]` | `imgui_overlay` | `false` | OFF por defecto. Cuando `true`, overlay ImGui sobre el swap chain con state en vivo + 2 botones (Dump state / Dump PxScene) + PxScene live status. |
 
 ## Referencias

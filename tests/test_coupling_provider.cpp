@@ -341,6 +341,132 @@ void TestCouplingOnTrailerAttachFalseMidFsmResetsToIdle() {
               static_cast<unsigned>(CouplingStep::ApproachToKingPin));
 }
 
+void TestCouplingProviderTrailerHookPositionTransformsToWorld() {
+    // M9 trailer-hook path: when both has_trailer_hook_position
+    // and has_trailer_placement are set, the ApproachToKingPin
+    // waypoint becomes the world-space king-pin (trailer-local
+    // hook rotated through the trailer's heading and added to the
+    // trailer's world position). The placeholder fallback is
+    // bypassed. This pins the contract documented in
+    // TrailerCoupling.cpp WaypointForStep: with the trailer config
+    // event fired, the player is guided to the real king-pin
+    // rather than the 2.5 m truck-local placeholder.
+    CouplingProvider coupling;
+    coupling.Start();
+    TruckState truck;
+    TruckState_Clear(truck);
+
+    // Trailer sitting at world (100, 0, 50), heading = 0 (facing
+    // +X). Trailer-local king-pin at (-0.5, 1.0, -3.0) — slightly
+    // left of trailer center, 1 m up, 3 m forward of trailer origin
+    // (per SCS convention king-pin is at trailer-local -Z = front).
+    truck.has_trailer_placement = true;
+    truck.trailer_placement.position = Vec3{100.0, 0.0, 50.0};
+    truck.trailer_placement.orientation.heading = 0.0f;
+    truck.trailer_placement.orientation.pitch = 0.0f;
+    truck.trailer_placement.orientation.roll = 0.0f;
+    truck.has_trailer_hook_position = true;
+    truck.trailer_hook_position = Vec3{-0.5, 1.0, -3.0};
+
+    PlayerState p = MakeFarPlayer();
+    coupling.Tick(truck, p, false, 0.016);
+    const CouplingState s = coupling.state();
+    EXPECT_EQ(static_cast<unsigned>(s.step),
+              static_cast<unsigned>(CouplingStep::ApproachToKingPin));
+    // King-pin world: trailer.position + rotate(heading=0, local)
+    // = (100, 0, 50) + (-0.5, 1.0, -3.0) = (99.5, 1.0, 47.0).
+    // ApproachToKingPin places the player 0.7 m in FRONT of the
+    // king-pin (towards the truck, trailer-local -Z = -0.7 in
+    // trailer local). With heading=0, world offset = (+sy*0.7,
+    // 0, -cy*0.7) = (0, 0, -0.7). So expected waypoint =
+    // (99.5, 1.0, 46.3).
+    EXPECT_NEAR(s.waypoint_local.x, 99.5, 1e-3);
+    EXPECT_NEAR(s.waypoint_local.y, 1.0, 1e-3);
+    EXPECT_NEAR(s.waypoint_local.z, 46.3, 1e-3);
+    EXPECT_NEAR(s.waypoint_radius_m, 1.5f, 1e-4);
+}
+
+void TestCouplingProviderTrailerHookPositionRotatesWithTrailerHeading() {
+    // The trailer-hook waypoint must rotate with the trailer's
+    // heading. With heading = 0.25 (90° = +Y rotation in SCS
+    // convention), the king-pin moves from (-0.5, 1.0, -3.0)
+    // trailer-local to a different world position than the
+    // heading=0 case. We pin that the rotation lands on the
+    // expected world coordinates within 1 mm.
+    CouplingProvider coupling;
+    coupling.Start();
+    TruckState truck;
+    TruckState_Clear(truck);
+
+    truck.has_trailer_placement = true;
+    truck.trailer_placement.position = Vec3{0.0, 0.0, 0.0};
+    // heading=0.25 in SCS unit-range (1.0 == 360°). At rest the
+    // trailer faces +X; +Y rotation of 90° turns it to face -Z
+    // (east in the world). Math: cos(2π * 0.25) = 0,
+    // sin(2π * 0.25) = 1.
+    truck.trailer_placement.orientation.heading = 0.25f;
+    truck.trailer_placement.orientation.pitch = 0.0f;
+    truck.trailer_placement.orientation.roll = 0.0f;
+    truck.has_trailer_hook_position = true;
+    // Trailer-local king-pin at the trailer origin in X, 1 m up,
+    // 3 m forward (trailer-local -Z = front).
+    truck.trailer_hook_position = Vec3{0.0, 1.0, -3.0};
+
+    PlayerState p = MakeFarPlayer();
+    coupling.Tick(truck, p, false, 0.016);
+    const CouplingState s = coupling.state();
+    EXPECT_EQ(static_cast<unsigned>(s.step),
+              static_cast<unsigned>(CouplingStep::ApproachToKingPin));
+    // World king-pin = rotate(heading=0.25, (0, 1, -3)) =
+    //   x = cy*0 + sy*(-3) = 0 + 1*(-3) = -3
+    //   z = -sy*0 + cy*(-3) = 0 + 0*(-3) = 0
+    // So world king-pin = (-3, 1, 0). Approach offset = (sy*0.7,
+    // 0, -cy*0.7) = (0.7, 0, 0). Expected waypoint = (-2.3, 1, 0).
+    EXPECT_NEAR(s.waypoint_local.x, -2.3, 1e-3);
+    EXPECT_NEAR(s.waypoint_local.y, 1.0, 1e-3);
+    EXPECT_NEAR(s.waypoint_local.z, 0.0, 1e-3);
+}
+
+void TestCouplingProviderTrailerHookPlaceholderWhenTrailerConfigUnset() {
+    // When has_trailer_hook_position is false (SCS config event
+    // has not fired for the trailer yet), the waypoint must fall
+    // back to the truck-local placeholder path even if the trailer
+    // placement channel has fired. This pins the contract that the
+    // trailer-hook path requires BOTH trailer_hook_position AND
+    // trailer_placement to be set; with only one or neither, the
+    // legacy truck-relative placeholder wins.
+    CouplingProvider coupling;
+    coupling.Start();
+    TruckState truck;
+    TruckState_Clear(truck);
+
+    // Trailer placement present, trailer_hook_position absent.
+    truck.has_trailer_placement = true;
+    truck.trailer_placement.position = Vec3{100.0, 0.0, 50.0};
+    truck.trailer_placement.orientation.heading = 0.0f;
+    truck.has_trailer_hook_position = false;
+
+    // Truck has hook position so the placeholder is the real
+    // truck-local 5th wheel.
+    truck.has_hook_position = true;
+    truck.hook_position = Vec3{0.0, 0.5, 2.0};
+    truck.has_placement = true;
+    truck.placement.position = Vec3{0.0, 0.0, 0.0};
+    truck.placement.orientation.heading = 0.0f;
+
+    PlayerState p = MakeFarPlayer();
+    coupling.Tick(truck, p, false, 0.016);
+    const CouplingState s = coupling.state();
+    EXPECT_EQ(static_cast<unsigned>(s.step),
+              static_cast<unsigned>(CouplingStep::ApproachToKingPin));
+    // Placeholder path: waypoint = hook + (0, 0, 0.5) = (0, 0.5,
+    // 2.5), transformed through truck heading = 0 → (0, 0.5,
+    // 2.5). Not the trailer-hook world position (99.5, 1.0, 47.0).
+    EXPECT_NEAR(s.waypoint_local.x, 0.0, 1e-3);
+    EXPECT_NEAR(s.waypoint_local.y, 0.5, 1e-3);
+    EXPECT_NEAR(s.waypoint_local.z, 2.5, 1e-3);
+}
+
 void TestCouplingOnTrailerAttachIdempotentAcrossIdenticalTransitions() {
     // The per-frame conductor dispatches on every transition; if a
     // future lander added jitter, two identical transitions in a row

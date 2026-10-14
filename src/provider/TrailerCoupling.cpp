@@ -194,6 +194,115 @@ CouplingState CouplingProvider::WaypointForStep(CouplingStep step,
         hook_local_for_relative = truck.hook_position;
         use_real_hook = true;
     }
+    // M9 trailer hook path: when both trailer_hook_position and
+    // trailer_placement are available, the world-space king-pin is
+    // computed as
+    //   king_pin_world = trailer_placement.position +
+    //                    rotate(trailer_placement.orientation,
+    //                           trailer_hook_position)
+    // The other trailer-side steps (LowerLandingGear,
+    // ConnectAirLines, RaiseLandingGear) target points relative to
+    // the trailer's world pose. For those we project the
+    // truck-relative offsets onto the trailer's world frame: take
+    // the world-space king-pin and apply the trailer-relative
+    // offset in world XZ.
+    bool use_trailer_hook = false;
+    Vec3 king_pin_world{};
+    if (truck.has_trailer_hook_position && truck.has_trailer_placement) {
+        const double trailer_heading =
+            static_cast<double>(truck.trailer_placement.orientation.heading) *
+                kTwoPi;
+        const Vec3 king_local = {
+            truck.trailer_hook_position.x,
+            truck.trailer_hook_position.y,
+            truck.trailer_hook_position.z};
+        // The trailer-local king-pin is at the trailer's front,
+        // typically a few cm forward of the trailer origin in
+        // trailer-local Z (positive Z = rear of trailer per SCS
+        // SDK convention, so the king-pin is at -Z). We rotate the
+        // local triple into trailer-world via the trailer's
+        // heading and add to the trailer's world position.
+        const double cy = std::cos(trailer_heading);
+        const double sy = std::sin(trailer_heading);
+        const double rx = cy * king_local.x + sy * king_local.z;
+        const double rz = -sy * king_local.x + cy * king_local.z;
+        king_pin_world = Vec3{
+            truck.trailer_placement.position.x + rx,
+            truck.trailer_placement.position.y + king_local.y,
+            truck.trailer_placement.position.z + rz};
+        use_trailer_hook = true;
+    }
+
+    if (use_trailer_hook) {
+        // World-space waypoints computed from the real trailer
+        // king-pin. ApproachToKingPin places the player 0.7 m in
+        // front of the king-pin (player faces the king-pin from
+        // the front). LowerLandingGear / ConnectAirLines /
+        // RaiseLandingGear are 1.5–2.5 m behind the king-pin
+        // (towards the trailer's rear in trailer-local Z,
+        // corresponding to +Z in world if the trailer faces
+        // forward). Complete returns the king-pin itself. The
+        // heading here is the trailer's heading so the offsets
+        // track the trailer's actual orientation in the world.
+        const double th = static_cast<double>(
+                              truck.trailer_placement.orientation.heading) *
+                          kTwoPi;
+        const double cy = std::cos(th);
+        const double sy = std::sin(th);
+        // Helper: project a trailer-local Z offset into world XZ.
+        // Positive offset_z_local = towards the trailer's REAR; the
+        // trailer faces forward, so a rear offset in world is
+        // (-sy * z, +cy * z) given trailer heading = +th.
+        auto behind_world = [&](double z_offset) -> Vec3 {
+            return Vec3{
+                    king_pin_world.x - sy * z_offset,
+                    king_pin_world.y,
+                    king_pin_world.z + cy * z_offset};
+        };
+        switch (step) {
+            case CouplingStep::ApproachToKingPin:
+                // 0.7 m in front of the king-pin (towards the
+                // truck, in trailer-local -Z = trailer's front).
+                waypoint = Vec3{
+                    king_pin_world.x + sy * 0.7,
+                    king_pin_world.y,
+                    king_pin_world.z - cy * 0.7};
+                radius = 1.5f;
+                break;
+            case CouplingStep::LowerLandingGear:
+                // 2.0 m behind the king-pin on a standard dry-van
+                // (trailer-local +Z = rear).
+                waypoint = behind_world(2.0);
+                waypoint.y -= 0.1;
+                radius = 1.0f;
+                break;
+            case CouplingStep::ConnectAirLines:
+                // 2.1 m behind, 0.1 m up — just past the gear.
+                waypoint = behind_world(2.1);
+                waypoint.y += 0.1;
+                radius = 1.0f;
+                break;
+            case CouplingStep::RaiseLandingGear:
+                // Same as LowerLandingGear — the crank handle is in
+                // the same place for raising and lowering.
+                waypoint = behind_world(2.0);
+                waypoint.y -= 0.1;
+                radius = 1.0f;
+                break;
+            case CouplingStep::Complete:
+                waypoint = king_pin_world;
+                radius = 5.0f;
+                break;
+            default:
+                break;
+        }
+        // Trailer-hook waypoints are already in world space, so we
+        // skip the truck-placement transform below.
+        out.waypoint_local = waypoint;
+        out.waypoint_radius_m = radius;
+        return out;
+    }
+
     switch (step) {
         case CouplingStep::ApproachToKingPin:
             // Behind the 5th wheel by 0.5 m so the player stands at

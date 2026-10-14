@@ -102,6 +102,41 @@ void SettingsMenu::SetBoolValue(const char *key, bool v) {
         s.head_tracker.use_trackir = v; changed = true;
     } else if (std::strcmp(key, "use_opentrack") == 0) {
         s.head_tracker.use_opentrack = v; changed = true;
+    } else if (std::strcmp(key, "m2_game_free_camera_shim") == 0) {
+        // M2 dev free camera shim. Flipping this at runtime takes
+        // effect immediately (the shim re-reads on each entry);
+        // a save-to-disk is required to persist across sessions.
+        s.m2_game_free_camera_shim = v;
+        s.m2_game_free_camera_shim_explicit = true;
+        changed = true;
+    } else if (std::strcmp(key, "m2_dev_cvar_patcher") == 0) {
+        // M2 dev cvar patcher gate. The patch is one-shot per
+        // process; flipping this after startup only changes the
+        // value the INI saves, not the live state.
+        s.m2_dev_cvar_patcher = v;
+        changed = true;
+    }
+    if (changed) {
+        store_->SetCurrent(s);
+        store_->ApplyAll();
+        dirty_ = true;
+    }
+}
+
+void SettingsMenu::SetUIntValue(const char *key, unsigned int v) {
+    if (store_ == nullptr || key == nullptr) return;
+    WalkerSettings s = store_->current();
+    bool changed = false;
+    if (std::strcmp(key, "m2_dev_camera_toggle_vk") == 0) {
+        // M2 dev camera toggle VK. We write the value the user
+        // typed (hex-or-decimal is up to the ImGui input widget)
+        // and mark the *_explicit flag so the M2.7 migration does
+        // not snap a legacy default (0x30 / 0x60) back to 0x7A on
+        // next load. The shim re-reads the value on every Walking
+        // entry, so a runtime edit takes effect on the next F10.
+        s.m2_dev_camera_toggle_vk = v;
+        s.m2_dev_camera_toggle_vk_explicit = true;
+        changed = true;
     }
     if (changed) {
         store_->SetCurrent(s);
@@ -269,6 +304,61 @@ void SettingsMenu::Render() {
         bool use_opentrack = s.head_tracker.use_opentrack;
         if (ImGui::Checkbox("Use opentrack (UDP)", &use_opentrack)) {
             SetBoolValue("use_opentrack", use_opentrack);
+        }
+    }
+    // ---- M2 Dev camera ------------------------------------------
+    if (ImGui::CollapsingHeader("M2 Dev camera")) {
+        // The M2 game-free-camera-shim is the per-frame
+        // SendInput dispatch on F10 that fires the user's
+        // configured `m2_dev_camera_toggle_vk` (default F11)
+        // when the FSM enters Walking. With g_developer=1 in
+        // config.cfg AND g_console=1 the SCS engine intercepts
+        // F11 before the action registry and toggles the dev
+        // free-roam view. Toggling the checkbox at runtime
+        // takes effect on the next Walking entry; the new
+        // value persists via Save now / Save on close.
+        bool shim = s.m2_game_free_camera_shim;
+        if (ImGui::Checkbox("Game free camera shim (F10 dispatch)", &shim)) {
+            SetBoolValue("m2_game_free_camera_shim", shim);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "When ON, F10 transitions Driving -> Walking and\n"
+                "dispatches the dev free camera toggle key. The\n"
+                "M2.7 migration in Settings.cpp disables this only\n"
+                "for legacy default VKs (0x30 / 0x60) — with F11\n"
+                "(0x7A) the shim stays enabled.");
+        }
+        bool patcher = s.m2_dev_cvar_patcher;
+        if (ImGui::Checkbox("Dev cvar patcher (one-shot)", &patcher)) {
+            SetBoolValue("m2_dev_cvar_patcher", patcher);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Patches g_developer / g_debug_camera / g_flyspeed\n"
+                "to the documented dev mode values. One-shot per\n"
+                "process; runtime toggle only affects saved state.");
+        }
+        // The dev camera toggle VK is shown in hex (matching the
+        // INI syntax `dev_camera_toggle_vk = 0x7a`). The shim
+        // reads the value raw — a runtime edit applies on the
+        // next Walking entry. We use InputInt with the value
+        // pre-converted so ImGui shows it as a plain integer
+        // (the user can paste hex without the 0x prefix; the
+        // migration policy keeps 0x7A as the canonical F11
+        // default when the user did not set it explicitly).
+        int vk = static_cast<int>(s.m2_dev_camera_toggle_vk);
+        if (ImGui::InputInt("Dev camera toggle VK (0x7A=F11)", &vk, 1, 16)) {
+            if (vk < 0) vk = 0;
+            if (vk > 0xFF) vk = 0xFF;
+            SetUIntValue("m2_dev_camera_toggle_vk", static_cast<unsigned int>(vk));
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Virtual-key code dispatched on Walking entry.\n"
+                "0x7A=F11 (default, SCS dev free cam),\n"
+                "0x30=top-row 0, 0x60=Numpad 0 (legacy, shim off),\n"
+                "0x70=F1, 0x72=F5, 0xC0=` console key.");
         }
     }
     // ---- Key bindings -------------------------------------------

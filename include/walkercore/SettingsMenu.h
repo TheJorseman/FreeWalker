@@ -40,6 +40,7 @@ public:
     void SetSliderValue(const char *key, float v);
     void SetBoolValue(const char *key, bool v);
     void SetKeyBinding(const char *key, int vk);
+    void SetUIntValue(const char *key, unsigned int v);
 
     // The render call. The real M11 lander calls ImGui::Begin/End inside
     // here; the stub logs and returns.

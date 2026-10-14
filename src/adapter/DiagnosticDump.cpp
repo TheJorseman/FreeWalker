@@ -306,6 +306,23 @@ extern "C" __declspec(dllexport) void walker_dump_state(void) {
         WALKERCORE_LOG_INFO("truck trailer attached: has=%s value=%s",
                             has_str(t.has_trailer_attached),
                             bool_str(t.trailer_attached));
+        WALKERCORE_LOG_INFO("truck hook_position   : has=%s local=(%.3f, %.3f, %.3f)",
+                            has_str(t.has_hook_position),
+                            t.hook_position.x, t.hook_position.y, t.hook_position.z);
+        WALKERCORE_LOG_INFO("truck trailer hook    : has=%s local=(%.3f, %.3f, %.3f)",
+                            has_str(t.has_trailer_hook_position),
+                            t.trailer_hook_position.x, t.trailer_hook_position.y,
+                            t.trailer_hook_position.z);
+        WALKERCORE_LOG_INFO("truck trailer model id: has=%s value=%s",
+                            has_str(t.has_trailer_model_id),
+                            t.trailer_model_id);
+        WALKERCORE_LOG_INFO("truck trailer placement: has=%s pos=(%.2f, %.2f, %.2f) "
+                            "heading=%.3f",
+                            has_str(t.has_trailer_placement),
+                            t.trailer_placement.position.x,
+                            t.trailer_placement.position.y,
+                            t.trailer_placement.position.z,
+                            static_cast<double>(t.trailer_placement.orientation.heading));
         WALKERCORE_LOG_INFO("truck fuel            : has=%s amount=%.2f L",
                             has_str(t.has_fuel),
                             static_cast<double>(t.fuel_amount_l));

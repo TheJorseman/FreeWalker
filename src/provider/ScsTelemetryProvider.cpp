@@ -225,15 +225,52 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
     if (cfg->id == nullptr || cfg->attributes == nullptr) {
         return;
     }
-    // We only consume the truck configuration. The trailer config
-    // (`cfg->id == "trailer"`) is left for future M9 work; the
-    // channel-based trailer.world.placement already covers the
-    // trailer pose needs.
-    if (std::strcmp(cfg->id, SCS_TELEMETRY_CONFIG_truck) != 0) {
-        return;
-    }
+    // We consume both the truck and trailer configuration events.
+    // The truck config delivers `truck.hook.position` (5th wheel in
+    // truck-local space) and the per-truck door pivot
+    // (`cabin.position`, `head.position`, `id`, `fuel.capacity`,
+    // `adblue.capacity`). The trailer config delivers the matching
+    // `hook.position` (king-pin in TRAILER-local space) and the
+    // trailer model id. Both are needed by the M9 coupling flow:
+    // the truck hook drives ApproachToKingPin's truck-side waypoint,
+    // and the trailer hook drives the trailer-side world-space
+    // king-pin when the configuration event fires (typically within
+    // a few frames of trailer.connected flipping true).
+    //
+    // M9 multi-trailer scope: the SCS SDK emits one configuration
+    // event per trailer instance with id "trailer" for the first
+    // and "trailer.0" / "trailer.1" for subsequent attached
+    // trailers. The current implementation only consumes the
+    // primary "trailer" id — the secondary "trailer.0" /
+    // "trailer.1" events are dropped. Extending to multi-trailer
+    // requires a per-instance TrailerConfig array; not part of this
+    // lander (see bugs.md line 148).
     auto *self = static_cast<ScsTelemetryProvider *>(context);
     TruckState &s = self->mutable_state();
+    const bool is_truck =
+        std::strcmp(cfg->id, SCS_TELEMETRY_CONFIG_truck) == 0;
+    const bool is_trailer =
+        std::strcmp(cfg->id, SCS_TELEMETRY_CONFIG_trailer) == 0;
+    if (!is_truck && !is_trailer) {
+        return;
+    }
+    // M9 lander: log once per trailer config so the diagnostic
+    // surface confirms the SCS SDK actually delivered the trailer
+    // config event (some early ATS builds do not emit it; the
+    // CouplingProvider falls back to the truck-local placeholder
+    // waypoints in that case). Use a static one-shot flag so a
+    // long-running session doesn't spam the log; a trailer
+    // detach + re-attach won't re-fire the log, but that's OK
+    // — the diagnostic dump (F12) reflects the current state
+    // regardless.
+    static bool g_trailer_config_logged = false;
+    if (is_trailer && !g_trailer_config_logged) {
+        g_trailer_config_logged = true;
+        WALKERCORE_LOG_INFO(
+            "telemetry: SCS trailer configuration event arrived "
+            "(M9 lander). TrailerHook + TrailerModelId will be "
+            "populated as attributes are scanned.");
+    }
     for (const scs_named_value_t *attr = cfg->attributes;
          attr != nullptr && attr->name != nullptr;
          ++attr) {
@@ -246,12 +283,25 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
             // SDK doesn't have to keep the storage alive past the
             // event.
             if (attr->value.type == SCS_VALUE_TYPE_dvector) {
-                s.hook_position.x = attr->value.value_dvector.x;
-                s.hook_position.y = attr->value.value_dvector.y;
-                s.hook_position.z = attr->value.value_dvector.z;
-                s.has_hook_position = true;
+                if (is_truck) {
+                    s.hook_position.x = attr->value.value_dvector.x;
+                    s.hook_position.y = attr->value.value_dvector.y;
+                    s.hook_position.z = attr->value.value_dvector.z;
+                    s.has_hook_position = true;
+                } else {
+                    // Trailer config: hook_position is the king-pin
+                    // in trailer-local space. Stored raw; the world
+                    // transform is computed in
+                    // CouplingProvider::WaypointForStep when both
+                    // trailer_hook_position and trailer_placement
+                    // are present.
+                    s.trailer_hook_position.x = attr->value.value_dvector.x;
+                    s.trailer_hook_position.y = attr->value.value_dvector.y;
+                    s.trailer_hook_position.z = attr->value.value_dvector.z;
+                    s.has_trailer_hook_position = true;
+                }
             }
-        } else if (std::strcmp(attr->name,
+        } else if (is_truck && std::strcmp(attr->name,
                                SCS_TELEMETRY_CONFIG_ATTRIBUTE_cabin_position) == 0) {
             // M5 Lander partial: cabin anchor in truck-local space.
             // Used by TruckDoorConfig to position the door pivot
@@ -264,7 +314,7 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
                 s.cabin_position.z = attr->value.value_dvector.z;
                 s.has_cabin_position = true;
             }
-        } else if (std::strcmp(attr->name,
+        } else if (is_truck && std::strcmp(attr->name,
                                SCS_TELEMETRY_CONFIG_ATTRIBUTE_head_position) == 0) {
             // M5 Lander partial: head anchor in truck-local space.
             // Used to anchor the player's seated camera. The M5
@@ -278,25 +328,35 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
             }
         } else if (std::strcmp(attr->name,
                                SCS_TELEMETRY_CONFIG_ATTRIBUTE_id) == 0) {
-            // M5 Lander partial: truck model id (e.g.
-            // "vehicle.volvo.vnl_2016"). The id is a scs_string_t
-            // which is a `const char *`. We copy up to
-            // kModelIdCapacity - 1 bytes and null-terminate, so
-            // long ids are truncated rather than overrunning the
-            // buffer. The M5 TruckModel table can then look up
-            // the per-truck door geometry by id.
+            // M5 Lander partial: model id. For the truck config
+            // (`id == "truck"`) we copy into model_id[]; for the
+            // trailer config (`id == "trailer"`) we copy into
+            // trailer_model_id[]. Both are scs_string_t which is a
+            // `const char *`; we copy up to (capacity-1) bytes and
+            // null-terminate, so long ids are truncated rather than
+            // overrunning the buffer.
             if (attr->value.type == SCS_VALUE_TYPE_string &&
                 attr->value.value_string.value != nullptr) {
                 const char *src = attr->value.value_string.value;
-                size_t i = 0;
-                for (; i + 1 < TruckState::kModelIdCapacity && src[i] != '\0';
-                     ++i) {
-                    s.model_id[i] = src[i];
+                if (is_truck) {
+                    size_t i = 0;
+                    for (; i + 1 < TruckState::kModelIdCapacity && src[i] != '\0';
+                         ++i) {
+                        s.model_id[i] = src[i];
+                    }
+                    s.model_id[i] = '\0';
+                    s.has_model_id = (i > 0);
+                } else {
+                    size_t i = 0;
+                    for (; i + 1 < TruckState::kTrailerModelIdCapacity && src[i] != '\0';
+                         ++i) {
+                        s.trailer_model_id[i] = src[i];
+                    }
+                    s.trailer_model_id[i] = '\0';
+                    s.has_trailer_model_id = (i > 0);
                 }
-                s.model_id[i] = '\0';
-                s.has_model_id = (i > 0);
             }
-        } else if (std::strcmp(attr->name,
+        } else if (is_truck && std::strcmp(attr->name,
                                SCS_TELEMETRY_CONFIG_ATTRIBUTE_fuel_capacity) == 0) {
             // M8 Lander: per-truck fuel tank capacity in liters.
             // ATS day-cab tractors ship around 380 L; 8x4 heavy-haul
@@ -318,7 +378,7 @@ void SCSAPI OnTelemetryConfiguration(const scs_event_t event,
                 // otherwise crash the fill rate. The honest-stub
                 // default of 600 L remains the fallback.
             }
-        } else if (std::strcmp(attr->name,
+        } else if (is_truck && std::strcmp(attr->name,
                                SCS_TELEMETRY_CONFIG_ATTRIBUTE_adblue_capacity) == 0) {
             // M8 Lander: per-truck AdBlue/DEF tank capacity in
             // liters. Real ATS trucks have a ~50 L tank; the SDK

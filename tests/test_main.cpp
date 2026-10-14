@@ -59,6 +59,7 @@ void TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues();
 void TestIniM2GameFreeCameraShimDefaultIsFalse();
 void TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse();
 void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved();
+void TestIniM2GameFreeCameraShimPreservedWhenVkIsModern();
 // M2 dev_camera_toggle_vk — virtual key the shim synthesises on
 // every Walking entry. SCS hard-codes the dev free camera toggle to
 // the F11 key (VK_F11 = 0x7A), gated by `g_developer=1` AND
@@ -339,6 +340,9 @@ void TestCouplingProviderRealHookPositionTransformsToWorld();
 void TestCouplingProviderRealHookPositionRotatesWithTruckHeading();
 void TestCouplingProviderRealHookLandingGearStep();
 void TestCouplingProviderHookUnsetUsesTruckLocalFallback();
+void TestCouplingProviderTrailerHookPositionTransformsToWorld();
+void TestCouplingProviderTrailerHookPositionRotatesWithTrailerHeading();
+void TestCouplingProviderTrailerHookPlaceholderWhenTrailerConfigUnset();
 // M9 Lander: telemetry-driven ForceComplete via OnTrailerAttachStateChanged.
 void TestCouplingOnTrailerAttachIdleIsNoOp();
 void TestCouplingOnTrailerAttachCompleteIsNoOp();
@@ -609,6 +613,10 @@ void TestSettingsMenuSetKeyBindingUnknownKeyIsSilent();
 void TestSettingsMenuToggleFlipsIsOpen();
 void TestSettingsMenuCloseWithoutDirtyDoesNotWrite();
 void TestSettingsMenuCloseWithDirtyWritesToDisk();
+void TestSettingsMenuSetBoolM2GameFreeCameraShimDirties();
+void TestSettingsMenuSetBoolM2DevCvarPatcherDirties();
+void TestSettingsMenuSetUIntM2DevCameraToggleVkWritesThrough();
+void TestSettingsMenuSetUIntUnknownKeyIsSilent();
 
 // SettingsStore::CheckFileChanged() per-frame contract + perf budget.
 // See tests/test_settings_check_file_changed.cpp for the rationale on
@@ -745,6 +753,7 @@ int main() {
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimDefaultIsFalse);
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse);
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimExplicitFalseIsPreserved);
+    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimPreservedWhenVkIsModern);
     // M2 dev_camera_toggle_vk.
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVKF11);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkParsesHexAndDecimal);
@@ -1261,6 +1270,9 @@ RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyFindsCamdbg);
     RUN_TEST(walkercore::TestCouplingProviderRealHookPositionRotatesWithTruckHeading);
     RUN_TEST(walkercore::TestCouplingProviderRealHookLandingGearStep);
     RUN_TEST(walkercore::TestCouplingProviderHookUnsetUsesTruckLocalFallback);
+    RUN_TEST(walkercore::TestCouplingProviderTrailerHookPositionTransformsToWorld);
+    RUN_TEST(walkercore::TestCouplingProviderTrailerHookPositionRotatesWithTrailerHeading);
+    RUN_TEST(walkercore::TestCouplingProviderTrailerHookPlaceholderWhenTrailerConfigUnset);
     // M9 Lander: telemetry-driven ForceComplete via
     // OnTrailerAttachStateChanged.
     RUN_TEST(walkercore::TestCouplingOnTrailerAttachIdleIsNoOp);
@@ -1408,6 +1420,10 @@ RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyFindsCamdbg);
     RUN_TEST(walkercore::TestSettingsMenuToggleFlipsIsOpen);
     RUN_TEST(walkercore::TestSettingsMenuCloseWithoutDirtyDoesNotWrite);
     RUN_TEST(walkercore::TestSettingsMenuCloseWithDirtyWritesToDisk);
+    RUN_TEST(walkercore::TestSettingsMenuSetBoolM2GameFreeCameraShimDirties);
+    RUN_TEST(walkercore::TestSettingsMenuSetBoolM2DevCvarPatcherDirties);
+    RUN_TEST(walkercore::TestSettingsMenuSetUIntM2DevCameraToggleVkWritesThrough);
+    RUN_TEST(walkercore::TestSettingsMenuSetUIntUnknownKeyIsSilent);
 
     // SettingsStore::CheckFileChanged() — per-frame polling contract.
     // Behavioural probes pin the missing-file / empty-path / no-change /

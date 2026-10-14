@@ -105,6 +105,18 @@ public:
     // (single text scan, ~64 KiB) and runs at most once per call.
     void ProbeGDeveloperFromConfig();
     bool isSupported() const { return supported_; }
+    // M2.7 follow-up: numeric value of `g_developer` parsed from
+    // config.cfg (-1 = unprobed, 0 = off, 1 = dev shortcuts enabled,
+    // 2 = dev cvar mode). Used by the auto-pin logic to decide whether
+    // the SCS F11 intercept path is active (only at value 1). When
+    // g_developer != 1 the SCS engine does NOT intercept F11 before
+    // the action registry, so a F11 dispatch from the shim would be
+    // shadowed by the controls.sii camdbg binding. In that case the
+    // auto-pin must re-target a non-bound VK to avoid wasting the
+    // press. When g_developer == 1, SCS intercepts F11 first and the
+    // auto-pin MUST stay at F11 (re-pinning to F8 does NOT activate
+    // the dev free cam — only F11 does).
+    int g_developer_value() const { return g_developer_value_; }
 
     // Bind the dev-camera cvar patcher's last result so the shim
     // can include it in the F10 Walking-entry log line. Pointer is
@@ -352,6 +364,7 @@ public:
 private:
     bool enabled_ = false;
     bool supported_ = false;
+    int g_developer_value_ = -1;  // -1 = unprobed; see g_developer_value()
     int walks_entered_ = 0;
     int toggles_dispatched_ = 0;
     int last_dispatch_ms_ = 0;

@@ -11,7 +11,7 @@ Plugin de caminata-para-ETS2/ATS inspirado en walkers comerciales (TMRealWalk y 
 - **Nombre del proyecto.** `WalkerCore` (DLL: `libWalkerCore.dll`, 14 exports).
 - **Compatibilidad.** ETS2 y ATS, build de septiembre 2026 (alineado con TMRealWalk beta 4.5).
 - **Toolchain de compilación.** MinGW-w64 GCC ≥ 13 (probado con GCC 16.2.0 en `C:\msys64\mingw64\bin`) + CMake ≥ 3.20 + Ninja.
-- **Licencia.** MIT (confirmado en [`LICENSE`](../LICENSE)).
+- **Licencia.** **GPL-3.0-or-later** (relicenciado desde MIT el 2026-10-13, ver [`LICENSE`](../LICENSE)).
 - **Sin telemetría, sin DRM, sin monetización integrada.**
 - **Multiplayer.** El plugin **no bloquea** TruckersMP ni convoy por defecto — expone el riesgo en el log, pero deja que el usuario decida. Se documenta claramente en el README que su uso allí puede romper las reglas del servicio.
 - **Carpeta de datos de usuario.** `%APPDATA%\WalkerCore` (default; cambiar vía ADR si hace falta).
@@ -112,7 +112,7 @@ WalkerCore/
 ├── CMakeLists.txt                 # build con CMake + Ninja (MinGW primary)
 ├── AGENTS.md                      # convenciones para futuros agents
 ├── README.md                      # instalación, controles, build
-├── LICENSE                        # MIT
+├── LICENSE                        # GPL-3.0-or-later (rel. desde MIT 2026-10-13)
 ├── docs/
 │   ├── roadmap.md                 # este documento
 │   ├── architecture.mermaid       # diagrama de capas (provider/workflow/domain/adapter)
@@ -206,7 +206,7 @@ de verdad).
 | ID | Decisión | Estado |
 |----|----------|--------|
 | D1 | Nombre del binario: `libWalkerCore.dll` (prefijo `lib` por convención CMake) | Aceptada |
-| D2 | Licencia: MIT | Aceptada |
+| D2 | Licencia: GPL-3.0-or-later (rel. desde MIT 2026-10-13) | Aceptada |
 | D3 | Multiplayer: no se bloquea por defecto (warning en log) | Aceptada |
 | D4 | Toolchain: MinGW-w64 GCC | Aceptada |
 | D5 | Datos de usuario: `%APPDATA%\WalkerCore` | Default (cambiable vía ADR) |

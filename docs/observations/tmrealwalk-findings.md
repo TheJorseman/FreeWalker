@@ -235,6 +235,7 @@ build; M3's `eye_height` should also move to `1.70`.
   we study the **inputs** (knobs) and **outputs** (log lines) but do not
   re-implement their solver.
 - The plugin uses WINHTTP + an online licence service; we ship none of
-  that. WalkerCore remains MIT, offline-friendly.
+  that. WalkerCore remains GPL-3.0-or-later (rel. desde MIT 2026-10-13),
+  offline-friendly.
 - TMRealWalk's coupling animation (multi-step tractor + hoses + pin) is
   driven by their own pose sequences; we do not RE the kingpin geometry.

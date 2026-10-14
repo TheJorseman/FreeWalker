@@ -284,7 +284,7 @@ Lo que no vi en el escaneo de strings:
 
 6. **Sonidos como archivos al lado del DLL**, no embebidos en M0–M7. Empezar simple.
 
-7. **No incluir sistema de licencia en M0–M7**. Decisión explícita: WalkerCore es MIT sin DRM. M8+ si el usuario quiere monetizar, lo diseña aparte.
+7. **No incluir sistema de licencia en M0–M7**. Decisión explícita: WalkerCore es GPL-3.0-or-later sin DRM (relicenciado desde MIT el 2026-10-13). M8+ si el usuario quiere monetizar, lo diseña aparte.
 
 ---
 

@@ -699,13 +699,17 @@ line, and the failing expression.
 
 ## License
 
-WalkerCore is MIT. Each vendored dependency ships its own license under
+WalkerCore is **GPL-3.0-or-later** (relicensed from MIT on 2026-10-13
+to enable derivative work from `aefly/motioncab`, GPL-3.0).  Each
+vendored dependency ships its own license under
 `third_party/<dep>/LICENSE`:
 
-- MinHook — MIT (Tsuda Kageyo).
+- MinHook — BSD-2-Clause (Tsuda Kageyu).
 - Dear ImGui — MIT (Omar Cornut).
-- PhysX 3.4 SDK — BSD-3 (NVIDIA, optional; only if M3 lander goes
+- PhysX 3.4 SDK — BSD-3-Clause (NVIDIA, optional; only if M3 lander goes
   with the public-SDK strategy).
+
+All vendored licenses are GPL-3.0-compatible per the FSF license list.
 
 None of the dependencies introduce copyleft. The plugin binary is safe to
 distribute.

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(WalkerCore
     VERSION 0.0.1
-    DESCRIPTION "Free, MIT-licensed walk-around-the-truck plugin for Euro Truck Simulator 2 and American Truck Simulator"
+    DESCRIPTION "GPL-3.0-or-later walk-around-the-truck plugin for Euro Truck Simulator 2 and American Truck Simulator. Relicensed from MIT on 2026-10-13 to enable derivative work from aefly/motioncab (GPL-3.0)."
     LANGUAGES CXX)
 
 # -----------------------------------------------------------------------------

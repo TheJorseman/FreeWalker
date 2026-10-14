@@ -74,7 +74,10 @@ verificación manual con el juego corriendo; ver [`docs/testing.md`](docs/testin
 
 ## Licencia
 
-MIT — ver [`LICENSE`](LICENSE).
+**GPL-3.0-or-later** — ver [`LICENSE`](LICENSE).  Relicenciado desde MIT el
+2026-10-13 para permitir derivar trabajo de
+[aefly/motioncab](https://github.com/aefly/motioncab) (GPL-3.0).  Toda
+obra derivada debe también ser GPL-3.0-or-later.
 
 ## Lo que NO hace
 

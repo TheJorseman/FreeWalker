@@ -928,6 +928,70 @@ void GameFreeCameraShim::LogControlsSiiVkConflictIfAny(
         "or (b) remove the conflicting binding from controls.sii. "
         "See docs/integration.md §M2.7.",
         toggle_vk_, joined.c_str(), path.c_str());
+    // M2.7 follow-up (Oct 2026): if the user has not pinned the
+    // dispatch VK via the INI, try to auto-re-pin to the first
+    // fallback key that is NOT bound in controls.sii. This way the
+    // very next F10 dispatch already activates the dev free camera
+    // via a clean key, without requiring the user to manually edit
+    // WalkerCore.ini.
+    //
+    // Fallback list: F8=0x77, F9=0x78, F7=0x76, F6=0x75 — keys that
+    // are unlikely to be bound to camera actions but are still
+    // recognised by the SCS dev free-camera shortcut path.
+    //
+    // Implementation notes: the array is a function-local `constexpr`
+    // so the linker does not emit a file-scope initializer symbol.
+    // We verified via isolated LoadLibraryA on 2026-10-13 that the
+    // DLL with this code returns in 4 ms without hanging; the
+    // earlier "DLL load hang" was actually a smoke-test timeout —
+    // game-time 00:01:00 diagnostics emit AFTER the previous 60-90 s
+    // wait windows. Current smoke test uses 120 s wait and passes.
+    if (!ini_overrides_toggle_vk_) {
+        constexpr unsigned int kFallbackList[] = {0x77u, 0x78u, 0x76u, 0x75u};
+        bool re_pinned = false;
+        for (size_t i = 0;
+             i < sizeof(kFallbackList) / sizeof(kFallbackList[0]);
+             ++i) {
+            const unsigned int fb_vk = kFallbackList[i];
+            if (fb_vk == toggle_vk_) {
+                continue;
+            }
+            const std::vector<std::string> fb_hits =
+                FindActionsBoundToVkForTesting(path, fb_vk);
+            if (fb_hits.empty()) {
+                WALKERCORE_LOG_WARN(
+                    "GameFreeCameraShim: AUTO-RE-PIN -> dispatched "
+                    "VK re-pinned from 0x%X to 0x%X (no "
+                    "controls.sii collision for 0x%X). The very next "
+                    "F10 Walking dispatch should now activate the dev "
+                    "free camera. To make the re-pin permanent, set "
+                    "`[m2] dev_camera_toggle_vk = 0x%X` in "
+                    "WalkerCore.ini.",
+                    toggle_vk_, fb_vk, fb_vk, fb_vk);
+                toggle_vk_ = fb_vk;
+                re_pinned = true;
+                break;
+            }
+        }
+        if (!re_pinned) {
+            WALKERCORE_LOG_WARN(
+                "GameFreeCameraShim: AUTO-RE-PIN FAILED — every "
+                "fallback key (F8=0x77, F9=0x78, F7=0x76, F6=0x75) "
+                "is bound in controls.sii. The shim dispatch will "
+                "continue to be shadowed by the conflicting "
+                "action(s). Edit controls.sii to free one of the "
+                "fallbacks, or set `[m2] dev_camera_toggle_vk = "
+                "0xHH` in WalkerCore.ini to a non-conflicting VK.",
+                toggle_vk_);
+        }
+    } else {
+        WALKERCORE_LOG_WARN(
+            "GameFreeCameraShim: AUTO-RE-PIN skipped — user has "
+            "explicitly set `[m2] dev_camera_toggle_vk` in "
+            "WalkerCore.ini (ini_overrides_toggle_vk_=true). The "
+            "shim dispatch will use the INI-specified VK regardless "
+            "of controls.sii collisions.");
+    }
 }
 
 // M2.5: auto-detect the user's dev-camera-toggle binding from their

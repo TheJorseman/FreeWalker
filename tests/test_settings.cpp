@@ -845,15 +845,17 @@ void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved() {
 // hex; values outside 0..255 keep the default.
 // -----------------------------------------------------------------------------
 
-void TestIniM2DevCameraToggleVkDefaultIsVK0() {
+void TestIniM2DevCameraToggleVkDefaultIsVKF11() {
     // Fresh store (no INI file loaded) uses the code default
-    // VK_0 (0x30, top-row '0') — the hard-coded SCS dev free
-    // camera toggle in amtrucks.exe 1.61.3.1s (Oct 2026 audit:
-    // F11 cycles the interior camera via camdbg, does NOT toggle
-    // the dev free camera). Pin so a future change to the default
-    // is caught by the test.
+    // VK_F11 (0x7A) — the SCS dev free camera toggle in
+    // amtrucks.exe 1.61.3.1s, verified live Oct 2026 (F11 with
+    // g_developer=1 AND g_console=1 opens the dev free-roam view
+    // with position overlay). Earlier defaults VK_NUMPAD0 (0x60,
+    // pre-M2.6) and VK_0 (0x30, M2.6/M2.7a) were RE-driven guesses
+    // that did NOT toggle the dev free camera in this build. Pin so
+    // a future change to the default is caught by the test.
     SettingsStore defaults;
-    EXPECT_EQ(defaults.current().m2_dev_camera_toggle_vk, 0x30U);
+    EXPECT_EQ(defaults.current().m2_dev_camera_toggle_vk, 0x7AU);
 }
 
 void TestIniM2DevCameraToggleVkParsesHexAndDecimal() {
@@ -888,7 +890,7 @@ void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault() {
     // Values outside 0..255 must be rejected so a typo in the INI
     // does not produce a 16-bit SendInput that the keyboard driver
     // silently drops (or worse, fires a corrupt scan code). The
-    // fallback is the code default VK_0 (top-row '0', 0x30).
+    // fallback is the code default VK_F11 (0x7A).
     const std::string path = MakeTempIniPath("m2_toggle_vk_oor");
     std::remove(path.c_str());
 
@@ -899,14 +901,14 @@ void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault() {
     }
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));
-    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x30U);
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x7AU);
     std::remove(path.c_str());
 }
 
 void TestIniM2DevCameraToggleVkUnparseableKeepsDefault() {
     // Non-numeric input must be rejected — strtoul returns 0 with
     // end == start (no digits consumed) which our parser treats as
-    // invalid. The fallback is the code default VK_0 (top-row '0').
+    // invalid. The fallback is the code default VK_F11 (0x7A).
     const std::string path = MakeTempIniPath("m2_toggle_vk_bad");
     std::remove(path.c_str());
 
@@ -917,7 +919,7 @@ void TestIniM2DevCameraToggleVkUnparseableKeepsDefault() {
     }
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));
-    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x30U);
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x7AU);
     std::remove(path.c_str());
 }
 
@@ -949,15 +951,22 @@ void TestIniM2DevCameraToggleVkRoundTripsThroughSaveToPath() {
 }
 
 void TestIniM2LegacyIniGetsSentinelPatchedInPlace() {
-    // A pre-M2.6 INI has `game_free_camera_shim = false` and
-    // `dev_camera_toggle_vk = 0x30` written without the
-    // `# walkercore:managed:<key>` sentinel (those DLLs did not emit
-    // it). On the first load with the M2.5 hotfix DLL, the
-    // in-place sentinel patcher must insert the missing sentinels so
-    // the explicit flag is suppressed on the second load and the
-    // smart-default can fire. This is the regression test for the
-    // user-reported case where the smart-default stayed blocked
-    // because the auto-migrated line was treated as user-vetted.
+    // A pre-M2.5 INI has `game_free_camera_shim = false` and
+    // `dev_camera_toggle_vk = 0x7a` (the M2.7-onwards default) without
+    // the `# walkercore:managed:<key>` sentinel (pre-M2.5 DLLs did
+    // not emit it). On the first load, the in-place sentinel patcher
+    // must insert the missing sentinels so the explicit flag is
+    // suppressed on the second load and the smart-default can fire.
+    // This is the regression test for the user-reported case where
+    // the smart-default stayed blocked because the auto-migrated
+    // line was treated as user-vetted.
+    //
+    // Migration to `0x7a` is now the active code default (verified
+    // live Oct 2026: F11 with g_developer=1 AND g_console=1 opens the
+    // dev free-roam view). Legacy default values `0x30` (top-row '0')
+    // and `0x60` (Numpad-0) get migrated by `MigrateLegacyToggleVk`
+    // below; this test exercises the patcher's cosmetic role on a
+    // value that already matches the current default.
     const std::string path = MakeTempIniPath("m2_legacy_patch");
     std::remove(path.c_str());
 
@@ -965,14 +974,14 @@ void TestIniM2LegacyIniGetsSentinelPatchedInPlace() {
         FileWriter w(path);
         w << "[m2]\n";
         w << "game_free_camera_shim = false\n";
-        w << "dev_camera_toggle_vk = 0x30\n";
+        w << "dev_camera_toggle_vk = 0x7a\n";
     }
 
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));
     // First-load: the patcher has fired and inserted both sentinels
-    // into the file (the value matches the default for both keys,
-    // so the patcher's `kTargets` table matches). The in-memory
+    // into the file (the value matches the current default for both
+    // keys, so the patcher's `kTargets` table matches). The in-memory
     // `*_explicit` flags, however, reflect the parser's first pass
     // — the patcher does NOT retroactively clear them; that would
     // break the user-veto contract for `TestIniM2NoSentinelMeansExplicitTrue`
@@ -983,10 +992,7 @@ void TestIniM2LegacyIniGetsSentinelPatchedInPlace() {
     // the parser sees the sentinel and sets explicit=false; the
     // migrate runs as a no-op because both values are at default;
     // the patcher sees the sentinel already present and skips it.
-    // The in-memory value stays at 0x30 (the user's pre-M2.6
-    // default) and explicit stays true on the first load (the
-    // parser's first-pass result).
-    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x30U);
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x7AU);
     EXPECT_TRUE(reader.current().m2_dev_camera_toggle_vk_explicit);
     // Read the file back to confirm the sentinels were appended.
     {
@@ -998,12 +1004,8 @@ void TestIniM2LegacyIniGetsSentinelPatchedInPlace() {
                     std::string::npos);
         EXPECT_TRUE(content.find("# walkercore:managed:dev_camera_toggle_vk") !=
                     std::string::npos);
-        // Oct 2026 audit reverted the M2.7 migration: the on-disk
-        // value is the new default 0x30 (top-row '0'), matching
-        // the pre-M2.6 default the user had before the M2.7 audit.
-        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x30") !=
-                    std::string::npos);
-        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x7a") ==
+        // On-disk value matches the current default 0x7A (F11).
+        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x7a") !=
                     std::string::npos);
     }
 
@@ -1013,6 +1015,118 @@ void TestIniM2LegacyIniGetsSentinelPatchedInPlace() {
     EXPECT_TRUE(reader2.LoadFromPath(path));
     EXPECT_FALSE(reader2.current().m2_game_free_camera_shim_explicit);
     EXPECT_FALSE(reader2.current().m2_dev_camera_toggle_vk_explicit);
+
+    std::remove(path.c_str());
+}
+
+void TestIniM2DevCameraToggleVkMigratesLegacyWithSentinel() {
+    // Sentinel-pollution regression: an INI written by an M2.6 or
+    // M2.7a DLL has `dev_camera_toggle_vk = 0x30` (the legacy
+    // default at the time) WITH the `# walkercore:managed:...`
+    // sentinel. After the M2.7 default switched back to 0x7A (F11),
+    // the sentinel-pinned 0x30 was stranded — the parser marked it
+    // `*_explicit=false` so the migrate block would have to respect it
+    // to honour the contract, but that meant a legacy default could
+    // never heal.
+    //
+    // This test pins the fix: when the value is a legacy default
+    // (0x30 = VK_0 top-row '0' OR 0x60 = VK_NUMPAD0) AND the sentinel
+    // is present (meaning DLL auto-wrote it), the migrate block
+    // snaps the value to 0x7A and writes the file back. The
+    // `*_explicit` flag stays false throughout (DLL-managed → can
+    // be updated).
+    const std::string path = MakeTempIniPath("m2_migrate_sentinel");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "dev_camera_toggle_vk = 0x30\n";
+        w << "# walkercore:managed:dev_camera_toggle_vk\n";
+    }
+
+    // First load: migrate must snap 0x30 -> 0x7A and SaveToPath must
+    // rewrite the file with the new value + sentinel preserved.
+    {
+        SettingsStore reader;
+        EXPECT_TRUE(reader.LoadFromPath(path));
+        EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x7AU);
+        EXPECT_FALSE(reader.current().m2_dev_camera_toggle_vk_explicit);
+    }
+
+    // Read the file back to confirm the value was rewritten and the
+    // sentinel preserved.
+    {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const std::string content = ss.str();
+        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x7a") !=
+                    std::string::npos);
+        EXPECT_TRUE(content.find("# walkercore:managed:dev_camera_toggle_vk") !=
+                    std::string::npos);
+    }
+
+    // Second load must be idempotent: 0x7A is current default, the
+    // migrate block is a no-op, the patcher sees the sentinel and
+    // skips.
+    {
+        SettingsStore reader2;
+        EXPECT_TRUE(reader2.LoadFromPath(path));
+        EXPECT_EQ(reader2.current().m2_dev_camera_toggle_vk, 0x7AU);
+        EXPECT_FALSE(reader2.current().m2_dev_camera_toggle_vk_explicit);
+    }
+
+    std::remove(path.c_str());
+}
+
+void TestIniM2DevCameraToggleVkMigratesLegacyNumPad0() {
+    // Same as `TestIniM2DevCameraToggleVkMigratesLegacyWithSentinel`
+    // but for the pre-M2.6 default VK_NUMPAD0 (0x60). The sentinel-
+    // pollution case covers every prior default.
+    const std::string path = MakeTempIniPath("m2_migrate_numpad0");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "dev_camera_toggle_vk = 0x60\n";
+        w << "# walkercore:managed:dev_camera_toggle_vk\n";
+    }
+
+    {
+        SettingsStore reader;
+        EXPECT_TRUE(reader.LoadFromPath(path));
+        EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x7AU);
+        EXPECT_FALSE(reader.current().m2_dev_camera_toggle_vk_explicit);
+    }
+
+    std::remove(path.c_str());
+}
+
+void TestIniM2DevCameraToggleVkRespectsUserExplicitLegacy() {
+    // User-veto case: a user hand-wrote `dev_camera_toggle_vk = 0x30`
+    // into their INI (no sentinel) because they specifically wanted
+    // the top-row '0' shortcut. The parser sets `*_explicit=true`
+    // and the migrate block MUST respect that — we do not silently
+    // flip a value the user has explicitly named. This pins the
+    // contract that `TestIniM2NoSentinelMeansExplicitTrue` relies
+    // on.
+    const std::string path = MakeTempIniPath("m2_respect_user");
+    std::remove(path.c_str());
+
+    {
+        FileWriter w(path);
+        w << "[m2]\n";
+        w << "dev_camera_toggle_vk = 0x30\n";
+    }
+
+    {
+        SettingsStore reader;
+        EXPECT_TRUE(reader.LoadFromPath(path));
+        EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x30U);
+        EXPECT_TRUE(reader.current().m2_dev_camera_toggle_vk_explicit);
+    }
 
     std::remove(path.c_str());
 }
@@ -1126,34 +1240,30 @@ void TestIniM2NoSentinelMeansExplicitTrue() {
 
 void TestIniM2SentinelForDevCameraToggleVk() {
     // Case 4: same sentinel contract for dev_camera_toggle_vk. The DLL
-    // writes `dev_camera_toggle_vk = 0x30` (top-row '0') on every
-    // first-time defaults save (because that's the Oct 2026 audit
-    // code default — the actual SCS dev free camera toggle in
-    // amtrucks.exe 1.61.3.1s), and the controls.sii auto-detect
-    // must remain alive on the next load — which it can only do if
-    // the explicit flag is suppressed by the sentinel.
+    // writes `dev_camera_toggle_vk = 0x7A` (VK_F11) on every first-time
+    // defaults save (because that's the M2.7 code default — the SCS dev
+    // free camera toggle in amtrucks.exe 1.61.3.1s, verified live Oct
+    // 2026), and the controls.sii auto-detect must remain alive on the
+    // next load — which it can only do if the explicit flag is
+    // suppressed by the sentinel.
     //
-    // The on-disk legacy M2.7 value of `0x7A` (F11) is NO LONGER
-    // migrated by the Oct 2026 audit (the previous migrate snapped
-    // 0x30 → 0x7A on the assumption F11 was the toggle; live
-    // verification showed F11 routes through camdbg in this build,
-    // and the actual toggle is the hard-coded top-row '0'). The
-    // new default is 0x30, matching the pre-M2.6 default the user
-    // had before the M2.7 audit. So by the time we read back, the
-    // in-memory value is the new default and the explicit flag
-    // stays false. Pin both behaviours.
+    // This test creates a value matching the current code default
+    // (0x7A) WITH the sentinel. The migrate block does not fire (value
+    // is not a legacy default) and the explicit flag stays false.
+    // The legacy-value case (0x30 / 0x60 + sentinel) is covered by
+    // `TestIniM2DevCameraToggleVkMigratesLegacyWithSentinel` above.
     const std::string path = MakeTempIniPath("m2_sentinel_vk");
     std::remove(path.c_str());
 
     {
         FileWriter w(path);
         w << "[m2]\n";
-        w << "dev_camera_toggle_vk = 0x30\n";
+        w << "dev_camera_toggle_vk = 0x7a\n";
         w << "# walkercore:managed:dev_camera_toggle_vk\n";
     }
     SettingsStore reader;
     EXPECT_TRUE(reader.LoadFromPath(path));
-    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x30U);
+    EXPECT_EQ(reader.current().m2_dev_camera_toggle_vk, 0x7AU);
     EXPECT_FALSE(reader.current().m2_dev_camera_toggle_vk_explicit);
 
     std::remove(path.c_str());
@@ -1182,12 +1292,13 @@ void TestIniSaveToPathEmitsSentinelForDefaultValues() {
                     std::string::npos);
         EXPECT_TRUE(content.find("# walkercore:managed:game_free_camera_shim") !=
                     std::string::npos);
-        // Oct 2026 audit: default dev_camera_toggle_vk is now 0x30
-        // (top-row '0'), not 0x7A (F11). See Settings.cpp migrate
-        // comment for the live-verification rationale.
-        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x30") !=
+        // M2.7 default: dev_camera_toggle_vk is 0x7A (VK_F11), the
+        // SCS dev free camera toggle verified live on ATS 1.61.3.1s
+        // (Oct 2026). See Settings.cpp migrate comment for the
+        // live-verification rationale.
+        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x7a") !=
                     std::string::npos);
-        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x7a") ==
+        EXPECT_TRUE(content.find("dev_camera_toggle_vk = 0x30") ==
                     std::string::npos);
         EXPECT_TRUE(content.find("# walkercore:managed:dev_camera_toggle_vk") !=
                     std::string::npos);

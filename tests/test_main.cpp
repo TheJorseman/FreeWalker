@@ -66,7 +66,7 @@ void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved();
 // dev-free-camera-shortcut change; earlier defaults VK_NUMPAD0
 // 0x60 and VK_0 0x30 were RE-driven guesses that did not work in
 // amtrucks.exe 1.61.3.1s.)
-void TestIniM2DevCameraToggleVkDefaultIsVK0();
+void TestIniM2DevCameraToggleVkDefaultIsVKF11();
 void TestIniM2DevCameraToggleVkParsesHexAndDecimal();
 void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault();
 void TestIniM2DevCameraToggleVkUnparseableKeepsDefault();
@@ -78,6 +78,9 @@ void TestIniSaveToPathEmitsSentinelForDefaultValues();
 void TestIniSaveToPathOmitsSentinelForNonDefaultValues();
 void TestIniM2LegacyIniGetsSentinelPatchedInPlace();
 void TestIniM2LegacyPatchSkipsNonDefaultValues();
+void TestIniM2DevCameraToggleVkMigratesLegacyWithSentinel();
+void TestIniM2DevCameraToggleVkMigratesLegacyNumPad0();
+void TestIniM2DevCameraToggleVkRespectsUserExplicitLegacy();
 void TestApplyAllPushesEveryFieldToEveryConsumer();
 void TestWalkerFsmInitialState();
 void TestWalkerFsmDrivingToWalking();
@@ -438,6 +441,17 @@ void TestGameFreeCameraShimAutoEnableRequiresIniNotExplicit();
 void TestGameFreeCameraShimAutoEnableNoBindingRequired();
 void TestGameFreeCameraShimAutoEnableRequiresSupported();
 void TestGameFreeCameraShimAutoEnableIsIdempotent();
+void TestGameFreeCameraShimFindActionsBoundToVkEmptyPathIsEmpty();
+void TestGameFreeCameraShimFindActionsBoundToVkZeroVkIsEmpty();
+void TestGameFreeCameraShimFindActionsBoundToVkMissingFileIsEmpty();
+void TestGameFreeCameraShimFindActionsBoundToVkSingleHit();
+void TestGameFreeCameraShimFindActionsBoundToVkMultipleHitsPreserveFileOrder();
+void TestGameFreeCameraShimFindActionsBoundToVkNonKeyboardTokenSkipped();
+void TestGameFreeCameraShimFindActionsBoundToVkEscapedBacktickTypoRecovered();
+void TestGameFreeCameraShimLogControlsSiiVkConflictNoConflictWhenFileClean();
+void TestGameFreeCameraShimLogControlsSiiVkConflictDetectedAndCached();
+void TestGameFreeCameraShimLogControlsSiiVkConflictEmptyPathUsesCached();
+void TestGameFreeCameraShimLogControlsSiiVkConflictZeroVkSkip();
 void TestPxSceneHookCatalogConstantsMatchAmtrucksLayout();
 void TestDevCameraCvarPatcherDefaultStateIsEnabled();
 void TestDevCameraCvarPatcherSetEnabledRoundTrip();
@@ -728,7 +742,7 @@ int main() {
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse);
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimExplicitFalseIsPreserved);
     // M2 dev_camera_toggle_vk.
-    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVK0);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVKF11);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkParsesHexAndDecimal);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkUnparseableKeepsDefault);
@@ -740,6 +754,9 @@ int main() {
     RUN_TEST(walkercore::TestIniSaveToPathOmitsSentinelForNonDefaultValues);
     RUN_TEST(walkercore::TestIniM2LegacyIniGetsSentinelPatchedInPlace);
     RUN_TEST(walkercore::TestIniM2LegacyPatchSkipsNonDefaultValues);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkMigratesLegacyWithSentinel);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkMigratesLegacyNumPad0);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkRespectsUserExplicitLegacy);
 
     // Regression guard for the dump_state_vk / mouse-button round-trip —
     // the user observed "F12 only gives me a screenshot" because the
@@ -1160,6 +1177,17 @@ RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyFindsCamdbg);
     RUN_TEST(walkercore::TestGameFreeCameraShimAutoEnableNoBindingRequired);
     RUN_TEST(walkercore::TestGameFreeCameraShimAutoEnableRequiresSupported);
     RUN_TEST(walkercore::TestGameFreeCameraShimAutoEnableIsIdempotent);
+    RUN_TEST(walkercore::TestGameFreeCameraShimFindActionsBoundToVkEmptyPathIsEmpty);
+    RUN_TEST(walkercore::TestGameFreeCameraShimFindActionsBoundToVkZeroVkIsEmpty);
+    RUN_TEST(walkercore::TestGameFreeCameraShimFindActionsBoundToVkMissingFileIsEmpty);
+    RUN_TEST(walkercore::TestGameFreeCameraShimFindActionsBoundToVkSingleHit);
+    RUN_TEST(walkercore::TestGameFreeCameraShimFindActionsBoundToVkMultipleHitsPreserveFileOrder);
+    RUN_TEST(walkercore::TestGameFreeCameraShimFindActionsBoundToVkNonKeyboardTokenSkipped);
+    RUN_TEST(walkercore::TestGameFreeCameraShimFindActionsBoundToVkEscapedBacktickTypoRecovered);
+    RUN_TEST(walkercore::TestGameFreeCameraShimLogControlsSiiVkConflictNoConflictWhenFileClean);
+    RUN_TEST(walkercore::TestGameFreeCameraShimLogControlsSiiVkConflictDetectedAndCached);
+    RUN_TEST(walkercore::TestGameFreeCameraShimLogControlsSiiVkConflictEmptyPathUsesCached);
+    RUN_TEST(walkercore::TestGameFreeCameraShimLogControlsSiiVkConflictZeroVkSkip);
     RUN_TEST(walkercore::TestDevCameraCvarPatcherDefaultStateIsEnabled);
     RUN_TEST(walkercore::TestDevCameraCvarPatcherSetEnabledRoundTrip);
     RUN_TEST(walkercore::TestDevCameraCvarPatcherSetNameRvaRoundTrip);

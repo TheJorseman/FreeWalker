@@ -49,22 +49,20 @@ struct WalkerSettings {
     // developer free camera takes over (assuming `g_developer` is "1"
     // in the game's config.cfg). Default `false` so out-of-the-box
     // M2 lander: when true, the F10 (Driving -> Walking) transition
-    // also synthesises a Numpad-0 keypress via SendInput so the SCS
+    // also synthesises a F11 keypress via SendInput so the SCS
     // developer free camera takes over. Requires `uset g_developer
-    // "1"` in the game's config.cfg AND a binding from Numpad-0
-    // to the dev free camera toggle action in the active profile's
-    // controls.sii — by default ATS 1.61.x does NOT bind any key
-    // to the dev free camera (it's UI-button only via
-    // `o_im_freecam`), so this shim is effectively a no-op for the
-    // stock profile. Default `false` so users on the stock profile
-    // don't see SendInput dispatch log lines that accomplish
-    // nothing. Users who want the shim to work must (a) bind
-    // Numpad-0 to the dev free camera action in controls.sii, and
-    // (b) set this gate to `true`. Even then, mod stacks that wrap
-    // DI8 keyboard (ReShade + OptiScaler + RenoDX + DXVK) can
-    // discard SendInput events on the foreground lock — verified on
-    // the M2 lander's worst-case mod stack. The M11 settings menu
-    // can flip it at runtime via the exported ABI.
+    // "1"` AND `uset g_console "1"` in the game's config.cfg. The
+    // dev free camera in amtrucks.exe 1.61.3.1s is the hard-coded
+    // F11 shortcut, intercepted by the game engine BEFORE the
+    // action registry — no controls.sii binding is required for the
+    // shim to work. Even so, the shim defaults to off so users on
+    // the stock profile don't see SendInput dispatch log lines for
+    // a feature they may not want. Set `[m2] game_free_camera_shim
+    // = true` in the INI to enable the dispatch. Mod stacks that
+    // wrap DI8 keyboard (ReShade + OptiScaler + RenoDX + DXVK) can
+    // discard SendInput events on the foreground lock — verified
+    // on the M2 lander's worst-case mod stack. The M11 settings
+    // menu can flip it at runtime via the exported ABI.
     bool m2_game_free_camera_shim = false;
     // M2.5 follow-up: did the INI explicitly set `game_free_camera_shim
     // = ...`? When true, the PluginEntry's auto-enable path (when a
@@ -103,17 +101,14 @@ struct WalkerSettings {
     // = 0xC0` is the `~` console key. The shim only fires when
     // `m2_game_free_camera_shim` is also true; with the shim off,
     // this knob has no effect.
-    unsigned int m2_dev_camera_toggle_vk = 0x30;  // VK_0 (top-row '0')
-                                                       // — hard-coded SCS dev free
-                                                       // camera toggle in
-                                                       // amtrucks.exe 1.61.3.1s
-                                                       // (Oct 2026 audit: F11
-                                                       // cycles the interior
-                                                       // camera via camdbg,
-                                                       // does NOT toggle the
-                                                       // dev free camera).
+    unsigned int m2_dev_camera_toggle_vk = 0x7A;  // VK_F11 — SCS dev free camera
+                                                  // toggle in amtrucks.exe 1.61.3.1s
+                                                  // (verified live Oct 2026: F11 with
+                                                  // g_developer=1 AND g_console=1
+                                                  // opens the dev free-roam view with
+                                                  // position overlay).
     // M2.5: did the INI explicitly set `dev_camera_toggle_vk` (any
-    // value, including the default 0x30)? When true, the
+    // value, including the default 0x7A)? When true, the
     // GameFreeCameraShim's controls.sii auto-detect is skipped — the
     // user has signalled "I know what I want, leave me alone". When
     // false (key was not present in the INI), the shim auto-probes
@@ -121,15 +116,15 @@ struct WalkerSettings {
     // none exist in amtrucks.exe 1.61.3.1s for the dev free camera,
     // per the Oct 2026 audit) and adopts the first match if found.
     // The flag is distinct from the value itself because a user can
-    // explicitly set `dev_camera_toggle_vk = 0x30` (top-row '0')
-    // and that is still an explicit override even though it happens
-    // to match the default. The Oct 2026 audit removed the previous
-    // M2.7 in-memory migration (0x30 / 0x60 → 0x7A) because live
-    // verification showed 0x7A (F11) routes through the interior
-    // camera cycle in this build, not the dev free camera. The new
-    // default is 0x30 (matching the pre-M2.6 historical default
-    // that the SCS dev free camera hard-coded shortcut has always
-    // been on), so the migrate would be a no-op anyway.
+    // explicitly set `dev_camera_toggle_vk = 0x7A` (F11) and that is
+    // still an explicit override even though it happens to match
+    // the default. The M2.7 in-memory migration snaps legacy
+    // default values (0x30 = VK_0 top-row '0', 0x60 = VK_NUMPAD0)
+    // to the current default 0x7A when the loader's
+    // `*_explicit` flag is false (sentinel present, value was
+    // auto-written by an older DLL version) so the sentinel-
+    // pollution case (DLL wrote a now-legacy value, default
+    // changed, value becomes stranded) self-heals on next load.
     bool m2_dev_camera_toggle_vk_explicit = false;
     // M2 long-term camera hijack gate. False by default — opt in via
     // `[m2] camera_hijack = 1`. When enabled, WalkerCore captures
@@ -174,10 +169,10 @@ struct WalkerSettings {
     // DLL patch). Set `[m2] camera_hijack_install = true` in the
     // INI to opt in on a known-clean stack. When the gate is
     // false, the Install() is a no-op and the SCS state machine
-    // drives the camera unobserved. The shim's PostMessage path
-    // (which dispatches Numpad-0 to the game window on F10
-    // Walking entry) still works — the dev free camera activates
-    // the same way manual Numpad-0 would.
+    // drives the camera unobserved. The shim's SendInput path
+    // (which dispatches F11 / `dev_camera_toggle_vk` to the game
+    // window on F10 Walking entry) still works — the dev free
+    // camera activates the same way manual F11 would.
     bool m2_camera_hijack_install = false;
 
     // M11 ImGui overlay gate. False by default — opt in via

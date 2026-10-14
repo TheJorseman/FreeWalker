@@ -47,11 +47,11 @@ namespace {
 
 std::unique_ptr<GameFreeCameraShim> MakeShim() {
     // Fresh instance per test. Construct default, then reset to a
-    // known-disabled baseline (toggle VK 0x60 = VK_NUMPAD0, no exit
+    // known-disabled baseline (toggle VK 0x7A = VK_F11, no exit
     // press) so the assertions are deterministic.
     auto s = std::make_unique<GameFreeCameraShim>();
     s->SetEnabled(false);
-    s->SetToggleVk(0x60);
+    s->SetToggleVk(0x7A);
     s->SetExitPressVk(0);
     return s;
 }
@@ -104,7 +104,7 @@ bool WriteTempFile(const std::string &path, const std::string &contents) {
 void TestGameFreeCameraShimDefaultStateIsDisabled() {
     auto s = MakeShim();
     EXPECT_FALSE(s->isEnabled());
-    EXPECT_EQ(s->toggle_vk(), 0x60);    // VK_NUMPAD0
+    EXPECT_EQ(s->toggle_vk(), 0x7A);    // VK_F11
     EXPECT_EQ(s->exit_press_vk(), 0);
     EXPECT_EQ(s->walks_entered(), 0);
     EXPECT_EQ(s->toggles_dispatched(), 0);
@@ -925,7 +925,7 @@ void TestGameFreeCameraShimAutoDetectAdoptsBindingWhenFound() {
 
 void TestGameFreeCameraShimAutoDetectNoBindingLeavesDefaultVk() {
     // When no binding is found, the VK lookup is never called and
-    // the shim's default VK (0x60 Numpad-0) is preserved. The
+    // the shim's default VK (0x7A VK_F11) is preserved. The
     // parser returns empty, ScsKeyNameToVkForTesting of empty
     // returns 0, and the runtime skips adoption.
     const std::string path = MakeTempPath("auto_detect_nobind");
@@ -939,10 +939,10 @@ void TestGameFreeCameraShimAutoDetectNoBindingLeavesDefaultVk() {
     const unsigned int vk =
         GameFreeCameraShim::ScsKeyNameToVkForTesting(token);
     EXPECT_EQ(vk, 0u);
-    // Shim default is still 0x60 (the constructor + SetToggleVk
+    // Shim default is still 0x7A (the constructor + SetToggleVk
     // round-trip).
     auto s = MakeShim();
-    EXPECT_EQ(s->toggle_vk(), 0x60u);
+    EXPECT_EQ(s->toggle_vk(), 0x7Au);
     EXPECT_EQ(s->auto_detected_key_name(), std::string());
     EXPECT_EQ(s->auto_detected_controls_sii_path(), std::string());
     EXPECT_FALSE(s->ini_overrides_toggle_vk());
@@ -1010,7 +1010,7 @@ void TestGameFreeCameraShimAutoEnableNoBindingRequired() {
     // / walk_mode / free_camera with "does not exist, ignoring
     // change"; camdbg is accepted but cycles the interior camera,
     // not the dev free camera). The shim defaults to the hard-coded
-    // '0' shortcut (VK_0, 0x30) regardless of bindings, so the
+    // F11 shortcut (VK_F11, 0x7A) regardless of bindings, so the
     // "no binding detected" reason for staying off no longer
     // applies. With g_developer=1 AND no INI override, the
     // smart-default now flips enabled → true on its own.
@@ -1056,6 +1056,213 @@ void TestGameFreeCameraShimAutoEnableIsIdempotent() {
     // Second call is a no-op: returns false (already enabled).
     EXPECT_FALSE(s->MaybeAutoEnableFromDetection());
     EXPECT_TRUE(s->isEnabled());
+}
+
+// --- controls.sii conflict detection -------------------------------------
+//
+// M2 diagnostic (Oct 2026 user report): "F11 me lanza a la camara 0".
+// Root cause: the user's controls.sii binds `mix camdbg \`keyboard.f11?0\``,
+// shadowing the SCS dev free-camera shortcut. The user-visible symptom
+// was the interior camera cycling on every F11 press instead of the dev
+// free camera activating. The conflict detector below walks every
+// `mix <action> \`...\`` line in the file and reports the action names
+// bound to the shim's target VK. The F10 dispatch log surfaces the
+// cached conflict set so the analyst can correlate "press was sent but
+// a binding shadowed it" with the exact action name in one grep.
+
+void TestGameFreeCameraShimFindActionsBoundToVkEmptyPathIsEmpty() {
+    // Empty path is a sentinel for "the probe could not resolve any
+    // controls.sii". The walker returns an empty vector so the
+    // caller's "controls-sii-shadow=" line reads "<none>" rather
+    // than crashing on a null FILE*.
+    const std::vector<std::string> hits =
+        GameFreeCameraShim::FindActionsBoundToVkForTesting(
+            std::string(), 0x7A);
+    EXPECT_EQ(hits.size(), static_cast<size_t>(0));
+}
+
+void TestGameFreeCameraShimFindActionsBoundToVkZeroVkIsEmpty() {
+    // VK 0 is the sentinel for "shim has no key to scan for" (a
+    // misconfigured shim). The walker short-circuits without
+    // opening the file.
+    const std::string path = MakeTempPath("find_zero_vk");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix camdbg `keyboard.f11?0`\"\n"));
+    const std::vector<std::string> hits =
+        GameFreeCameraShim::FindActionsBoundToVkForTesting(path, 0);
+    EXPECT_EQ(hits.size(), static_cast<size_t>(0));
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimFindActionsBoundToVkMissingFileIsEmpty() {
+    // A non-existent path (test file that was never written) is
+    // not a hard error — the walker returns an empty vector and
+    // the F10 log line reads "controls-sii-shadow=<none>" with a
+    // "<not found>" controls-sii-path= marker. The analyst can
+    // tell the probe failed cleanly from the log.
+    const std::vector<std::string> hits =
+        GameFreeCameraShim::FindActionsBoundToVkForTesting(
+            std::string("C:\\does\\not\\exist\\walkercore_missing.sii"),
+            0x7A);
+    EXPECT_EQ(hits.size(), static_cast<size_t>(0));
+}
+
+void TestGameFreeCameraShimFindActionsBoundToVkSingleHit() {
+    // The October 2026 user scenario: controls.sii line 234 binds
+    // `mix camdbg \`keyboard.f11?0\``. The walker must surface
+    // `camdbg` when scanning for target_vk=0x7A (VK_F11).
+    const std::string path = MakeTempPath("find_single_hit");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "SiiNunit\n"
+        "\n"
+        "config_lines[0]: \"mix screenshot `keyboard.f10?0`\"\n"
+        "config_lines[1]: \"mix camdbg `keyboard.f11?0`\"\n"
+        "config_lines[2]: \"mix menu_open `keyboard.escape?0`\"\n"));
+    const std::vector<std::string> hits =
+        GameFreeCameraShim::FindActionsBoundToVkForTesting(path, 0x7A);
+    EXPECT_EQ(hits.size(), static_cast<size_t>(1));
+    EXPECT_EQ(hits[0], std::string("camdbg"));
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimFindActionsBoundToVkMultipleHitsPreserveFileOrder() {
+    // Multiple actions bound to F11 must all be returned, in the
+    // order they appear in the file (top-down). The user reads
+    // controls.sii top-down, so the log line mirrors that order.
+    // We also pin a multi-token binding (semantical.* alias) so
+    // the token walker does not falsely miss because the keyboard
+    // token is not the first one inside the backticks.
+    const std::string path = MakeTempPath("find_multi_hit");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix first `keyboard.f11?0`\"\n"
+        "config_lines[1]: \"mix second `semantical.foo?0 | keyboard.f11?0`\"\n"
+        "config_lines[2]: \"mix third `keyboard.f10?0`\"\n"
+        "config_lines[3]: \"mix fourth `keyboard.f11?0`\"\n"));
+    const std::vector<std::string> hits =
+        GameFreeCameraShim::FindActionsBoundToVkForTesting(path, 0x7A);
+    EXPECT_EQ(hits.size(), static_cast<size_t>(3));
+    EXPECT_EQ(hits[0], std::string("first"));
+    EXPECT_EQ(hits[1], std::string("second"));
+    EXPECT_EQ(hits[2], std::string("fourth"));
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimFindActionsBoundToVkNonKeyboardTokenSkipped() {
+    // A binding line whose keyboard token does not match the
+    // target VK must NOT be reported as a conflict. The walker
+    // only flags a hit when one of the inside-backtick tokens is
+    // a `keyboard.*` token whose VK matches `target_vk`.
+    const std::string path = MakeTempPath("find_skip_nonmatch");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix camdbg `keyboard.f10?0`\"\n"
+        "config_lines[1]: \"mix chat `keyboard.t?0`\"\n"
+        "config_lines[2]: \"mix playground `mouse.button_left?0`\"\n"));
+    const std::vector<std::string> hits =
+        GameFreeCameraShim::FindActionsBoundToVkForTesting(path, 0x7A);
+    EXPECT_EQ(hits.size(), static_cast<size_t>(0));
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimFindActionsBoundToVkEscapedBacktickTypoRecovered() {
+    // The copy-paste typo (`` \` `` instead of `` ` ``) that the
+    // user might introduce by editing the file in a text editor
+    // that auto-escapes markdown-style backticks. The walker
+    // recovers the keyboard token via the escaped-backtick
+    // fallback so the conflict still surfaces; the user gets a
+    // single log line that names both the conflict and the typo.
+    const std::string path = MakeTempPath("find_escaped_typo");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix camdbg \\`keyboard.f11?0\\`\"\n"));
+    const std::vector<std::string> hits =
+        GameFreeCameraShim::FindActionsBoundToVkForTesting(path, 0x7A);
+    EXPECT_EQ(hits.size(), static_cast<size_t>(1));
+    EXPECT_EQ(hits[0], std::string("camdbg"));
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimLogControlsSiiVkConflictNoConflictWhenFileClean() {
+    // The common case: the controls.sii has no binding on the
+    // shim's target VK. The cache fields
+    // `controls_sii_conflict_detected_for_testing()` must read
+    // false and `controls_sii_conflict_actions_for_testing()`
+    // must be empty. The F10 dispatch log line would read
+    // `controls-sii-shadow=<none>`.
+    const std::string path = MakeTempPath("conflict_clean");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix screenshot `keyboard.f10?0`\"\n"
+        "config_lines[1]: \"mix menu_open `keyboard.escape?0`\"\n"));
+    auto s = MakeShim();
+    s->LogControlsSiiVkConflictIfAny(path);
+    EXPECT_FALSE(s->controls_sii_conflict_detected_for_testing());
+    EXPECT_EQ(s->controls_sii_conflict_actions_for_testing().size(),
+              static_cast<size_t>(0));
+    EXPECT_EQ(s->controls_sii_conflict_last_path_for_testing(), path);
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimLogControlsSiiVkConflictDetectedAndCached() {
+    // The October 2026 user scenario at the diagnostic surface:
+    // controls.sii binds camdbg to F11. After calling
+    // LogControlsSiiVkConflictIfAny, the cache must reflect the
+    // conflict so the F10 dispatch log line can include
+    // `controls-sii-shadow=camdbg` without re-scanning.
+    const std::string path = MakeTempPath("conflict_detected");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix camdbg `keyboard.f11?0`\"\n"));
+    auto s = MakeShim();
+    s->LogControlsSiiVkConflictIfAny(path);
+    EXPECT_TRUE(s->controls_sii_conflict_detected_for_testing());
+    const auto &actions =
+        s->controls_sii_conflict_actions_for_testing();
+    EXPECT_EQ(actions.size(), static_cast<size_t>(1));
+    EXPECT_EQ(actions[0], std::string("camdbg"));
+    EXPECT_EQ(s->controls_sii_conflict_last_path_for_testing(), path);
+    std::remove(path.c_str());
+}
+
+void TestGameFreeCameraShimLogControlsSiiVkConflictEmptyPathUsesCached() {
+    // When LogControlsSiiVkConflictIfAny is called with an empty
+    // path (the PluginEntry default), the walker falls back to
+    // `auto_detected_controls_sii_path_` so the runtime can scan
+    // without re-resolving the profile tree. When both are empty,
+    // the call logs a skip-and-reason line and leaves the cache
+    // cleared — the F10 log line reads
+    // `controls-sii-shadow=<none>`.
+    auto s = MakeShim();
+    s->LogControlsSiiVkConflictIfAny(std::string());
+    EXPECT_FALSE(s->controls_sii_conflict_detected_for_testing());
+    EXPECT_EQ(s->controls_sii_conflict_actions_for_testing().size(),
+              static_cast<size_t>(0));
+    // The last-path is cleared because the scan was skipped (no
+    // path to associate the result with).
+    EXPECT_EQ(s->controls_sii_conflict_last_path_for_testing(),
+              std::string());
+}
+
+void TestGameFreeCameraShimLogControlsSiiVkConflictZeroVkSkip() {
+    // A shim whose toggle_vk_ is 0 (misconfigured, e.g. a buggy
+    // INI with `dev_camera_toggle_vk = 0`) cannot scan for
+    // bindings because there is no target VK to look up. The
+    // walker short-circuits with a skip-and-reason log line and
+    // leaves the cache cleared.
+    const std::string path = MakeTempPath("conflict_zero_vk");
+    EXPECT_TRUE(WriteTempFile(
+        path,
+        "config_lines[0]: \"mix camdbg `keyboard.f11?0`\"\n"));
+    auto s = MakeShim();
+    s->SetToggleVk(0);  // disable scan target
+    s->LogControlsSiiVkConflictIfAny(path);
+    EXPECT_FALSE(s->controls_sii_conflict_detected_for_testing());
+    EXPECT_EQ(s->controls_sii_conflict_actions_for_testing().size(),
+              static_cast<size_t>(0));
+    std::remove(path.c_str());
 }
 
 }  // namespace walkercore

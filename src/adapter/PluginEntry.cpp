@@ -1133,6 +1133,24 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
         static_cast<unsigned long long>(
             reinterpret_cast<std::uintptr_t>(game_hwnd)),
         game_hwnd != nullptr ? "enabled" : "disabled — SendInput fallback");
+    // M2 diagnostic: scan the user's controls.sii for any action
+    // bound to the toggle VK and log a heads-up if a binding
+    // collision is found. The October 2026 user report
+    // ("F11 me lanza a la camara 0") was caused by F11 being
+    // bound to the `camdbg` action in the user's profile; the
+    // conflict was invisible until the F10 dispatch cycled the
+    // interior camera instead of toggling the dev free camera.
+    // Surfacing the conflict at shim init time lets the user
+    // either re-pin the dispatch VK (recommended) or remove the
+    // colliding binding before the next F10. The scan reuses the
+    // path AutoDetectToggleVkFromControlsSii already resolved (so
+    // we don't re-probe the per-user directory tree), and the
+    // cached conflict set is surfaced again on every F10
+    // Walking-entry log so the analyst always sees the binding
+    // context next to the dispatch outcome. The scan is
+    // idempotent — multiple BindGameHwnd calls (e.g. on profile
+    // reload) log once per unique controls.sii path.
+    g_game_free_camera_shim->LogControlsSiiVkConflictIfAny();
   }
   walkercore::diagnostic_internal::SetGameFreeCameraShim(
       g_game_free_camera_shim);

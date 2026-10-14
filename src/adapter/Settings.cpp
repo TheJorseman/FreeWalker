@@ -77,7 +77,13 @@ bool EnsureDirectoryExists(const std::string &path) {
     if (sep == std::string::npos) return true;
     const std::string dir = path.substr(0, sep);
 #if defined(_WIN32)
-    // Walk each component and CreateDirectoryA if missing.
+    // Walk each component and CreateDirectoryA if missing. We
+    // ignore the return value here — CreateDirectoryA returns
+    // ERROR_ALREADY_EXISTS for any directory already on disk, which
+    // is the common case. The "could not create" detection is done
+    // by checking GetFileAttributesA on the leaf below (covers the
+    // "permission denied" / "invalid path" / "drive not mounted"
+    // cases that the walker cannot recover from).
     std::string acc;
     for (size_t i = 0; i < dir.size(); ++i) {
         const char c = dir[i];
@@ -87,6 +93,26 @@ bool EnsureDirectoryExists(const std::string &path) {
                 CreateDirectoryA(acc.c_str(), nullptr);
             }
         }
+    }
+    // Verify the final directory exists and is actually a
+    // directory. The SaveToPath caller treats a `false` return as
+    // "could not create parent dir" so we need to be conservative
+    // here: any non-directory result (file with the same path,
+    // permission denied, INVALID_HANDLE_VALUE) returns false.
+    const DWORD attrs = ::GetFileAttributesA(dir.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        WALKERCORE_LOG_INFO(
+            "Settings: EnsureDirectoryExists failed for %s (parent dir=%s "
+            "missing; GetLastError=%lu) — subsequent SaveToPath will fail",
+            path.c_str(), dir.c_str(), ::GetLastError());
+        return false;
+    }
+    if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        WALKERCORE_LOG_INFO(
+            "Settings: EnsureDirectoryExists failed for %s (parent path=%s "
+            "exists but is NOT a directory; GetLastError=%lu)",
+            path.c_str(), dir.c_str(), ::GetLastError());
+        return false;
     }
     return true;
 #else
@@ -425,35 +451,33 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                 loaded.m2_dev_cvar_patcher = bv;
             } else if (lkey == "dev_camera_toggle_vk") {
                 // M2: virtual key the shim synthesises on every
-                // Walking entry. The M2.7 default is VK_0 (0x30,
-                // top-row '0') — the hard-coded SCS dev free
-                // camera toggle in amtrucks.exe 1.61.3.1s,
-                // intercepted before the action registry (no
-                // controls.sii binding required). Requires
-                // `g_developer=1` AND `g_console=1` in config.cfg.
+                // Walking entry. The M2.7 default is VK_F11 (0x7A)
+                // — the SCS dev free camera toggle in
+                // amtrucks.exe 1.61.3.1s, intercepted before the
+                // action registry (no controls.sii binding
+                // required). Requires `g_developer=1` AND
+                // `g_console=1` in config.cfg. Live-verified Oct
+                // 2026: pressing F11 with both cvars set opens the
+                // dev free-roam view with position overlay.
                 // Historical defaults: pre-M2.6 was VK_NUMPAD0
-                // (0x60), M2.6 was VK_0 (0x30, top-row zero), M2.7
-                // was VK_F11 (0x7A). The Oct 2026 audit reverted
-                // from 0x7A back to 0x30 because live verification
-                // showed F11 routes through the interior camera
-                // cycle in this build (the user's controls.sii
-                // binds F11 to the `camdbg` action), while the
-                // top-row '0' shortcut is intercepted before the
-                // action registry and toggles the dev free camera
-                // directly. Users whose controls.sii or mod stack
-                // binds top-row '0' to a non-camera action can
-                // over-bind via `[m2] dev_camera_toggle_vk = 0xHH`
-                // in this INI. Accepts decimal (e.g. 48 = VK_0) or
-                // 0xHH (0x30). Out-of-range values fall back to
-                // the new default VK_0 and emit a one-shot warning
-                // so a typo in the INI is not silently accepted.
+                // (0x60, RE guess), M2.6 was VK_0 (0x30, top-row
+                // zero, RE guess), M2.7 is VK_F11 (0x7A, verified).
+                // Users whose controls.sii or mod stack binds F11
+                // to a non-camera action can re-target via
+                // `[m2] dev_camera_toggle_vk = 0xHH` in this INI
+                // (e.g. F8 = 0x77 to avoid collision with
+                // `mix camdbg \`keyboard.f11?0\``). Accepts decimal
+                // (e.g. 122 = VK_F11) or 0xHH (0x7A). Out-of-range
+                // values fall back to the new default VK_F11 and
+                // emit a one-shot warning so a typo in the INI is
+                // not silently accepted.
                 char *end = nullptr;
                 const unsigned long parsed =
                     strtoul(value.c_str(), &end, 0);
                 if (end != value && *end == '\0' && parsed <= 0xFF) {
                     loaded.m2_dev_camera_toggle_vk = static_cast<unsigned int>(parsed);
                     // M2.5: even if the value happens to equal the
-                    // default 0x30, the user has explicitly named the
+                    // default 0x7A, the user has explicitly named the
                     // knob in the INI — set the explicit flag so the
                     // controls.sii auto-detect is skipped. The
                     // explicit-vs-default distinction matters because
@@ -465,8 +489,8 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                     // `# walkercore:managed:dev_camera_toggle_vk` was
                     // emitted). Same rationale as for
                     // game_free_camera_shim — pre-M2.5 DLLs wrote
-                    // `dev_camera_toggle_vk = 0x60` (and the current
-                    // M2.6 DLLs write `0x30`) on every SaveToPath, so
+                    // `dev_camera_toggle_vk = 0x60` and M2.6/M2.7a
+                    // DLLs wrote `0x30` on every SaveToPath, so
                     // without this exemption the controls.sii
                     // auto-detect is dead on upgrade.
                     if (!auto_managed) {
@@ -476,7 +500,7 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                     WALKERCORE_LOG_WARN(
                         "Settings: [m2] dev_camera_toggle_vk='%s' is not a "
                         "valid VK code (decimal 0..255 or 0xHH); keeping default "
-                        "VK_0 (0x30, top-row '0').", value);
+                        "VK_F11 (0x7A).", value);
                 }
             } else if (lkey == "camera_hijack_install" && TryParseBool(value, &bv)) {
                 // M2 long-term: in-process MinHook on the SCS camera
@@ -589,56 +613,47 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     // M2.7 hotfix: one-shot in-memory migration of `dev_camera_toggle_vk`
     // whose value still reads as a legacy default. Two historical
     // defaults to cover:
-    //   * 0x30 = VK_0 (top-row '0') — M2.6 build's default. Turned
-    //     out NOT to be the SCS dev free camera toggle in
+    //   * 0x30 = VK_0 (top-row '0') — M2.6 / M2.7a build's default.
+    //     RE-confirmed NOT to be the SCS dev free camera toggle in
     //     amtrucks.exe 1.61.3.1s per user live-verify in Oct 2026
-    //     (VK_F11 / 0x7A is the effective one).
-    //   * 0x60 = VK_NUMPAD0 — M2.5-and-earlier default. Routes through
-    //     the regular interior-camera cycle on this build.
+    //     (VK_F11 / 0x7A IS the effective toggle).
+    //   * 0x60 = VK_NUMPAD0 — pre-M2.6 default. Routes through the
+    //     regular interior-camera cycle on this build.
     //
-    // The migration fires regardless of the `*_explicit` flag because
-    // pre-M2.5 DLLs never emitted the sentinel — the parser marks those
-    // legacy lines as `explicit=true` (the parser's only signal of
-    // "user-vetted" is "no sentinel"), which would otherwise block this
-    // migration. The migration treats any legacy-default value as an
-    // unsigned-by-the-user artefact and snaps it to the new code
-    // default. Users who genuinely want a non-default VK can still
-    // pin it explicitly post-migration — and the next SaveToPath
-    // round-trip will write the non-default value (with no sentinel)
-    // so subsequent reloads no longer see a legacy default to migrate.
+    // The migration fires only when `*_explicit` is false (the
+    // `# walkercore:managed:dev_camera_toggle_vk` sentinel is present,
+    // meaning the value was auto-written by an older DLL version with
+    // a now-legacy default). Users who hand-wrote a legacy value into
+    // their INI (no sentinel) keep their pick — the explicit flag
+    // gates the migration so a user who genuinely wants VK_0 or
+    // VK_NUMPAD0 is not silently flipped to F11.
+    //
+    // The sentinel-pollution fix: a pre-M2.7a DLL wrote the value
+    // matching its compile-time default (0x30 for M2.6/M2.7a) AND
+    // emitted the sentinel. After the default changed to 0x7A, the
+    // sentinel-pinned 0x30 would otherwise be stranded forever —
+    // no fresh DLL load would migrate it because sentinel = "user
+    // knows what they want". This block heals that case: sentinel
+    // present + legacy value → migrate to the new default.
     //
     // Fires exactly once per INI lifetime because the post-migration
     // value matches the new code default; PatchSentinelsForLegacyIni
-    // below will then re-emit the sentinel so future loads stay
-    // suppressed from explicit.
-    //
-    // M2.7 audit (Oct 2026): the previous migrate target was
-    // VK_F11 (0x7A) on the assumption — based on a single user
-    // live-verify — that F11 was the SCS dev free camera toggle.
-    // A second live-verify in Oct 2026 showed F11 routes through
-    // the regular interior camera cycle in amtrucks.exe 1.61.3.1s
-    // (the user's `mix camdbg \`keyboard.f11?0\`` binding in
-    // controls.sii binds F11 to the `camdbg` action, which cycles
-    // cam 0, cam 1, ... not the dev free camera). The actual
-    // dev free camera toggle is the hard-coded top-row '0'
-    // shortcut (VK_0, 0x30), intercepted before the action
-    // registry. The new default is therefore 0x30. The legacy
-    // migrate target 0x7A is removed; if 0x7A or 0x60 still
-    // appears in a user's INI we leave it alone (the user may
-    // have pinned it deliberately for some other reason) and
-    // just emit a one-line guidance pointing at the new default.
-    if (current_.m2_dev_camera_toggle_vk == 0x7Au) {
-        WALKERCORE_LOG_INFO(
-            "Settings: [m2] dev_camera_toggle_vk was 0x7A (VK_F11). "
-            "Live verification on ATS 1.61.3.1s in Oct 2026 showed "
-            "F11 routes through the interior camera cycle in this "
-            "build (the user's controls.sii binds F11 to the "
-            "`camdbg` action). The dev free camera toggle is the "
-            "hard-coded top-row '0' shortcut (VK_0, 0x30) instead. "
-            "Edit [m2] dev_camera_toggle_vk = 0x30 in this INI to "
-            "re-target the dispatch. Not migrating in this build "
-            "because the user may have pinned 0x7A deliberately; "
-            "see docs/observations/dev-free-camera.md.");
+    // below re-emits the sentinel so future loads stay suppressed
+    // from explicit.
+    if (!current_.m2_dev_camera_toggle_vk_explicit &&
+        (current_.m2_dev_camera_toggle_vk == 0x30u ||
+         current_.m2_dev_camera_toggle_vk == 0x60u)) {
+        const unsigned int old_vk = current_.m2_dev_camera_toggle_vk;
+        current_.m2_dev_camera_toggle_vk = 0x7Au;
+        WALKERCORE_LOG_WARN(
+            "Settings: [m2] dev_camera_toggle_vk was 0x%X (legacy default); "
+            "migrating to 0x7A (VK_F11, the verified SCS dev free camera "
+            "toggle on amtrucks.exe 1.61.3.1s with g_developer=1 AND "
+            "g_console=1). Live verification Oct 2026: F11 opens the dev "
+            "free-roam view with position overlay; top-row '0' (0x30) "
+            "and Numpad-0 (0x60) do nothing in this build.",
+            old_vk);
+        migrated = true;
     }
     if (current_.m2_d3d11_hook) {
         WALKERCORE_LOG_WARN(
@@ -689,7 +704,7 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     // M2.5 hotfix: in-place sentinel patch for legacy INIs. Users who
     // upgraded from a pre-M2.5 DLL have `game_free_camera_shim = false`
     // (and/or `dev_camera_toggle_vk = 0x60` from pre-M2.6 DLLs, or
-    // `= 0x30` from pre-M2.7 DLLs — historical defaults that were
+    // `= 0x30` from M2.6/M2.7a DLLs — historical defaults that were
     // hard-coded before the user-verified switch to VK_F11 / 0x7A)
     // in their INI without the `# walkercore:managed:<key>`
     // sentinel — those DLLs did not emit the sentinel. Without it,
@@ -708,6 +723,55 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     // for F8), the patch is skipped — that line is user-vetted, not
     // auto.
     PatchSentinelsForLegacyIni(path);
+
+    // M2 diagnostic: per-key source classification. After every
+    // INI load, emit one line that names every managed M2 key
+    // (the keys the smart-default + sentinel machinery governs),
+    // the value the parser resolved, and the source the value
+    // came from. The three possible sources are:
+    //   - "default"      — value matches the compile-time default
+    //                      AND no sentinel was present AND no
+    //                      migrate ran; the parser fell back to the
+    //                      Defaults() initializer.
+    //   - "managed"      — value matches the compile-time default
+    //                      AND a sentinel is present; the DLL
+    //                      auto-wrote the line (first save / legacy
+    //                      patch). The `*_explicit` flag is OFF and
+    //                      smart-default may flip the value on the
+    //                      next load.
+    //   - "user-explicit"— value matches the compile-time default
+    //                      AND no sentinel is present (line was
+    //                      hand-edited by the user with the default
+    //                      value); OR value differs from the
+    //                      default (the user picked something
+    //                      non-default). The `*_explicit` flag is
+    //                      ON and the smart-default is OFF.
+    //
+    // The classify data is what the analyst needs when the user
+    // reports "smart-default did not flip my shim on" — the line
+    // shows whether the key was sentinel-managed or user-locked
+    // at the time of load.
+    //
+    // The diagnostic is gated by a single log call so the per-key
+    // detail stays in one line. The format is grep-friendly so the
+    // analyst can scan `g.log` for `Settings: per-key resolution`
+    // and see every managed key on one click.
+    WALKERCORE_LOG_INFO(
+        "Settings: per-key resolution path=%s shim="
+        "value=%s,explicit=%s sentinel=%s; "
+        "dev_camera_toggle_vk="
+        "value=0x%X,explicit=%s sentinel=%s; "
+        "game_free_camera_shim-managed=%s; "
+        "dev_camera_toggle_vk-managed=%s",
+        path.c_str(),
+        current_.m2_game_free_camera_shim ? "true" : "false",
+        current_.m2_game_free_camera_shim_explicit ? "true" : "false",
+        managed_keys.count("game_free_camera_shim") != 0 ? "yes" : "no",
+        current_.m2_dev_camera_toggle_vk,
+        current_.m2_dev_camera_toggle_vk_explicit ? "true" : "false",
+        managed_keys.count("dev_camera_toggle_vk") != 0 ? "yes" : "no",
+        managed_keys.count("game_free_camera_shim") != 0 ? "yes" : "no",
+        managed_keys.count("dev_camera_toggle_vk") != 0 ? "yes" : "no");
 
     ApplyAll();
 
@@ -747,7 +811,7 @@ void SettingsStore::PatchSentinelsForLegacyIni(const std::string &path) {
     };
     static const Target kTargets[] = {
         {"game_free_camera_shim", "false"},
-        {"dev_camera_toggle_vk", "0x30"},
+        {"dev_camera_toggle_vk", "0x7a"},
     };
 
     // Read the entire file into memory. If the file does not exist
@@ -853,12 +917,73 @@ bool SettingsStore::LoadFromDefaultPath() {
 
 bool SettingsStore::SaveToPath(const std::string &path) const {
     if (!EnsureDirectoryExists(path)) {
-        WALKERCORE_LOG_WARN("Settings: cannot create parent dir of %s", path.c_str());
+        // M2 diagnostic: the previous one-line "cannot create
+        // parent dir" message was useless for the analyst trying to
+        // figure out why the INI save silently dropped. Surface
+        // every signal available: the parent dir, whether it
+        // exists at all, what the last Win32 error was, whether
+        // the path is read-only (an installer may have set the
+        // read-only attribute on the AppData folder), and the
+        // current process token privilege for write. The
+        // GetFileAttributesA + FILE_ATTRIBUTE_READONLY + GetLastError
+        // check covers the "permission denied", "path doesn't
+        // exist", "drive not mounted", and "read-only volume"
+        // failure modes that previously left the user guessing.
+        const auto sep_pos = path.find_last_of("\\/");
+        const std::string parent_dir =
+            sep_pos == std::string::npos ? std::string("<no-separator>")
+                                          : path.substr(0, sep_pos);
+        const DWORD attrs = ::GetFileAttributesA(parent_dir.c_str());
+        const DWORD gle = ::GetLastError();
+        const bool parent_exists = (attrs != INVALID_FILE_ATTRIBUTES);
+        const bool parent_readonly =
+            parent_exists && (attrs & FILE_ATTRIBUTE_READONLY);
+        WALKERCORE_LOG_WARN(
+            "Settings: cannot create parent dir of %s (parent_dir=%s "
+            "exists=%s readonly=%s GetLastError=%lu). The settings "
+            "menu will keep the user's edits in memory but the "
+            "next DLL load will see the previous values. Check "
+            "that the AppData target is writable and not on a "
+            "read-only volume.",
+            path.c_str(), parent_dir.c_str(),
+            parent_exists ? "yes" : "no",
+            parent_readonly ? "yes" : "no",
+            gle);
         return false;
     }
     std::ofstream f(path);
     if (!f.is_open()) {
-        WALKERCORE_LOG_WARN("Settings: cannot open %s for write", path.c_str());
+        // M2 diagnostic: capture the file-open failure context.
+        // The previous "cannot open for write" line left the
+        // analyst guessing — was it a readonly file from an old
+        // install, a transient AV scanner holding the file, a
+        // broken junction, or a permissions problem? We surface
+        // whether the file exists, whether it is read-only, the
+        // last Win32 error, and the parent dir's writable state.
+        const DWORD file_attrs = ::GetFileAttributesA(path.c_str());
+        const DWORD gle = ::GetLastError();
+        const bool file_exists =
+            (file_attrs != INVALID_FILE_ATTRIBUTES);
+        const bool file_readonly =
+            file_exists && (file_attrs & FILE_ATTRIBUTE_READONLY);
+        const auto sep_pos = path.find_last_of("\\/");
+        const std::string parent_dir =
+            sep_pos == std::string::npos ? std::string("<no-separator>")
+                                          : path.substr(0, sep_pos);
+        const DWORD parent_attrs = ::GetFileAttributesA(parent_dir.c_str());
+        const bool parent_readonly =
+            (parent_attrs != INVALID_FILE_ATTRIBUTES) &&
+            (parent_attrs & FILE_ATTRIBUTE_READONLY);
+        WALKERCORE_LOG_WARN(
+            "Settings: cannot open %s for write (file_exists=%s "
+            "file_readonly=%s parent_readonly=%s GetLastError=%lu). "
+            "Check AV quarantine, file ownership, and ACL write "
+            "permissions.",
+            path.c_str(),
+            file_exists ? "yes" : "no",
+            file_readonly ? "yes" : "no",
+            parent_readonly ? "yes" : "no",
+            gle);
         return false;
     }
     f << "# WalkerCore configuration file. Generated by the plugin; safe to "
@@ -922,10 +1047,11 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "\n";
     f << "[m2]\n";
     f << "# Game-Free-Camera shim (MVP for the M2 GPU render push). When 1,\n";
-    f << "# F10 (Driving -> Walking transition) also synthesises a Numpad-0\n";
-    f << "# press so the SCS developer free camera takes over (requires\n";
-    f << "# `uset g_developer \"1\"` in the game's config.cfg). Default 0\n";
-    f << "# so out-of-the-box behaviour stays unchanged.\n";
+    f << "# F10 (Driving -> Walking transition) also synthesises a F11\n";
+    f << "# keypress via SendInput so the SCS developer free camera takes\n";
+    f << "# over (requires `uset g_developer \"1\"` AND `uset g_console\n";
+    f << "# \"1\"` in the game's config.cfg). Default 0 so out-of-the-box\n";
+    f << "# behaviour stays unchanged.\n";
     f << "game_free_camera_shim = " << (current_.m2_game_free_camera_shim ? "true" : "false") << "\n";
     // M2.5 hotfix: emit the `# walkercore:managed:<key>` sentinel ONLY
     // when the value matches the code default. The sentinel tells the
@@ -949,24 +1075,27 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "camera_hijack_install = " << (current_.m2_camera_hijack_install ? "true" : "false") << "\n";
     f << "dev_cvar_patcher = " << (current_.m2_dev_cvar_patcher ? "true" : "false") << "\n";
     f << "# Virtual key the shim synthesises on every Walking entry.\n";
-    f << "# M2.7 default: top-row '0' (VK_0, 0x30) — the hard-coded\n";
-    f << "# SCS dev free camera toggle in amtrucks.exe 1.61.3.1s,\n";
-    f << "# intercepted before the action registry (no controls.sii\n";
-    f << "# binding required). Requires `g_developer=1` AND `g_console=1`\n";
-    f << "# in config.cfg. Earlier builds used VK_F11 (0x7A) and\n";
-    f << "# VK_NUMPAD0 (0x60); live verification in Oct 2026 showed\n";
-    f << "# both cycle the interior camera in this build (the user's\n";
-    f << "# controls.sii binds F11 to the `camdbg` action which is\n";
-    f << "# the camera-cycle action, NOT the dev free camera). Users\n";
-    f << "# whose controls.sii or mod stack intercepts the top-row '0'\n";
-    f << "# shortcut can re-point the shim by setting a different VK\n";
-    f << "# here. Accepts decimal or 0xHH. Out-of-range values fall\n";
-    f << "# back to the new default VK_0 (0x30).\n";
+    f << "# M2.7 default: VK_F11 (0x7A) — the SCS dev free camera\n";
+    f << "# toggle in amtrucks.exe 1.61.3.1s, intercepted before\n";
+    f << "# the action registry (no controls.sii binding required).\n";
+    f << "# Requires `g_developer=1` AND `g_console=1` in config.cfg.\n";
+    f << "# Live-verified Oct 2026: pressing F11 with both cvars\n";
+    f << "# set opens the dev free-roam view with position overlay.\n";
+    f << "# Earlier builds used VK_NUMPAD0 (0x60, pre-M2.6) and\n";
+    f << "# VK_0 (0x30, M2.6/M2.7a); live verification in Oct 2026\n";
+    f << "# showed neither toggles the dev free camera in this build.\n";
+    f << "# Users whose controls.sii or mod stack binds F11 to a\n";
+    f << "# non-camera action can re-point the shim to a different\n";
+    f << "# VK here (e.g. F8 = 0x77 to avoid `camdbg` collisions).\n";
+    f << "# Accepts decimal or 0xHH. Out-of-range values fall back\n";
+    f << "# to the default VK_F11 (0x7A).\n";
     f << "dev_camera_toggle_vk = 0x" << std::hex << current_.m2_dev_camera_toggle_vk << std::dec << "\n";
     // Same auto-managed sentinel as above — controls.sii auto-detect is
     // dead if the explicit flag is set, and the default-value line is
-    // what pre-M2.5 DLLs wrote.
-    if (current_.m2_dev_camera_toggle_vk == 0x30u) {
+    // what pre-M2.7a DLLs wrote. The migrate block above snaps any
+    // sentinel-pinned legacy value (0x30 or 0x60) to 0x7A so we should
+    // never reach this branch holding a non-default value here.
+    if (current_.m2_dev_camera_toggle_vk == 0x7Au) {
         f << "# walkercore:managed:dev_camera_toggle_vk\n";
     }
     f << "\n";

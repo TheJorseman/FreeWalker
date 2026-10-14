@@ -40,7 +40,7 @@ namespace {
 // embeds `di8.keyboard` as the input handler token). DirectInput 8
 // keyboard devices poll the Windows input queue, and SendInput
 // synthesises events that go through the same queue. The user
-// confirmed Numpad-0 manual presses toggle the SCS dev free camera
+// confirmed F11 manual presses toggle the SCS dev free camera
 // reliably — the question is whether the shim's synthetic input
 // reaches DirectInput's poll. PostMessage WM_KEYDOWN does NOT reach
 // DirectInput (it goes to the WndProc queue, which the game ignores
@@ -76,7 +76,7 @@ int SynthKey(unsigned int vk, HWND target_hwnd,
     }
 
     // Primary: SendInput (DirectInput 8 keyboard → dev free camera
-    // toggle on Numpad-0).
+    // toggle on F11).
     INPUT down = {};
     down.type = INPUT_KEYBOARD;
     down.ki.wVk = static_cast<WORD>(vk);
@@ -398,6 +398,153 @@ std::string GameFreeCameraShim::ReadControlsSiiKeyForActionWithDiagForTesting(
     return std::string();
 }
 
+// Inverse of `ReadControlsSiiKeyForActionForTesting`: walks every
+// `mix <action> \`...\`` line in the controls.sii and returns the
+// action names whose binding includes a `keyboard.*` token mapping
+// to `target_vk`. The result is in file order so a downstream log
+// line mirrors the user's read of controls.sii.
+//
+// Diagnostic-only helper: the shim logs a warning at init time when
+// its target VK collides with a controls.sii binding, because the
+// SCS action registry can route the press to the bound action before
+// the SCS dev free-camera shortcut intercepts. (For F11 the dev
+// shortcut does win in `g_developer=1` mode because the engine
+// intercepts before the registry; for any other key the bound
+// action would silently shadow the shim's dispatch.)
+//
+// File format reminder (matches the parser above):
+//   config_lines[N]: "mix <action> `<token1> | <token2> | ...`"
+// We use the same plain + escaped-backtick fallback so the scanner
+// also surfaces typos (and the user gets a single log line that
+// covers both the conflict AND the typo, instead of a silent miss).
+std::vector<std::string> GameFreeCameraShim::FindActionsBoundToVkForTesting(
+    const std::string &path, unsigned int target_vk) {
+    std::vector<std::string> hits;
+    if (path.empty() || target_vk == 0) {
+        return hits;
+    }
+    FILE *f = std::fopen(path.c_str(), "rb");
+    if (!f) {
+        return hits;
+    }
+    std::string content;
+    char buf[4096] = {};
+    size_t n = 0;
+    while (content.size() < (64u * 1024u) &&
+           (n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+        content.append(buf, n);
+    }
+    std::fclose(f);
+
+    // Walk every `mix <something> \`...\`` line. The grammar is
+    // `mix <action> \`<binding>\`` — the action name is the first
+    // token after `mix ` up to the opening backtick. We scan
+    // forward one byte at a time rather than find()-then-tokenize so
+    // every binding line contributes to the result, not just the
+    // first hit.
+    size_t cursor = 0;
+    while (cursor < content.size()) {
+        const std::string needle = "mix ";
+        auto mix_pos = content.find(needle, cursor);
+        if (mix_pos == std::string::npos) break;
+        // The action name spans from after "mix " to the opening
+        // backtick (plain form) or escaped backtick. We try the
+        // plain form first; the backtick position also doubles as
+        // the start of the binding tokens.
+        auto btick_pos = content.find('`', mix_pos + needle.size());
+        bool escaped = false;
+        if (btick_pos == std::string::npos) {
+            // Try escaped-backtick fallback (the typo form).
+            const std::string esc_needle = "\\`";
+            auto ebtick_pos = content.find(esc_needle, mix_pos + needle.size());
+            if (ebtick_pos == std::string::npos) {
+                cursor = mix_pos + needle.size();
+                continue;
+            }
+            btick_pos = ebtick_pos + 1;  // skip the leading backslash
+            escaped = true;
+        }
+        const std::string action_raw = content.substr(
+            mix_pos + needle.size(),
+            btick_pos - (mix_pos + needle.size()));
+        // The SCS grammar is `mix <action> <ws> \`<binding>\``. Real
+        // controls.sii files always have whitespace (or whitespace +
+        // escape backslash for the typo form) between the action name
+        // and the opening backtick. We extract the first whitespace-
+        // delimited token so the action is the clean identifier the
+        // user typed (e.g. "camdbg"), not a string with leftover
+        // separators. The previous version took everything between "mix "
+        // and the backtick and rejected the line if it had any whitespace
+        // inside — which made every real-world controls.sii (with the
+        // mandated space) produce zero hits and is exactly the bug the
+        // Oct 2026 user report surfaced.
+        std::string action_trim;
+        for (const char c : action_raw) {
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') break;
+            action_trim.push_back(c);
+        }
+        // Sanity: action names are non-empty ASCII identifiers. Skip
+        // anything malformed (defensive — the SCS grammar disallows
+        // whitespace in this slot but a future mod could break it).
+        if (action_trim.empty() ||
+            action_trim.find_first_of(" \t\r\n") != std::string::npos) {
+            cursor = btick_pos + 1;
+            continue;
+        }
+
+        // Walk to the closing backtick. The plain-form closing
+        // backtick is the next '`' byte; the escaped-form closing
+        // backtick is the next '` ' byte (i.e. a backtick NOT
+        // preceded by a backslash). For the typo line the rfind
+        // below still works because we started past `mix`.
+        size_t close_start = btick_pos + 1;
+        if (escaped) {
+            close_start = btick_pos + 1;
+        }
+        auto close_pos = content.find('`', close_start);
+        if (close_pos == std::string::npos) {
+            cursor = btick_pos + 1;
+            continue;
+        }
+        const std::string inside = content.substr(close_start,
+                                                  close_pos - close_start);
+
+        // Tokenize on `|`, drop the trailing `?<axis>` qualifier,
+        // and check each `keyboard.*` token's VK against target_vk.
+        size_t i = 0;
+        bool hit = false;
+        while (i < inside.size()) {
+            while (i < inside.size() &&
+                   (inside[i] == ' ' || inside[i] == '\t')) ++i;
+            if (i >= inside.size()) break;
+            size_t j = i;
+            while (j < inside.size() && inside[j] != '|') ++j;
+            std::string token = inside.substr(i, j - i);
+            while (!token.empty() &&
+                   (token.back() == ' ' || token.back() == '\t')) {
+                token.pop_back();
+            }
+            auto qmark = token.find('?');
+            if (qmark != std::string::npos) {
+                token = token.substr(0, qmark);
+            }
+            if (token.rfind("keyboard.", 0) == 0) {
+                const unsigned int vk = ScsKeyNameToVkForTesting(token);
+                if (vk != 0 && vk == target_vk) {
+                    hit = true;
+                    break;
+                }
+            }
+            i = (j < inside.size()) ? j + 1 : j;
+        }
+        if (hit) {
+            hits.push_back(action_trim);
+        }
+        cursor = close_pos + 1;
+    }
+    return hits;
+}
+
 // M2.5: SCS keyboard token → Win32 VK. Covers the subset of the SCS
 // controls.sii grammar that real ATS / ETS2 profiles bind to
 // dev-camera / walk-mode actions. The table is intentionally small
@@ -697,6 +844,92 @@ void GameFreeCameraShim::BindDevCameraPatchResult(
     dev_cvar_patch_result_ = r;
 }
 
+// M2 diagnostic: scan the user's controls.sii for any action bound
+// to `toggle_vk_` and emit a heads-up log line if any collision is
+// found. Called from PluginEntry once the runtime knows the active
+// controls.sii path. The F10 dispatch log surfaces the cached
+// conflict set so the user sees the binding shadow even when the
+// shim successfully sent the keystroke.
+//
+// Why this matters (Oct 2026 user report): the user observed "F11
+// me lanza a la camara 0" — pressing F11 cycled the interior camera
+// (cam 0) instead of toggling the dev free camera. Root cause: their
+// controls.sii line 234 binds `mix camdbg \`keyboard.f11?0\`` — the
+// SCS action registry routes F11 to camdbg. The SCS dev free-camera
+// shortcut does intercept F11 BEFORE the action registry in
+// g_developer=1 mode (so the dev cam should win), but the user
+// seeing the camera cycle was a signal that the engine's interception
+// path was not the active layer for them — most likely g_developer
+// was effectively 0 at the moment of the press (the patcher
+// skipped because the cvar struct layout is non-standard in this
+// build, see DevCameraCvarPatcher warnings). Surfacing the binding
+// at init time lets the user either: (a) re-pin the dispatch to a
+// non-conflicting VK (F8 = 0x77), or (b) verify their g_developer
+// setup. Without this diagnostic, the only signal the user gets is
+// the F10 dispatch log's generic "toggle VK may be absorbed by
+// another application" line, which doesn't tell them which action
+// specifically is intercepting.
+void GameFreeCameraShim::LogControlsSiiVkConflictIfAny(
+    const std::string &controls_sii_path) {
+    const std::string &path =
+        controls_sii_path.empty() ? auto_detected_controls_sii_path_
+                                  : controls_sii_path;
+    // Reset the cache so a re-bind with a new path re-scans; the
+    // same path scanned twice logs once.
+    controls_sii_conflict_actions_.clear();
+    controls_sii_conflict_detected_ = false;
+    controls_sii_conflict_last_path_.clear();
+    if (path.empty()) {
+        WALKERCORE_LOG_INFO(
+            "GameFreeCameraShim: controls.sii conflict scan skipped "
+            "(no resolved controls.sii path; profile probe has not "
+            "run yet). toggle_vk=0x%X.", toggle_vk_);
+        return;
+    }
+    if (toggle_vk_ == 0) {
+        WALKERCORE_LOG_INFO(
+            "GameFreeCameraShim: controls.sii conflict scan skipped "
+            "(toggle_vk=0 — shim has no key to scan for).");
+        return;
+    }
+    controls_sii_conflict_last_path_ = path;
+    const std::vector<std::string> hits =
+        FindActionsBoundToVkForTesting(path, toggle_vk_);
+    controls_sii_conflict_actions_ = hits;
+    controls_sii_conflict_detected_ = !hits.empty();
+    if (hits.empty()) {
+        WALKERCORE_LOG_INFO(
+            "GameFreeCameraShim: controls.sii conflict scan OK — "
+            "toggle_vk=0x%X has no binding in %s (no other action "
+            "will shadow the shim's dispatch).", toggle_vk_, path.c_str());
+        return;
+    }
+    // Conflict detected. Log each colliding action so the user can
+    // decide whether to re-pin the dispatch VK (recommended) or
+    // remove the binding. The exit-press VK is also worth checking
+    // because a separate collision there would silently swallow the
+    // exit (M2.5 only — most builds don't set exit_press_vk_).
+    std::string joined;
+    for (size_t i = 0; i < hits.size(); ++i) {
+        if (i > 0) joined += ", ";
+        joined += hits[i];
+    }
+    WALKERCORE_LOG_WARN(
+        "GameFreeCameraShim: controls.sii CONFLICT (toggle_vk=0x%X "
+        "is bound to action(s): %s in %s). The shim's F10 Walking "
+        "dispatch will press this key, and the SCS action registry "
+        "may route the press to the bound action(s) instead of the "
+        "dev free-camera shortcut. In g_developer=1 mode the SCS "
+        "engine intercepts F11 BEFORE the action registry, so the "
+        "dev cam toggle wins; for any other VK the bound action "
+        "shadows the dispatch. To avoid the conflict, either: "
+        "(a) re-pin the dispatch VK via `[m2] dev_camera_toggle_vk = "
+        "0xHH` in WalkerCore.ini (recommended: F8 = 0x77, F9 = 0x78), "
+        "or (b) remove the conflicting binding from controls.sii. "
+        "See docs/integration.md §M2.7.",
+        toggle_vk_, joined.c_str(), path.c_str());
+}
+
 // M2.5: auto-detect the user's dev-camera-toggle binding from their
 // controls.sii. Called once from PluginEntry init after
 // ProbeGDeveloperFromConfig.
@@ -710,16 +943,19 @@ void GameFreeCameraShim::BindDevCameraPatchResult(
 // accepted by the parser but binds to the regular interior
 // camera cycle, not the dev free camera (the user's profile
 // already has `mix camdbg \`keyboard.f11?0\`` at config_lines[234]
-// — pressing F11 manually with this binding active cycles cam 0,
-// cam 1, ... not the dev free camera). The dev free camera in
-// this build is toggled by the hard-coded `0` shortcut
-// (intercepted before the action registry, requires
-// `g_developer=1` AND `g_console=1` in config.cfg).
+// — pressing F11 manually with this binding also fires camdbg, but
+// the SCS dev free-camera shortcut intercepts F11 before the action
+// registry, so the dev cam toggle wins in dev mode while the
+// camdbg binding is a no-op). The dev free camera in this build is
+// the hard-coded F11 shortcut (intercepted before the action
+// registry, requires `g_developer=1` AND `g_console=1` in
+// config.cfg).
 //
 // So the probe order is empty: there is no action name to find.
-// The shim dispatches the hard-coded '0' (VK_0, 0x30) by default
-// and the INI knob [m2] dev_camera_toggle_vk lets the user pick
-// a different key. The probe is kept as a diagnostic so the F10
+// The shim dispatches F11 (VK_F11, 0x7A) by default and the INI
+// knob [m2] dev_camera_toggle_vk lets the user pick a different
+// key (e.g. F8 = 0x77 if F11 collides with `camdbg` in the user's
+// controls.sii). The probe is kept as a diagnostic so the F10
 // Walking-entry log can show "no action binding for the dev free
 // camera in this build" — users who try to bind o_im_freecam in
 // controls.sii need to see the rejection explicitly.
@@ -757,13 +993,13 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
         // at game load with "does not exist, ignoring change";
         // `camdbg` is accepted but cycles the interior camera,
         // not the dev free camera). The dev free camera toggle is
-        // the hard-coded '0' shortcut.
+        // the hard-coded F11 shortcut (verified live Oct 2026).
         const std::string path = ProbeActiveControlsSiiPath();
         auto_detected_controls_sii_path_ = path;
         WALKERCORE_LOG_INFO(
             "GameFreeCameraShim: INI override active — auto-detect "
             "skipped (no action-name binding for dev free camera in "
-            "amtrucks.exe 1.61.3.1s; the toggle is the hard-coded '0' "
+            "amtrucks.exe 1.61.3.1s; the toggle is the hard-coded F11 "
             "shortcut), toggle VK=0x%X (controls-sii-path=%s)",
             toggle_vk_,
             auto_detected_controls_sii_path_.empty()
@@ -843,7 +1079,7 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
     (void)hit_action;       // suppress -Wunused after the action-name
     (void)detected_typo;    // probe loop was removed; the only
     (void)token;            // legitimate toggle in this build is the
-                            // hard-coded '0' shortcut, not an action
+                            // hard-coded F11 shortcut, not an action
                             // registry entry.
     if (hit_action == nullptr) {
         // No binding found at all. Emit a one-line, copy-pasteable
@@ -883,12 +1119,12 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
             "1.61.3.1s the SCS input parser rejects `o_im_freecam` "
             "(`<ERROR> [inp] mix \"o_im_freecam\" does not exist, "
             "ignoring change`) and the dev free camera is toggled "
-            "by the hard-coded top-row '0' shortcut instead, NOT "
-            "via a bindable action. The shim's default dispatch "
-            "VK=0x%X (top-row '0') is in effect; if your controls.sii "
-            "binds '0' to another action, set [m2] "
+            "by the hard-coded F11 shortcut instead, NOT via a "
+            "bindable action. The shim's default dispatch "
+            "VK=0x%X (VK_F11) is in effect; if your controls.sii "
+            "binds F11 to another action, set [m2] "
             "dev_camera_toggle_vk = 0xHH in WalkerCore.ini to "
-            "re-target the dispatch (e.g. 0x77 = F8, 0x7A = F11). "
+            "re-target the dispatch (e.g. 0x77 = F8). "
             "The dev free camera toggle itself requires "
             "`g_developer=1` AND `g_console=1` in config.cfg.",
             path.c_str(), toggle_vk_);
@@ -1045,7 +1281,7 @@ void GameFreeCameraShim::OnEnterWalking() {
             "value=%.12s, hwnd=0x%llX) — Set [m2] game_free_camera_shim "
             "= true in WalkerCore.ini to send the dev free camera "
             "toggle on F10. config.cfg already has g_developer=1, so "
-            "any dev-camera path (the hard-coded '0' shortcut, the dev "
+            "any dev-camera path (the hard-coded F11 shortcut, the dev "
             "UI button o_im_freecam, future in-process camera manager "
             "hooks) works without editing Documents\\American Truck "
             "Simulator\\config.cfg.)",
@@ -1063,7 +1299,7 @@ void GameFreeCameraShim::OnEnterWalking() {
             "toggle VK but g_developer was not detected as '1' in "
             "config.cfg. The dev free camera is gated by g_developer "
             "(also g_console=1 for the '~' console). Without it the "
-            "hard-coded '0' shortcut is ignored. Add `uset "
+            "hard-coded F11 shortcut is ignored. Add `uset "
             "g_developer \"1\"` to Documents\\American Truck "
             "Simulator\\config.cfg and reload the save. Two ways "
             "forward: (a) bind o_im_freecam to a keyboard key in "
@@ -1097,17 +1333,63 @@ void GameFreeCameraShim::OnEnterWalking() {
             ? "ini-override"
             : (auto_detected_key_name_.empty() ? "default"
                                                  : "auto-detected");
+    // M2 diagnostic: surface the controls.sii conflict set in the
+    // F10 dispatch line so the analyst sees the binding shadow
+    // next to the dispatch outcome in one log line. The cache is
+    // populated by `LogControlsSiiVkConflictIfAny` at shim init
+    // (called from PluginEntry right after BindGameHwnd) and
+    // re-populated on each BindGameHwnd call so the most recent
+    // scan wins. The format is "<none>" when no conflict was
+    // detected (the common case) and a comma-joined action list
+    // when one or more controls.sii bindings shadow the toggle
+    // VK — the user can grep game.log for "controls-sii-shadow="
+    // to surface every F10 that fired against a binding that may
+    // have eaten the press.
+    std::string shadow_joined;
+    if (!controls_sii_conflict_actions_.empty()) {
+        for (size_t i = 0; i < controls_sii_conflict_actions_.size(); ++i) {
+            if (i > 0) shadow_joined += ",";
+            shadow_joined += controls_sii_conflict_actions_[i];
+        }
+    }
+    const char *shadow_cstr =
+        controls_sii_conflict_actions_.empty() ? "<none>" : shadow_joined.c_str();
+    // Foreground check: when the bound HWND is not the foreground
+    // window at dispatch time, SendInput silently drops the event
+    // (the foreground window requirement
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput
+    // is enforced for non-injected keyboard input on Windows 7+).
+    // The check is best-effort — the foreground window may have
+    // changed between the check and the SendInput — but it gives
+    // the analyst a clear signal in game.log when the dispatch
+    // "succeeded" but the input went to a different window (e.g.
+    // an IDE or browser grabbed focus mid-frame). The check is
+    // pointer-safe (IsWindow returns false for HWNDs that have
+    // been destroyed since the bind).
+    const char *foreground_state = "0";
+    HWND fg = ::GetForegroundWindow();
+    if (fg == hwnd_ && fg != nullptr) {
+        foreground_state = "fg-match";
+    } else if (fg != nullptr) {
+        foreground_state = "fg-mismatch";
+    } else {
+        foreground_state = "fg-unknown";
+    }
     WALKERCORE_LOG_INFO(
         "GameFreeCameraShim: Walking entry #%d -> dispatched %d key "
         "event(s) (gate=%s, config-cfg[probe]='%s', dev_cvar_patcher=%s "
         "cvar_va=0x%llX value=%.12s, toggle VK=0x%X [%s], "
         "auto-detected-key=%s, controls-sii-path=%s, exit VK=0x%X, "
-        "path=%s hwnd=0x%llX) — SendInput dispatched. If the dev "
+        "path=%s hwnd=0x%llX, hwnd-valid=%s, foreground=%s, "
+        "controls-sii-shadow=%s) — SendInput dispatched. If the dev "
         "free camera still does not activate, the toggle VK may be "
         "absorbed by another application (ReShade / OptiScaler / "
-        "Steam overlay) or the dev camera shortcut may require an "
-        "additional gate (g_console=1 for the hard-coded '0' shortcut; "
-        "see docs/observations/dev-free-camera.md).",
+        "Steam overlay), shadowed by a controls.sii binding "
+        "(controls-sii-shadow=<actions>), the foreground window may "
+        "have changed mid-frame (foreground=fg-mismatch), or the dev "
+        "camera shortcut may require an additional gate "
+        "(g_console=1 for the hard-coded F11 shortcut; see "
+        "docs/observations/dev-free-camera.md).",
         walks_entered_, dispatched, gate_str, cvar_str, patch_outcome,
         static_cast<unsigned long long>(patch_value_va), patch_cvar_buf,
         toggle_vk_, vk_source,
@@ -1118,7 +1400,10 @@ void GameFreeCameraShim::OnEnterWalking() {
             : auto_detected_controls_sii_path_.c_str(),
         exit_press_vk_, path_name,
         static_cast<unsigned long long>(
-            reinterpret_cast<std::uintptr_t>(hwnd_)));
+            reinterpret_cast<std::uintptr_t>(hwnd_)),
+        ::IsWindow(hwnd_) ? "yes" : "no",
+        foreground_state,
+        shadow_cstr);
 }
 
 bool GameFreeCameraShim::MaybeAutoEnableFromDetection() {
@@ -1155,7 +1440,7 @@ bool GameFreeCameraShim::MaybeAutoEnableFromDetection() {
     // No action-name binding for the dev free camera exists in
     // amtrucks.exe 1.61.3.1s, so auto_detected_key_name_ is
     // always empty in this build. The shim still defaults to the
-    // hard-coded '0' shortcut regardless of bindings, so the
+    // hard-coded F11 shortcut regardless of bindings, so the
     // "no binding found" reason for staying off no longer applies
     // — flipping on is safe even when controls.sii has no
     // matching line. The probe loop in AutoDetectToggleVkFromControlsSii

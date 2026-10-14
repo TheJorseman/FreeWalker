@@ -127,6 +127,17 @@ public:
     void OnEnterWalking();
     void OnExitWalking();
 
+    // Diagnostic: scan the user's controls.sii for any action bound
+    // to `toggle_vk_` and log a heads-up so the user sees binding
+    // conflicts at shim init time, not after a failed F10 dispatch.
+    // Idempotent — the cache `controls_sii_conflict_logged_` guards
+    // against duplicate log lines if `BindGameHwnd` is called
+    // multiple times (the shim rebinds on profile/profile-id reload).
+    // `controls_sii_path` is the resolved path to scan; pass an
+    // empty string to use `auto_detected_controls_sii_path_` (the
+    // runtime probe's last-known result).
+    void LogControlsSiiVkConflictIfAny(const std::string &controls_sii_path = std::string());
+
     // Manual trigger (e.g. from the settings menu or diagnostic dump).
     // Always returns the number of keys actually synthesised.
     int TriggerToggle();
@@ -146,6 +157,19 @@ public:
     int last_dispatch_path() const { return last_dispatch_path_; }
     unsigned int last_postmessage_target_diag() const {
         return last_postmessage_hwnd_diag_;
+    }
+    // M2 diagnostic: cached controls.sii binding conflict set
+    // (populated by `LogControlsSiiVkConflictIfAny`). The vector
+    // is empty when no conflict was detected. Tests use this to
+    // pin the cache surface that the F10 dispatch log reads.
+    const std::vector<std::string> &controls_sii_conflict_actions_for_testing() const {
+        return controls_sii_conflict_actions_;
+    }
+    bool controls_sii_conflict_detected_for_testing() const {
+        return controls_sii_conflict_detected_;
+    }
+    const std::string &controls_sii_conflict_last_path_for_testing() const {
+        return controls_sii_conflict_last_path_;
     }
 
     // -- Test seams ---------------------------------------------------------
@@ -232,6 +256,26 @@ public:
     // exposes — see GameFreeCameraShim.cpp for the table.
     static unsigned int ScsKeyNameToVkForTesting(const std::string &name);
 
+    // Inverse of `ReadControlsSiiKeyForActionForTesting`: returns
+    // every action name in the controls.sii file whose `mix <action>`
+    // binding includes a `keyboard.*` token that maps to
+    // `target_vk`. Empty vector when no conflict is detected (the
+    // common case — shim's target VK is not bound to any action).
+    // The result preserves file order so the F10 log line shows the
+    // conflict set in the order it appears in the file (top-down),
+    // which matches the order the user reads their controls.sii.
+    //
+    // Diagnostic-only: this is the foundation for the conflict
+    // warning the shim logs when its target VK collides with a
+    // controls.sii binding. The user reported an F11 → cam 0 cycle
+    // (Oct 2026) because F11 was bound to `camdbg` in their
+    // controls.sii; the warning would have surfaced the binding
+    // conflict at shim init time rather than after the F10 dispatch
+    // failed to activate the dev free camera. See
+    // GameFreeCameraShim::LogControlsSiiVkConflictIfAny.
+    static std::vector<std::string> FindActionsBoundToVkForTesting(
+        const std::string &path, unsigned int target_vk);
+
     // M2.5: runtime hook. The PluginEntry init path calls this once
     // after ProbeGDeveloperFromConfig. It locates the user's
     // controls.sii (best effort) and scans for `dev_camera_toggle`,
@@ -311,65 +355,44 @@ private:
     int walks_entered_ = 0;
     int toggles_dispatched_ = 0;
     int last_dispatch_ms_ = 0;
-    unsigned int toggle_vk_ = 0x30;     // VK_0 (top-row '0') — hard-coded
-                                         // SCS dev free camera toggle in
-                                         // amtrucks.exe 1.61.3.1s. The
-                                         // dispatch is intercepted by the
-                                         // game BEFORE the action registry
-                                         // (it does not require a binding in
-                                         // controls.sii) and toggles the
-                                         // dev free camera when
-                                         // `g_developer=1` AND
-                                         // `g_console=1` are both set in
-                                         // config.cfg. Earlier builds used
-                                         // 0x7A (VK_F11) and 0x60
-                                         // (VK_NUMPAD0); live verification
-                                         // on ATS 1.61.3.1s in Oct 2026
-                                         // showed both F11 and Numpad-0
-                                         // route through the regular
-                                         // interior camera cycle in this
-                                         // build (the user's `mix camdbg
-                                         // \`keyboard.f11?0\`` binding in
-                                         // controls.sii binds F11 to the
-                                         // `camdbg` action, which cycles
-                                         // cam 0, cam 1, ... not the dev
-                                         // free camera). The dev free
-                                         // camera is the top-row '0'
-                                         // shortcut, NOT bindable in
-                                         // controls.sii. The shim
-                                         // dispatches a
-                                         // SendInput keystroke that the
-                                         // game's action registry
-                                         // translates into the dev free
-                                         // camera mode (requires
-                                         // `g_developer=1` AND
-                                         // `g_console=1` in config.cfg).
-                                         // Earlier defaults VK_NUMPAD0
-                                         // (0x60) and VK_0 (0x30,
-                                         // top-row zero) were RE guesses
-                                         // that turned out not to map to
-                                         // the dev free camera path; the
-                                         // shim's SendInput approach made
-                                         // F11 the most plausible default
-                                         // for amtrucks.exe 1.61.x.
-                                         // NOTE (Oct 2026): live user
-                                         // verification shows F11 also
-                                         // has a native in-game effect
-                                         // (cycles camera to index 0),
-                                         // so a second hand-bound key
-                                         // like `keyboard.f10` may be
-                                         // less collision-prone. The
-                                         // shim's user can override via
-                                         // `[m2] dev_camera_toggle_vk =
-                                         // 0xHH` in WalkerCore.ini. The
-                                         // shim's known action name is
-                                         // `o_im_freecam` (RE-confirmed,
-                                         // zero hits in amtrucks.exe for
-                                         // `dev_camera_toggle`,
-                                         // `camdbg`, `walk_mode`,
-                                         // `free_camera`).
-                                         // See docs/observations/
-                                         // dev-free-camera.md.
+    unsigned int toggle_vk_ = 0x7A;     // VK_F11 — SCS dev free camera toggle in
+                                         // amtrucks.exe 1.61.3.1s (verified live
+                                         // Oct 2026: F11 with g_developer=1 AND
+                                         // g_console=1 opens the dev free-roam
+                                         // view with position overlay). The
+                                         // dispatch is intercepted by the game
+                                         // BEFORE the action registry (it does
+                                         // not require a binding in controls.sii)
+                                         // and toggles the dev free camera when
+                                         // `g_developer=1` AND `g_console=1` are
+                                         // both set in config.cfg. Earlier
+                                         // builds used 0x60 (VK_NUMPAD0,
+                                         // pre-M2.6) and 0x30 (VK_0 top-row
+                                         // zero, M2.6) — neither actually
+                                         // toggles the dev free camera in this
+                                         // build (RE-confirmed: zero hits for
+                                         // `dev_camera_toggle` / `camdbg` /
+                                         // `walk_mode` / `free_camera` action
+                                         // names in the binary; the top-row `0`
+                                         // shortcut was a static-analysis guess
+                                         // that turned out wrong on user
+                                         // live-verify). Note: F11 IS the SCS
+                                         // dev free-camera toggle in this build
+                                         // even though the user's controls.sii
+                                         // currently binds `keyboard.f11` to
+                                         // the `camdbg` action — the SCS dev
+                                         // shortcut intercepts F11 before the
+                                         // action registry, so the camdbg
+                                         // binding is a no-op in dev mode while
+                                         // the dev cam toggle wins. Users whose
+                                         // controls.sii or mod stack binds F11
+                                         // to a non-camera action can
+                                         // re-target the dispatch via
+                                         // `[m2] dev_camera_toggle_vk = 0xHH`
+                                         // in WalkerCore.ini (e.g. F8 = 0x77 to
+                                         // avoid any collision). See
+                                         // `docs/integration.md` for the full
+                                         // M2.7 live verification.
     unsigned int exit_press_vk_ = 0;    // 0 = no separate exit press
     bool exiting_walking_ = false;
     // M2.5: set by PluginEntry when [m2] dev_camera_toggle_vk was
@@ -377,7 +400,7 @@ private:
     // literal). When true, AutoDetectToggleVkFromControlsSii skips the
     // controls.sii probe and the INI value wins. When false, the shim
     // auto-detects from controls.sii if a binding is found and falls
-    // back to the hard-coded default 0x30 (VK_0, top-row '0') otherwise.
+    // back to the hard-coded default 0x7A (VK_F11) otherwise.
     bool ini_overrides_toggle_vk_ = false;
     // M2.5 follow-up: did the INI explicitly set
     // `game_free_camera_shim = ...`? Set by PluginEntry before
@@ -400,6 +423,22 @@ private:
     HWND hwnd_ = nullptr;              // bound game window — gates dispatch
     const DevCameraCvarPatchResult *dev_cvar_patch_result_ = nullptr;
     int last_dispatch_path_ = 0;       // 0 = none, 1 = SendInput
+    // M2 diagnostic: last controls.sii path we scanned for binding
+    // conflicts. Empty when never scanned. Used by
+    // `LogControlsSiiVkConflictIfAny` to short-circuit duplicate
+    // scans across re-binds of the same hwnd.
+    std::string controls_sii_conflict_last_path_;
+    // M2 diagnostic: did the most recent controls.sii scan report
+    // any binding conflicts? Used by the F10 dispatch log to flag
+    // "the press was sent but a binding shadowed it" without
+    // re-scanning the file every F10.
+    bool controls_sii_conflict_detected_ = false;
+    // M2 diagnostic: copy of the action names bound to toggle_vk_
+    // (populated by `LogControlsSiiVkConflictIfAny`). Order matches
+    // file order. Empty when no conflict detected. Cached so the
+    // F10 dispatch log can include the conflict list without a
+    // second file scan.
+    std::vector<std::string> controls_sii_conflict_actions_;
     unsigned int last_postmessage_hwnd_diag_ = 0;  // lower 32 bits of the HWND we last targeted
     // Echo-suppression: the keystrokes we SendInput come back to our
     // keyboard hook. We tag up to 8 echo VKs seen in the last 250 ms.

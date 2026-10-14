@@ -66,7 +66,7 @@ void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved();
 // dev-free-camera-shortcut change; earlier defaults VK_NUMPAD0
 // 0x60 and VK_0 0x30 were RE-driven guesses that did not work in
 // amtrucks.exe 1.61.3.1s.)
-void TestIniM2DevCameraToggleVkDefaultIsVKF11();
+void TestIniM2DevCameraToggleVkDefaultIsVK0();
 void TestIniM2DevCameraToggleVkParsesHexAndDecimal();
 void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault();
 void TestIniM2DevCameraToggleVkUnparseableKeepsDefault();
@@ -435,7 +435,7 @@ void TestGameFreeCameraShimAutoDetectAdoptsBindingWhenFound();
 void TestGameFreeCameraShimAutoDetectNoBindingLeavesDefaultVk();
 void TestGameFreeCameraShimAutoDetectInitialFieldsAreEmpty();
 void TestGameFreeCameraShimAutoEnableRequiresIniNotExplicit();
-void TestGameFreeCameraShimAutoEnableRequiresBinding();
+void TestGameFreeCameraShimAutoEnableNoBindingRequired();
 void TestGameFreeCameraShimAutoEnableRequiresSupported();
 void TestGameFreeCameraShimAutoEnableIsIdempotent();
 void TestPxSceneHookCatalogConstantsMatchAmtrucksLayout();
@@ -728,7 +728,7 @@ int main() {
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse);
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimExplicitFalseIsPreserved);
     // M2 dev_camera_toggle_vk.
-    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVKF11);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVK0);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkParsesHexAndDecimal);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkUnparseableKeepsDefault);
@@ -1157,7 +1157,7 @@ RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyFindsCamdbg);
     RUN_TEST(walkercore::TestGameFreeCameraShimAutoDetectNoBindingLeavesDefaultVk);
     RUN_TEST(walkercore::TestGameFreeCameraShimAutoDetectInitialFieldsAreEmpty);
     RUN_TEST(walkercore::TestGameFreeCameraShimAutoEnableRequiresIniNotExplicit);
-    RUN_TEST(walkercore::TestGameFreeCameraShimAutoEnableRequiresBinding);
+    RUN_TEST(walkercore::TestGameFreeCameraShimAutoEnableNoBindingRequired);
     RUN_TEST(walkercore::TestGameFreeCameraShimAutoEnableRequiresSupported);
     RUN_TEST(walkercore::TestGameFreeCameraShimAutoEnableIsIdempotent);
     RUN_TEST(walkercore::TestDevCameraCvarPatcherDefaultStateIsEnabled);

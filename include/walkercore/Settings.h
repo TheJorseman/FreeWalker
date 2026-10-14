@@ -103,23 +103,33 @@ struct WalkerSettings {
     // = 0xC0` is the `~` console key. The shim only fires when
     // `m2_game_free_camera_shim` is also true; with the shim off,
     // this knob has no effect.
-    unsigned int m2_dev_camera_toggle_vk = 0x7A;  // VK_F11
+    unsigned int m2_dev_camera_toggle_vk = 0x30;  // VK_0 (top-row '0')
+                                                       // — hard-coded SCS dev free
+                                                       // camera toggle in
+                                                       // amtrucks.exe 1.61.3.1s
+                                                       // (Oct 2026 audit: F11
+                                                       // cycles the interior
+                                                       // camera via camdbg,
+                                                       // does NOT toggle the
+                                                       // dev free camera).
     // M2.5: did the INI explicitly set `dev_camera_toggle_vk` (any
-    // value, including the default 0x7A)? When true, the
+    // value, including the default 0x30)? When true, the
     // GameFreeCameraShim's controls.sii auto-detect is skipped — the
     // user has signalled "I know what I want, leave me alone". When
     // false (key was not present in the INI), the shim auto-probes
-    // the user's controls.sii for `o_im_freecam` and adopts the
-    // first keyboard.* binding it finds. The flag is distinct from
-    // the value itself because a user can explicitly set
-    // `dev_camera_toggle_vk = 0x7A` (VK_F11) and that is still an
-    // explicit override even though it happens to match the
-    // default. M2.7 also adds a one-shot in-memory migration in
-    // LoadFromPath: a sentinel-managed INI whose value still reads
-    // as the legacy M2.6 default (0x30 = VK_0) — written by a
-    // pre-M2.7 DLL — is snapped to the current code default
-    // (0x7A = VK_F11) and flagged for re-save so the round-trip
-    // cleans itself up on the next successful boot.
+    // the user's controls.sii for action-name bindings (currently
+    // none exist in amtrucks.exe 1.61.3.1s for the dev free camera,
+    // per the Oct 2026 audit) and adopts the first match if found.
+    // The flag is distinct from the value itself because a user can
+    // explicitly set `dev_camera_toggle_vk = 0x30` (top-row '0')
+    // and that is still an explicit override even though it happens
+    // to match the default. The Oct 2026 audit removed the previous
+    // M2.7 in-memory migration (0x30 / 0x60 → 0x7A) because live
+    // verification showed 0x7A (F11) routes through the interior
+    // camera cycle in this build, not the dev free camera. The new
+    // default is 0x30 (matching the pre-M2.6 historical default
+    // that the SCS dev free camera hard-coded shortcut has always
+    // been on), so the migrate would be a no-op anyway.
     bool m2_dev_camera_toggle_vk_explicit = false;
     // M2 long-term camera hijack gate. False by default — opt in via
     // `[m2] camera_hijack = 1`. When enabled, WalkerCore captures

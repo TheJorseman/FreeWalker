@@ -1003,19 +1003,26 @@ void TestGameFreeCameraShimAutoEnableRequiresIniNotExplicit() {
     EXPECT_FALSE(s->isEnabled());
 }
 
-void TestGameFreeCameraShimAutoEnableRequiresBinding() {
-    // Gate (b) miss: no dev_camera_toggle binding detected. The
-    // shim stays off because even if enabled, the dispatch would
-    // land on a non-camera action. The gate catches this case
-    // explicitly so the F10 Walking-entry log line does NOT say
-    // "dispatched 0 key event(s)" — confusing if the user thought
-    // the shim was firing.
+void TestGameFreeCameraShimAutoEnableNoBindingRequired() {
+    // Oct 2026 audit: gate (b) was REMOVED. No action-name binding
+    // for the dev free camera exists in amtrucks.exe 1.61.3.1s
+    // (the SCS input parser rejects o_im_freecam / dev_camera_toggle
+    // / walk_mode / free_camera with "does not exist, ignoring
+    // change"; camdbg is accepted but cycles the interior camera,
+    // not the dev free camera). The shim defaults to the hard-coded
+    // '0' shortcut (VK_0, 0x30) regardless of bindings, so the
+    // "no binding detected" reason for staying off no longer
+    // applies. With g_developer=1 AND no INI override, the
+    // smart-default now flips enabled → true on its own.
+    //
+    // This test pins the new behaviour: a shim with supported_=true
+    // and an empty auto_detected_key_name_ still auto-enables.
     auto s = MakeShim();
     // Leave auto_detected_key_name_ empty (default).
     s->SetSupportedForTesting(true);
     s->BindGameHwnd(reinterpret_cast<HWND>(0x12345678));
-    EXPECT_FALSE(s->MaybeAutoEnableFromDetection());
-    EXPECT_FALSE(s->isEnabled());
+    EXPECT_TRUE(s->MaybeAutoEnableFromDetection());
+    EXPECT_TRUE(s->isEnabled());
 }
 
 void TestGameFreeCameraShimAutoEnableRequiresSupported() {

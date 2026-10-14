@@ -311,10 +311,33 @@ private:
     int walks_entered_ = 0;
     int toggles_dispatched_ = 0;
     int last_dispatch_ms_ = 0;
-    unsigned int toggle_vk_ = 0x7A;     // VK_F11 — best-effort default
-                                         // for the SCS dev free camera
-                                         // toggle in amtrucks.exe 1.61.3.1s.
-                                         // The shim dispatches a
+    unsigned int toggle_vk_ = 0x30;     // VK_0 (top-row '0') — hard-coded
+                                         // SCS dev free camera toggle in
+                                         // amtrucks.exe 1.61.3.1s. The
+                                         // dispatch is intercepted by the
+                                         // game BEFORE the action registry
+                                         // (it does not require a binding in
+                                         // controls.sii) and toggles the
+                                         // dev free camera when
+                                         // `g_developer=1` AND
+                                         // `g_console=1` are both set in
+                                         // config.cfg. Earlier builds used
+                                         // 0x7A (VK_F11) and 0x60
+                                         // (VK_NUMPAD0); live verification
+                                         // on ATS 1.61.3.1s in Oct 2026
+                                         // showed both F11 and Numpad-0
+                                         // route through the regular
+                                         // interior camera cycle in this
+                                         // build (the user's `mix camdbg
+                                         // \`keyboard.f11?0\`` binding in
+                                         // controls.sii binds F11 to the
+                                         // `camdbg` action, which cycles
+                                         // cam 0, cam 1, ... not the dev
+                                         // free camera). The dev free
+                                         // camera is the top-row '0'
+                                         // shortcut, NOT bindable in
+                                         // controls.sii. The shim
+                                         // dispatches a
                                          // SendInput keystroke that the
                                          // game's action registry
                                          // translates into the dev free
@@ -354,7 +377,7 @@ private:
     // literal). When true, AutoDetectToggleVkFromControlsSii skips the
     // controls.sii probe and the INI value wins. When false, the shim
     // auto-detects from controls.sii if a binding is found and falls
-    // back to the hard-coded default 0x7A (VK_F11) otherwise.
+    // back to the hard-coded default 0x30 (VK_0, top-row '0') otherwise.
     bool ini_overrides_toggle_vk_ = false;
     // M2.5 follow-up: did the INI explicitly set
     // `game_free_camera_shim = ...`? Set by PluginEntry before

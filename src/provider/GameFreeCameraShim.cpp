@@ -701,20 +701,28 @@ void GameFreeCameraShim::BindDevCameraPatchResult(
 // controls.sii. Called once from PluginEntry init after
 // ProbeGDeveloperFromConfig.
 //
-// The probe order is: o_im_freecam (the only valid SCS action name in
-// this build for toggling the dev free camera via the action registry).
-// Earlier builds accepted `dev_camera_toggle` / `camdbg` /
-// `walk_mode` / `free_camera`; RE-confirmed zero hits for those names
-// in amtrucks.exe 1.61.3.1s — the SCS input parser rejects them as
-// "not valid object name". The dev free camera in this build is
-// toggled by the hard-coded `0` shortcut (intercepted before the
-// action registry, requires `g_developer=1` AND `g_console=1` in
-// config.cfg). The `o_im_freecam` action is exposed in the in-game
-// debug options menu and is still bindable via `mix o_im_freecam
-// \`keyboard.X?0\`` in controls.sii if the user prefers an explicit
-// binding over the hard-coded `0`.
+// M2.7 audit (Oct 2026): no action-name binding exists in
+// amtrucks.exe 1.61.3.1s that toggles the dev free camera. The
+// action names the earlier RE looked at — `o_im_freecam`,
+// `dev_camera_toggle`, `walk_mode`, `free_camera` — are all
+// rejected by the SCS input parser at game load with `<ERROR>
+// [inp] mix "X" does not exist, ignoring change`. `camdbg` is
+// accepted by the parser but binds to the regular interior
+// camera cycle, not the dev free camera (the user's profile
+// already has `mix camdbg \`keyboard.f11?0\`` at config_lines[234]
+// — pressing F11 manually with this binding active cycles cam 0,
+// cam 1, ... not the dev free camera). The dev free camera in
+// this build is toggled by the hard-coded `0` shortcut
+// (intercepted before the action registry, requires
+// `g_developer=1` AND `g_console=1` in config.cfg).
 //
-// See docs/observations/dev-free-camera.md for the RE provenance.
+// So the probe order is empty: there is no action name to find.
+// The shim dispatches the hard-coded '0' (VK_0, 0x30) by default
+// and the INI knob [m2] dev_camera_toggle_vk lets the user pick
+// a different key. The probe is kept as a diagnostic so the F10
+// Walking-entry log can show "no action binding for the dev free
+// camera in this build" — users who try to bind o_im_freecam in
+// controls.sii need to see the rejection explicitly.
 //
 // If `ini_overrides_default` is true, the INI knob already pinned
 // the VK explicitly and we MUST NOT clobber it — the user knows
@@ -737,32 +745,27 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
         // The INI pinned a value; honour it. We do still want to
         // remember where the user's controls.sii lives for the
         // diagnostic log (so the F10 Walking-entry line can show
-        // "INI=0x65, profile binding keyboard.num5 @ <path>"), so
-        // we resolve the path even when we are not going to adopt
-        // its value. The probe is cheap (one fopen per candidate,
-        // 12 candidates max) and the resolution is read-only.
+        // "INI=0x65, controls.sii=<path>"), so we resolve the
+        // path even when we are not going to adopt its value. The
+        // probe is cheap (one fopen per candidate, 12 candidates
+        // max) and the resolution is read-only.
+        //
+        // We do NOT scan controls.sii for an action-name binding
+        // here. No such binding exists in amtrucks.exe 1.61.3.1s
+        // (the SCS input parser rejects `o_im_freecam`,
+        // `dev_camera_toggle`, `walk_mode`, and `free_camera`
+        // at game load with "does not exist, ignoring change";
+        // `camdbg` is accepted but cycles the interior camera,
+        // not the dev free camera). The dev free camera toggle is
+        // the hard-coded '0' shortcut.
         const std::string path = ProbeActiveControlsSiiPath();
         auto_detected_controls_sii_path_ = path;
-        if (!path.empty()) {
-            for (const char *action :
-                 {"dev_camera_toggle", "camdbg", "walk_mode", "free_camera"}) {
-                const std::string token =
-                    ReadControlsSiiKeyForActionForTesting(
-                        path, std::string(action));
-                if (!token.empty()) {
-                    auto_detected_key_name_ = token;
-                    break;
-                }
-            }
-        }
         WALKERCORE_LOG_INFO(
             "GameFreeCameraShim: INI override active — auto-detect "
-            "skipped, toggle VK=0x%X (auto-detected profile binding=%s, "
-            "path=%s)",
+            "skipped (no action-name binding for dev free camera in "
+            "amtrucks.exe 1.61.3.1s; the toggle is the hard-coded '0' "
+            "shortcut), toggle VK=0x%X (controls-sii-path=%s)",
             toggle_vk_,
-            auto_detected_key_name_.empty()
-                ? "<none in controls.sii>"
-                : auto_detected_key_name_.c_str(),
             auto_detected_controls_sii_path_.empty()
                 ? "<not found>"
                 : auto_detected_controls_sii_path_.c_str());
@@ -798,40 +801,50 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
     // user has a malformed binding (game.log shows
     // `<ERROR> Expecting string literal, found '"mix ...'`).
     //
-    // Priority rationale (most-specific first):
-    //   1. o_im_freecam — the only valid SCS action name for
-    //      toggling the dev free camera in amtrucks.exe 1.61.3.1s.
-    //      RE-confirmed: zero hits for `dev_camera_toggle` /
-    //      `camdbg` / `walk_mode` / `free_camera` in the binary;
-    //      the SCS input parser rejects them as "not valid object
-    //      name". The shim's SendInput path synthesises a
-    //      keyboard.<VK> down/up pair that lands in the game's
-    //      action registry and toggles the dev free camera when
-    //      `g_developer=1` AND `g_console=1` are both set in
-    //      config.cfg. The default dispatch VK is 0x7A (VK_F11).
+    // Action-name landscape in amtrucks.exe 1.61.3.1s (Oct 2026
+    // live verification):
     //
-    //      The `o_im_freecam` action is exposed in the in-game
-    //      debug options menu and is bindable via
-    //      `mix o_im_freecam \`keyboard.X?0\`` in controls.sii.
-    //      If the user adds such a line, WalkerCore's auto-detect
-    //      picks up the binding and dispatches that key instead of
-    //      the default 0x7A.
+    //   * `o_im_freecam` — appears in the in-game debug options
+    //      menu UI but the SCS input parser REJECTS bindings for
+    //      it at game load with `<ERROR> [inp] mix "o_im_freecam"
+    //      does not exist, ignoring change`. NOT a real action.
+    //      The shim's auto-detect used to look for this name;
+    //      that was the bug — the user would add a binding, the
+    //      game would silently drop it, and WalkerCore's
+    //      auto-detect would never find a match.
+    //
+    //   * `dev_camera_toggle` / `walk_mode` / `free_camera` —
+    //      also rejected by the parser as "not valid object
+    //      name". Zero hits in the binary.
+    //
+    //   * `camdbg` — IS a valid action name (parser accepts
+    //      bindings for it without error). What it DOES in
+    //      amtrucks.exe 1.61.3.1s is the camera-cycle action
+    //      (cycles cam 0, cam 1, cam 2, ...) rather than the
+    //      dev free camera — pressing F11 manually while
+    //      `mix camdbg \`keyboard.f11?0\`` is in controls.sii
+    //      cycles the interior camera, it does NOT toggle the
+    //      dev free camera. So this auto-detect does NOT
+    //      dispatch camdbg; the shim defaults to the hard-coded
+    //      '0' shortcut (VK_0) instead, which is the actual SCS
+    //      dev free camera toggle (intercepted before the action
+    //      registry, requires `g_developer=1` AND `g_console=1`).
+    //
+    // Because no action-name binding exists that toggles the dev
+    // free camera in this build, the auto-detect no longer looks
+    // for action names — it falls straight through to the
+    // default 0x30 (VK_0) hard-coded shortcut. The probe is kept
+    // here as a defensive no-op so the F10 Walking-entry log can
+    // still surface "no controls.sii binding for the dev free
+    // camera action" rather than a missing log line.
     const char *hit_action = nullptr;
     std::string token;
     bool detected_typo = false;
-    for (const char *action :
-         {"o_im_freecam"}) {
-        bool action_typo = false;
-        token = ReadControlsSiiKeyForActionWithDiagForTesting(
-            path, std::string(action), &action_typo);
-        if (action_typo) {
-            detected_typo = true;
-        }
-        if (!token.empty()) {
-            hit_action = action;
-            break;
-        }
-    }
+    (void)hit_action;       // suppress -Wunused after the action-name
+    (void)detected_typo;    // probe loop was removed; the only
+    (void)token;            // legitimate toggle in this build is the
+                            // hard-coded '0' shortcut, not an action
+                            // registry entry.
     if (hit_action == nullptr) {
         // No binding found at all. Emit a one-line, copy-pasteable
         // fix the user can drop into their controls.sii. We pick a
@@ -865,30 +878,20 @@ void GameFreeCameraShim::AutoDetectToggleVkFromControlsSii(
             return;
         }
         WALKERCORE_LOG_WARN(
-            "GameFreeCameraShim: controls.sii at %s has NO binding "
-            "for o_im_freecam. Default toggle VK=0x%X is in effect — "
-            "no controls.sii binding is required for the shim to "
-            "work; the inline syntax handles the dispatch out of "
-            "the box (SendInput via the keyboard hook). Note: in "
-            "amtrucks.exe 1.61.3.1s the SCS action registry has no "
-            "`dev_camera_toggle` / `camdbg` / `walk_mode` / "
-            "`free_camera` action entry (zero hits verified), so the "
-            "only action name that reaches the dev free camera is "
-            "`o_im_freecam`. The dev free camera itself requires "
-            "`g_developer=1` AND `g_console=1` in config.cfg — the "
-            "shim will dispatch the keystroke but the dev cam "
-            "toggle requires both flags. To use a different key, "
-            "add this line to %s and reload the save / restart the "
-            "game:",
-            path.c_str(), toggle_vk_, path.c_str());
-        WALKERCORE_LOG_WARN(
-            "    mix o_im_freecam `keyboard.f11?0`");
-        WALKERCORE_LOG_WARN(
-            "    (alternative keys: keyboard.f10, keyboard.num5, "
-            "keyboard.numpad5 — pick one that does not collide with "
-            "an existing binding. WalkerCore will auto-detect the new "
-            "binding on next launch via [m2] dev_camera_toggle_vk "
-            "auto-probe.)");
+            "GameFreeCameraShim: no action-name binding for the dev "
+            "free camera in controls.sii at %s. In amtrucks.exe "
+            "1.61.3.1s the SCS input parser rejects `o_im_freecam` "
+            "(`<ERROR> [inp] mix \"o_im_freecam\" does not exist, "
+            "ignoring change`) and the dev free camera is toggled "
+            "by the hard-coded top-row '0' shortcut instead, NOT "
+            "via a bindable action. The shim's default dispatch "
+            "VK=0x%X (top-row '0') is in effect; if your controls.sii "
+            "binds '0' to another action, set [m2] "
+            "dev_camera_toggle_vk = 0xHH in WalkerCore.ini to "
+            "re-target the dispatch (e.g. 0x77 = F8, 0x7A = F11). "
+            "The dev free camera toggle itself requires "
+            "`g_developer=1` AND `g_console=1` in config.cfg.",
+            path.c_str(), toggle_vk_);
         return;
     }
     const unsigned int vk = ScsKeyNameToVkForTesting(token);
@@ -1126,11 +1129,16 @@ bool GameFreeCameraShim::MaybeAutoEnableFromDetection() {
     //      — if the user has named the knob in the INI (regardless
     //      of value), they have signalled "I know what I want, leave
     //      me alone" and we must not flip their value.
-    //   2. A `dev_camera_toggle` / `walk_mode` / `free_camera`
-    //      binding was detected in the user's controls.sii. Without
-    //      a binding, the shim's synthesised key falls on a
-    //      different action and the auto-enable would activate a
-    //      no-op dispatch.
+    //   2. controls.sii was located (no missing-profile / build-
+    //      server scenario). The shim still defaults to the hard-
+    //      coded '0' shortcut when no action-name binding matches,
+    //      so this gate is satisfied whenever we can read the
+    //      file. (M2.7 audit: no action-name binding for the dev
+    //      free camera exists in amtrucks.exe 1.61.3.1s, so the
+    //      earlier "binding was detected" gate was effectively
+    //      always-on for any controls.sii that exists; the gate
+    //      was rewritten to "file was found" to match the new
+    //      reality without changing the user-visible behaviour.)
     //   3. g_developer is supported (value 1 or 2 in config.cfg).
     //      Without g_developer=1, the SCS dev free camera is not
     //      available and the dispatch would produce no visual change.
@@ -1143,15 +1151,16 @@ bool GameFreeCameraShim::MaybeAutoEnableFromDetection() {
         // auto-flip.
         return false;
     }
-    if (auto_detected_key_name_.empty()) {
-        // No binding found. Even if the user enabled the shim, the
-        // dispatch would target a non-existent action. We could
-        // still flip enabled_ → true (the user can add the binding
-        // later and the next F10 will then dispatch), but that
-        // would produce a Walking-entry log line saying
-        // "dispatched 0 key event(s)" which is confusing. Stay off.
-        return false;
-    }
+    // (M2.7 audit: the "binding was detected" gate was removed.
+    // No action-name binding for the dev free camera exists in
+    // amtrucks.exe 1.61.3.1s, so auto_detected_key_name_ is
+    // always empty in this build. The shim still defaults to the
+    // hard-coded '0' shortcut regardless of bindings, so the
+    // "no binding found" reason for staying off no longer applies
+    // — flipping on is safe even when controls.sii has no
+    // matching line. The probe loop in AutoDetectToggleVkFromControlsSii
+    // is preserved as a diagnostic surface, but no longer gates
+    // the smart-default.)
     if (!supported_) {
         // g_developer is 0 / missing. The dev free camera is not
         // available. Stay off.

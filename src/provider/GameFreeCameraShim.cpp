@@ -128,6 +128,107 @@ long long NowMs() {
 #endif
 }
 
+// G5.19: Synthesise a dev-console command sequence. SCS's ATS
+// 1.61.3.1s does NOT expose any single keypress that toggles the
+// dev free camera in-game (per the shim's own RE comments
+// `GameFreeCameraShim.cpp:994-1000`, the previously-hard-coded
+// F11 shortcut lost to the action registry once `mix camdbg`
+// was added to controls.sii, and top-row `0` is intercepted by no
+// SCS handler in this build). The only proven path is the dev
+// console (~), typed command `free_camera`, then Enter. This
+// helper types the command string into the game's keyboard
+// stream so the dev console processes it as if the user typed it.
+//
+// Returns the total number of key events posted (each typed
+// character contributes 2 events: KEYDOWN + KEYUP). The diagnostic
+// counter `path_out` (2 = text-stream) is updated for the F12
+// dump surface. The `target_diag_out` is left at 0 because there
+// is no single HWND recipient for a typed command — the keys go
+// to whatever window owns the keyboard focus when each
+// SendInput call lands.
+//
+// We use `KEYEVENTF_UNICODE` for the command characters (works
+// independent of the user's keyboard layout) and ordinary VK input
+// for the console open/close (`~` / `0xC0`) and the Enter key
+// (`0x0D`). The console-open / Enter / console-close sequence
+// uses VK codes so the WH_KEYBOARD_LL echo-suppression logic
+// in `ConsumeEchoKey` continues to work — the shim records
+// `0xC0` and `0x0D` in the echo list at the call site and the
+// hook eats them. The unicode chars come through the kernel with
+// `wVk=0`, which the shim's input hook also ignores (see
+// `InputHook::LowLevelKeyboardProc` + `GameFreeCameraShim
+// ::ConsumeEchoKey` — `vk=0` falls through without matching the
+// echo list).
+int SynthConsoleCommand(const char *command,
+                       int &path_out, unsigned int &target_diag_out) {
+    path_out = 0;
+    target_diag_out = 0;
+    if (command == nullptr || command[0] == '\0') {
+        return 0;
+    }
+#if defined(_WIN32) && !defined(WALKERCORE_GAME_FREE_CAMERA_SHIM_DISABLED)
+    auto send_vk = [](unsigned int vk) {
+        INPUT down = {};
+        down.type = INPUT_KEYBOARD;
+        down.ki.wVk = static_cast<WORD>(vk);
+        down.ki.dwFlags = 0;
+        ::SendInput(1, &down, sizeof(down));
+        INPUT up = {};
+        up.type = INPUT_KEYBOARD;
+        up.ki.wVk = static_cast<WORD>(vk);
+        up.ki.dwFlags = KEYEVENTF_KEYUP;
+        ::SendInput(1, &up, sizeof(up));
+    };
+    auto send_unicode = [](unsigned short c) {
+        INPUT down = {};
+        down.type = INPUT_KEYBOARD;
+        down.ki.wVk = 0;
+        down.ki.wScan = c;
+        down.ki.dwFlags = KEYEVENTF_UNICODE;
+        ::SendInput(1, &down, sizeof(down));
+        INPUT up = {};
+        up.type = INPUT_KEYBOARD;
+        up.ki.wVk = 0;
+        up.ki.wScan = c;
+        up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        ::SendInput(1, &up, sizeof(up));
+    };
+    int total = 0;
+    // Open dev console (~ / grave / VK_OEM_3)
+    send_vk(0xC0);
+    total += 2;
+    ::Sleep(80);
+    // Type each character of the command using KEYEVENTF_UNICODE.
+    for (const char *p = command; *p != '\0'; ++p) {
+        send_unicode(static_cast<unsigned short>(static_cast<unsigned char>(*p)));
+        total += 2;
+        ::Sleep(20);
+    }
+    // Submit with Enter.
+    send_vk(VK_RETURN);
+    total += 2;
+    ::Sleep(80);
+    // Close the dev console so the screen returns to gameplay.
+    send_vk(0xC0);
+    total += 2;
+    path_out = 2;  // SendInput text-stream
+    return total;
+#else
+    // Test stub — mirror the real event count without touching the
+    // Windows input queue. Each command emits the same 2*chars + 4
+    // events as the real path so tests can verify the count.
+    int total = 0;
+    for (const char *p = command; *p != '\0'; ++p) {
+        total += 2;
+    }
+    total += 2;  // ~ open
+    total += 2;  // Enter
+    total += 2;  // ~ close
+    path_out = 2;
+    return total;
+#endif
+}
+
 }  // namespace
 
 // Pure helper: candidate `Documents` sub-folders relative to the
@@ -837,6 +938,9 @@ void GameFreeCameraShim::SetEnabled(bool enabled) { enabled_ = enabled; }
 void GameFreeCameraShim::SetToggleVk(unsigned int vk) { toggle_vk_ = vk; }
 void GameFreeCameraShim::SetExitPressVk(unsigned int vk) {
     exit_press_vk_ = vk;
+}
+void GameFreeCameraShim::SetDevCameraViaConsole(bool via_console) {
+    dev_camera_via_console_ = via_console;
 }
 void GameFreeCameraShim::BindGameHwnd(HWND hwnd) { hwnd_ = hwnd; }
 void GameFreeCameraShim::BindDevCameraPatchResult(
@@ -1645,20 +1749,75 @@ int GameFreeCameraShim::TriggerToggle() {
         total += SynthKey(exit_press_vk_, hwnd_, last_dispatch_path_,
                           last_postmessage_hwnd_diag_);
     }
-    // Stage 2 (always): toggle the SCS dev free camera. The default VK
-    // (0x7A = VK_F11) is the SCS dev console shortcut key in
-    // amtrucks.exe 1.61.3.1s; when the shim is enabled, dispatching this
-    // VK through the action registry also triggers the dev free camera
-    // mode as long as `g_developer=1` AND `g_console=1` are set in
-    // config.cfg. The shim works out of the box without a controls.sii
-    // binding; if the user adds `mix o_im_freecam \`keyboard.X?0\`` in
-    // controls.sii, the auto-detect at DLL init overrides `toggle_vk_`
-    // to X. NOTE (Oct 2026 user report): F11 in ATS also has a native
-    // in-game effect (camera cycles to index 0); users who observe that
-    // can pin a different VK in the INI (`[m2] dev_camera_toggle_vk =
-    // 0x77` for F8, etc.).
-    total += SynthKey(toggle_vk_, hwnd_, last_dispatch_path_,
-                      last_postmessage_hwnd_diag_);
+    // Stage 2 (G5.19-aware): toggle the SCS dev free camera.
+    //
+    // The original Stage 2 dispatched a single VK (default 0x30, top-row
+    // `0`) through SendInput, banking on an SCS-internal keypress
+    // handler that lived in older builds. ATS 1.61.3.1s no longer has
+    // such a handler — F11 hits `mix camdbg` first, top-row `0` is
+    // unbound but ignored, and there is no controls.sii action name
+    // that toggles the dev free camera. The shim's own source comments
+    // (`GameFreeCameraShim.cpp:994-1000`) acknowledge this and point to
+    // the dev console (`~`) + typed command `free_camera` as the only
+    // proven path.
+    //
+    // When `[m2] dev_camera_via_console = true` (the new default) we
+    // route Stage 2 through `SynthConsoleCommand("free_camera")`,
+    // which opens the dev console, types the literal command, presses
+    // Enter, and closes the console in one synchronous burst. The
+    // resulting cam state mirrors what the user would get by typing
+    // the command manually. `free_camera` is itself a state toggle in
+    // SCS: each invocation flips dev-cam on/off, so successive F10
+    // presses alternate the dev camera cleanly.
+    //
+    // When the INI knob is set to false, fall back to the legacy
+    // SendInput(VK) path. Some users bind `mix o_im_freecam
+    // \`keyboard.X?0\`` in their controls.sii and rely on the action
+    // registry shortcut, which only the VK-dispatch path can hit.
+    if (dev_camera_via_console_) {
+        total += SynthConsoleCommand("free_camera",
+                                     last_dispatch_path_,
+                                     last_postmessage_hwnd_diag_);
+        console_cmds_dispatched_++;
+        // Echo-suppress the three VK events SynthConsoleCommand
+        // posts at the head and tail of the sequence: ~ (open),
+        // Enter, ~ (close). The unicode char events (KEYEVENTF_UNICODE
+        // with wVk=0) are immune to the hook's eat-echo logic because
+        // ConsumeEchoKey only matches by VK, not by unicode wScan; the
+        // shim's WH_KEYBOARD_LL drops VK=0 events before they reach
+        // any toggle-detection code.
+        const long long until = NowMs() + 250;
+        if (echo_count_ < kMaxEcho) {
+            echo_vks_[echo_count_] = 0xC0;
+            echo_until_ms_[echo_count_] = until;
+            echo_count_++;
+        }
+        if (echo_count_ < kMaxEcho) {
+            echo_vks_[echo_count_] = VK_RETURN;
+            echo_until_ms_[echo_count_] = until;
+            echo_count_++;
+        }
+        if (echo_count_ < kMaxEcho) {
+            echo_vks_[echo_count_] = 0xC0;
+            echo_until_ms_[echo_count_] = until;
+            echo_count_++;
+        }
+    } else {
+        // Legacy path: the SCS-internal keypress handler (F11 in older
+        // builds, top-row `0` per the SCS docs, etc.). May not work in
+        // ATS 1.61.3.1s but is preserved for users who bind a custom
+        // action name in controls.sii or who run on a different build.
+        total += SynthKey(toggle_vk_, hwnd_, last_dispatch_path_,
+                          last_postmessage_hwnd_diag_);
+        {
+            const long long until = NowMs() + 250;
+            if (echo_count_ < kMaxEcho) {
+                echo_vks_[echo_count_] = toggle_vk_;
+                echo_until_ms_[echo_count_] = until;
+                echo_count_++;
+            }
+        }
+    }
     toggles_dispatched_++;
     last_dispatch_ms_ = static_cast<int>(NowMs() & 0x7FFFFFFF);
 
@@ -1673,14 +1832,9 @@ int GameFreeCameraShim::TriggerToggle() {
             echo_count_++;
         }
     }
-    {
-        const long long until = NowMs() + 250;
-        if (echo_count_ < kMaxEcho) {
-            echo_vks_[echo_count_] = toggle_vk_;
-            echo_until_ms_[echo_count_] = until;
-            echo_count_++;
-        }
-    }
+    // The dev_camera_via_console_ branch adds its three VKs to the
+    // echo list above; the legacy branch already added toggle_vk_.
+    // Nothing to do here for either path.
     return total;
 }
 

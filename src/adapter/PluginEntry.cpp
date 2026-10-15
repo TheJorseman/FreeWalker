@@ -640,6 +640,13 @@ extern "C" void walker_per_frame_tick(double dt_seconds) {
       // dispatch the new key, not the boot-time value.
       g_game_free_camera_shim->SetToggleVk(
           g_settings->current().m2_dev_camera_toggle_vk);
+      // G5.19: push the dispatch-path flag. When true, the shim
+      // types `free_camera` into the dev console instead of
+      // dispatching a single VK — the only path that works on
+      // ATS 1.61.3.1s. User-edited via `[m2]
+      // dev_camera_via_console = true|false`.
+      g_game_free_camera_shim->SetDevCameraViaConsole(
+          g_settings->current().m2_dev_camera_via_console);
       // M2.5: re-probe controls.sii when the explicit flag flipped
       // (e.g. the user just added the `dev_camera_toggle_vk = 0x65`
       // line and now wants to confirm the value). We call the
@@ -1080,6 +1087,12 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
       g_settings != nullptr
           ? g_settings->current().m2_dev_camera_toggle_vk
           : 0x60U);
+  // G5.19: same dispatch-path flag, set at init. Defaults to true
+  // when the INI is absent (so a fresh install still gets the
+  // console-injection behaviour). Users who deliberately pin the
+  // legacy SendInput(VK) path can flip the INI knob.
+  g_game_free_camera_shim->SetDevCameraViaConsole(
+      g_settings == nullptr || g_settings->current().m2_dev_camera_via_console);
   WALKERCORE_LOG_INFO(
       "GameFreeCameraShim: toggle VK = 0x%X (decimal %u; set "
       "[m2] dev_camera_toggle_vk = 0xHH in WalkerCore.ini to "

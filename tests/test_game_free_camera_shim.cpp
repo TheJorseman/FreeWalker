@@ -48,11 +48,17 @@ namespace {
 std::unique_ptr<GameFreeCameraShim> MakeShim() {
     // Fresh instance per test. Construct default, then reset to a
     // known-disabled baseline (toggle VK 0x7A = VK_F11, no exit
-    // press) so the assertions are deterministic.
+    // press) so the assertions are deterministic. G5.19: opt OUT
+    // of the new via-console dispatch path so legacy assertions
+    // checking `last_dispatch_path() == 1` (SendInput) still
+    // verify the SynthKey path. Tests that exercise the
+    // SynthConsoleCommand path explicitly flip the flag back on
+    // via `s->SetDevCameraViaConsole(true)`.
     auto s = std::make_unique<GameFreeCameraShim>();
     s->SetEnabled(false);
     s->SetToggleVk(0x7A);
     s->SetExitPressVk(0);
+    s->SetDevCameraViaConsole(false);
     return s;
 }
 
@@ -259,6 +265,76 @@ void TestGameFreeCameraShimRebindOnEntryCatchesLateWindow() {
     s->OnEnterWalking();
     EXPECT_EQ(s->last_dispatch_path(), 1);  // SendInput
     EXPECT_EQ(s->last_postmessage_target_diag(), 0x12345678u);
+}
+
+// G5.19: when the via-console dispatch path is enabled,
+// TriggerToggle() routes through SynthConsoleCommand ("free_camera")
+// instead of SynthKey(VK). The shim records `last_dispatch_path() ==
+// 2` (text-stream) and the helper counts every Walking entry as one
+// console-command injection via console_cmds_dispatched(). The HWND
+// recipient diagnostic stays 0 because there is no single HWND for a
+// typed text stream — each char lands wherever the keyboard focus is.
+void TestGameFreeCameraShimDispatchViaConsoleRecordsTextStreamPath() {
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->SetDevCameraViaConsole(true);
+    // HWND is irrelevant for the via-console path but bind one to
+    // confirm the path counter still flips regardless.
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xCAFEBABEu));
+    s->OnEnterWalking();
+    EXPECT_EQ(s->last_dispatch_path(), 2);  // 2 = SendInput text-stream
+    EXPECT_EQ(s->console_cmds_dispatched(), 1);
+    // HWND recipient is 0 because the text stream has no single
+    // recipient — we keep the historic field name for ABI compat
+    // but the diagnostic is no longer populated by this path.
+    EXPECT_EQ(s->last_postmessage_target_diag(), 0u);
+}
+
+void TestGameFreeCameraShimDispatchViaConsoleEchoSuppression() {
+    // The via-console path pushes 3 VKs to echo suppression: ~, Enter,
+    // ~ (the unicode char events go through KEYEVENTF_UNICODE with
+    // wVk=0 which the hook cannot match by VK, so they are not
+    // suppressed, only the explicit-VK events are). The echo list
+    // has kMaxEcho=8 slots so 3 entries fits; the next SynthKey would
+    // have to land within 250 ms to be eaten by ConsumeEchoKey.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->SetDevCameraViaConsole(true);
+    s->OnEnterWalking();
+    // Each of the three explicit VKs must be consumed once.
+    EXPECT_TRUE(s->ConsumeEchoKey(0xC0));   // ~ (open)
+    EXPECT_TRUE(s->ConsumeEchoKey(VK_RETURN));  // Enter
+    EXPECT_TRUE(s->ConsumeEchoKey(0xC0));   // ~ (close)
+    // A second consumption must report false (already eaten).
+    EXPECT_FALSE(s->ConsumeEchoKey(VK_RETURN));
+}
+
+void TestGameFreeCameraShimDispatchViaConsoleSkipsWithoutHwnd() {
+    // The via-console path does not require an HWND bound — the
+    // text stream goes through SendInput which targets the foreground
+    // window of the calling thread regardless. We verify the
+    // trigger fires even with `game_hwnd() == nullptr`.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->SetDevCameraViaConsole(true);
+    EXPECT_TRUE(s->game_hwnd() == nullptr);
+    s->OnEnterWalking();
+    EXPECT_EQ(s->last_dispatch_path(), 2);  // 2 = SendInput text-stream
+    EXPECT_EQ(s->toggles_dispatched(), 1);
+    EXPECT_EQ(s->console_cmds_dispatched(), 1);
+}
+
+void TestGameFreeCameraShimSetDevCameraViaConsoleRoundTrip() {
+    auto s = MakeShim();
+    // MakeShim() default: via_console = false (legacy path).
+    EXPECT_FALSE(s->dev_camera_via_console());
+    s->SetDevCameraViaConsole(true);
+    EXPECT_TRUE(s->dev_camera_via_console());
+    s->SetDevCameraViaConsole(false);
+    EXPECT_FALSE(s->dev_camera_via_console());
 }
 
 void TestGameFreeCameraShimOnExitWalkingLeavesCountersIntact() {

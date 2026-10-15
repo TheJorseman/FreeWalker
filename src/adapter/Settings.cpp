@@ -502,6 +502,20 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
                         "valid VK code (decimal 0..255 or 0xHH); keeping default "
                         "VK_F11 (0x7A).", value);
                 }
+            } else if (lkey == "dev_camera_via_console" && TryParseBool(value, &bv)) {
+                // G5.19: when true, route TriggerToggle() through the
+                // dev console (`~` + `free_camera` + Enter) instead of
+                // dispatching a single VK. ATS 1.61.3.1s has no working
+                // dev-cam keypress handler — F11 hits `mix camdbg`
+                // first, top-row `0` is unbound but intercepted by no
+                // SCS handler, and there is no controls.sii action
+                // name that toggles the dev free camera. The dev
+                // console path is the only proven mechanism. Users
+                // who add `mix o_im_freecam \`keyboard.X?0\`` to their
+                // controls.sii can flip this to false to fall back to
+                // the legacy SendInput(VK) path on top of their custom
+                // action. Default true.
+                loaded.m2_dev_camera_via_console = bv;
             } else if (lkey == "camera_hijack_install" && TryParseBool(value, &bv)) {
                 // M2 long-term: in-process MinHook on the SCS camera
                 // state dispatcher at RVA 0xC22F40 in amtrucks.exe.
@@ -749,6 +763,7 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
         "value=%s,explicit=%s sentinel=%s; "
         "dev_camera_toggle_vk="
         "value=0x%X,explicit=%s sentinel=%s; "
+        "dev_camera_via_console=%s; "
         "game_free_camera_shim-managed=%s; "
         "dev_camera_toggle_vk-managed=%s",
         path.c_str(),
@@ -758,6 +773,7 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
         current_.m2_dev_camera_toggle_vk,
         current_.m2_dev_camera_toggle_vk_explicit ? "true" : "false",
         managed_keys.count("dev_camera_toggle_vk") != 0 ? "yes" : "no",
+        current_.m2_dev_camera_via_console ? "true" : "false",
         managed_keys.count("game_free_camera_shim") != 0 ? "yes" : "no",
         managed_keys.count("dev_camera_toggle_vk") != 0 ? "yes" : "no");
 
@@ -1087,6 +1103,17 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "# `[m2] dev_camera_toggle_vk = 0xHH` here (e.g. F8 =\n";
     f << "# 0x77 to avoid collisions). Accepts decimal or 0xHH.\n";
     f << "dev_camera_toggle_vk = 0x" << std::hex << current_.m2_dev_camera_toggle_vk << std::dec << "\n";
+    // G5.19: dispatch path for the dev-camera toggle. When true
+    // (default), the shim types `free_camera` into the dev console
+    // (the only working path on ATS 1.61.3.1s). When false, the
+    // shim falls back to SendInput(VK) for users who bind a custom
+    // action name in their controls.sii.
+    f << "# G5.19: dispatch path. true = open dev console + type\n";
+    f << "# `free_camera` + Enter + close (~`free_camera`~). false =\n";
+    f << "# legacy SendInput(VK) dispatch. ATS 1.61.3.1s only honours\n";
+    f << "# the console path; the legacy path is for users with\n";
+    f << "# custom controls.sii bindings. Default true.\n";
+    f << "dev_camera_via_console = " << (current_.m2_dev_camera_via_console ? "true" : "false") << "\n";
     // Same auto-managed sentinel as above — controls.sii auto-detect is
     // dead if the explicit flag is set, and the default-value line is
     // what pre-M2.7d DLLs wrote. The migrate block above snaps a

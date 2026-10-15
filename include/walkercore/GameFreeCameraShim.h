@@ -100,6 +100,24 @@ public:
     unsigned int toggle_vk() const { return toggle_vk_; }
     unsigned int exit_press_vk() const { return exit_press_vk_; }
 
+    // G5.19: when true, TriggerToggle() routes the dev-camera
+    // activation through the dev console (open `~`, type the
+    // literal command `free_camera`, Enter, close `~`) instead of
+    // dispatching a single VK via SendInput. The console path is
+    // the only verified mechanism on ATS 1.61.3.1s because the
+    // SCS-internal keypress handler for the dev free camera has
+    // been routed around by `mix camdbg \`keyboard.f11?0\`` and
+    // the action registry eats both F11 and F10 before they reach
+    // the dev camera shortcut. Default true. INI knob: `[m2]
+    // dev_camera_via_console`.
+    void SetDevCameraViaConsole(bool via_console);
+    bool dev_camera_via_console() const {
+        return dev_camera_via_console_;
+    }
+    int console_cmds_dispatched() const {
+        return console_cmds_dispatched_;
+    }
+
     // Best-effort probe: did the game load `g_developer = 1` at
     // startup? We read `config.cfg` (best guess from the env) and
     // look for `uset g_developer "1"`. If we cannot find the config
@@ -380,6 +398,17 @@ private:
     int walks_entered_ = 0;
     int toggles_dispatched_ = 0;
     int last_dispatch_ms_ = 0;
+    // G5.19: count of console-command injections the shim has
+    // dispatched (one per Walking-entry in the new code path, or
+    // per F10 manual toggle). Used by the F12 dump to confirm how
+    // many `free_camera` calls actually went through.
+    int console_cmds_dispatched_ = 0;
+    // G5.19: when true, TriggerToggle() opens the dev console and
+    // types `free_camera` instead of dispatching a single VK.
+    // Default true because ATS 1.61.3.1s has no working
+    // dev-cam keypress handler. INI knob: `[m2]
+    // dev_camera_via_console`.
+    bool dev_camera_via_console_ = true;
     unsigned int toggle_vk_ = 0x30;     // VK_0 (top-row zero) — the SCS dev
                                          // free-camera toggle in amtrucks.exe
                                          // 1.61.3.1s when `g_debug_camera = 1`.

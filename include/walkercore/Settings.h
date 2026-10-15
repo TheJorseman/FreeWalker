@@ -122,6 +122,16 @@ struct WalkerSettings {
     // pollution case (DLL wrote a now-legacy value, default
     // changed, value becomes stranded) self-heals on next load.
     bool m2_dev_camera_toggle_vk_explicit = false;
+    // G5.19: when true, the shim routes TriggerToggle() through
+    // `SynthConsoleCommand("free_camera")` (open dev console,
+    // type the literal command, Enter, close) instead of dispatching
+    // a single VK via SendInput. ATS 1.61.3.1s has no working
+    // dev-cam keypress handler — F11 hits `mix camdbg`, top-row
+    // `0` is unbound but intercepted by no SCS handler in this
+    // build — so the dev-console path is the only proven
+    // mechanism. Default true. INI knob: `[m2]
+    // dev_camera_via_console`.
+    bool m2_dev_camera_via_console = true;
     // M2 long-term camera hijack gate. False by default — opt in via
     // `[m2] camera_hijack = 1`. When enabled, WalkerCore captures
     // amtrucks.exe's image base via GetModuleHandleA and MinHooks the

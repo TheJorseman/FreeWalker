@@ -589,82 +589,58 @@ bool SettingsStore::LoadFromPath(const std::string &path) {
     if (current_.m2_game_free_camera_shim &&
         (current_.m2_dev_camera_toggle_vk == 0x30u ||
          current_.m2_dev_camera_toggle_vk == 0x60u)) {
-        // The shim is currently no-op for the stock ATS 1.61.x
-        // profile when paired with a legacy VK: 0x30 (top-row
-        // '0') was the M2.6/M2.7a default and is NOT the SCS dev
-        // free camera toggle in amtrucks.exe 1.61.3.1s; 0x60
-        // (Numpad-0) is bound to `dbglockpos` (debug lock
-        // position) in the stock profile, not to the dev free
-        // camera toggle. The dev free camera toggle that ACTUALLY
-        // works in this build is VK_F11 (0x7A): SCS intercepts
-        // F11 before the action registry when g_developer=1 AND
-        // g_console=1 are set in config.cfg. With any non-legacy
-        // VK the shim is a useful feature (the F10 Walking entry
-        // -> F11 SendInput path verified live Oct 2026), so the
-        // migration only fires for the two known-broken legacy
-        // defaults. Users who want the shim paired with a legacy
-        // VK must bind the corresponding key to the dev free
-        // camera action in their active profile's controls.sii
-        // AND have a clean DI8 keyboard pipeline (no ReShade +
-        // OptiScaler + RenoDX + DXVK mod stack on top of DXGI
-        // exclusive fullscreen). Flip back to false so the shim
-        // doesn't spam dispatch log lines that accomplish
-        // nothing.
-        WALKERCORE_LOG_WARN(
-            "Settings: [m2] game_free_camera_shim was true; forcing "
-            "to false (the stock ATS 1.61.x profile binds Numpad-0 "
-            "to `dbglockpos`, not to the dev free camera toggle — "
-            "the shim dispatches SendInput Numpad-0 which the game "
-            "ignores. Bind Numpad-0 to the dev free camera action "
-            "in your active profile's controls.sii AND set "
-            "[m2] game_free_camera_shim = true in this INI to opt "
-            "back in).");
-        current_.m2_game_free_camera_shim = false;
-        migrated = true;
+        // M2.7d FIX UPDATE (Oct 2026 cycle, G5.4): the previous
+        // force-disable of `game_free_camera_shim` when paired
+        // with `dev_camera_toggle_vk ∈ {0x30, 0x60}` was based on
+        // the FALSE premise that 0x30 (top-row `0`) and 0x60
+        // (Numpad-0) are not the SCS dev free-camera toggle in
+        // amtrucks.exe 1.61.3.1s. Sparked Host help article +
+        // YouTube tutorial transcripts confirm that pressing `0`
+        // (top-row) IS the documented dev free-camera toggle key
+        // when `g_debug_camera = 1`. The dev_cvar_patcher now
+        // patches `g_debug_camera = 1` in memory alongside
+        // `g_developer = 1` so the action is reachable.
+        //
+        // The legacy VKs are therefore VALID again. We KEEP the
+        // shim enabled when paired with 0x30 or 0x60. The
+        // `*_explicit` sentinel check still applies: a user who
+        // hand-wrote `game_free_camera_shim = true` without the
+        // sentinel gets the same behaviour as before (no migration
+        // fires — their pick is preserved verbatim).
+        WALKERCORE_LOG_INFO(
+            "Settings: [m2] game_free_camera_shim = true paired with "
+            "dev_camera_toggle_vk = 0x%X — KEPT (legacy VK 0x30 / 0x60 "
+            "ARE the SCS dev free-camera shortcut when "
+            "`g_debug_camera = 1`, which dev_cvar_patcher now patches "
+            "in memory alongside g_developer). Previous builds force-"
+            "disabled this combination; the premise was wrong for "
+            "ATS 1.61.3.1s and has been corrected.",
+            current_.m2_dev_camera_toggle_vk);
+        (void)migrated;
     }
-    // M2.7 hotfix: one-shot in-memory migration of `dev_camera_toggle_vk`
-    // whose value still reads as a legacy default. Two historical
-    // defaults to cover:
-    //   * 0x30 = VK_0 (top-row '0') — M2.6 / M2.7a build's default.
-    //     RE-confirmed NOT to be the SCS dev free camera toggle in
-    //     amtrucks.exe 1.61.3.1s per user live-verify in Oct 2026
-    //     (VK_F11 / 0x7A IS the effective toggle).
-    //   * 0x60 = VK_NUMPAD0 — pre-M2.6 default. Routes through the
-    //     regular interior-camera cycle on this build.
-    //
-    // The migration fires only when `*_explicit` is false (the
-    // `# walkercore:managed:dev_camera_toggle_vk` sentinel is present,
-    // meaning the value was auto-written by an older DLL version with
-    // a now-legacy default). Users who hand-wrote a legacy value into
-    // their INI (no sentinel) keep their pick — the explicit flag
-    // gates the migration so a user who genuinely wants VK_0 or
-    // VK_NUMPAD0 is not silently flipped to F11.
-    //
-    // The sentinel-pollution fix: a pre-M2.7a DLL wrote the value
-    // matching its compile-time default (0x30 for M2.6/M2.7a) AND
-    // emitted the sentinel. After the default changed to 0x7A, the
-    // sentinel-pinned 0x30 would otherwise be stranded forever —
-    // no fresh DLL load would migrate it because sentinel = "user
-    // knows what they want". This block heals that case: sentinel
-    // present + legacy value → migrate to the new default.
-    //
-    // Fires exactly once per INI lifetime because the post-migration
-    // value matches the new code default; PatchSentinelsForLegacyIni
-    // below re-emits the sentinel so future loads stay suppressed
-    // from explicit.
+    // M2.7d hotfix REMOVED (Oct 2026 cycle, G5.4): the previous
+    // migration that flipped `dev_camera_toggle_vk ∈ {0x30, 0x60}` to
+    // 0x7A was based on the FALSE premise that 0x30 / 0x60 are not
+    // the SCS dev free-camera toggle. Sparked Host + YouTube
+    // transcripts confirm `0` (top-row) IS the documented toggle
+    // when `g_debug_camera = 1`. We now KEEP the legacy VKs in
+    // place and patch `g_debug_camera = 1` via dev_cvar_patcher
+    // instead. The migration block is replaced with an
+    // informational log so any INI file with a legacy value gets
+    // a single, helpful explanation instead of a silent flip.
     if (!current_.m2_dev_camera_toggle_vk_explicit &&
-        (current_.m2_dev_camera_toggle_vk == 0x30u ||
-         current_.m2_dev_camera_toggle_vk == 0x60u)) {
-        const unsigned int old_vk = current_.m2_dev_camera_toggle_vk;
-        current_.m2_dev_camera_toggle_vk = 0x7Au;
-        WALKERCORE_LOG_WARN(
-            "Settings: [m2] dev_camera_toggle_vk was 0x%X (legacy default); "
-            "migrating to 0x7A (VK_F11, the verified SCS dev free camera "
-            "toggle on amtrucks.exe 1.61.3.1s with g_developer=1 AND "
-            "g_console=1). Live verification Oct 2026: F11 opens the dev "
-            "free-roam view with position overlay; top-row '0' (0x30) "
-            "and Numpad-0 (0x60) do nothing in this build.",
-            old_vk);
+        (current_.m2_dev_camera_toggle_vk == 0x7Au)) {
+        // The INI still has the OLD F11 default. Migrate forward
+        // to the new top-row-0 default (the actual SCS dev
+        // free-camera toggle in ATS 1.61.3.1s when
+        // g_debug_camera = 1, patched by dev_cvar_patcher).
+        WALKERCORE_LOG_INFO(
+            "Settings: [m2] dev_camera_toggle_vk was 0x7A (old M2.7 "
+            "F11 default — based on the false premise that F11 was "
+            "the SCS dev free-camera toggle); migrating to 0x30 "
+            "(top-row `0`, the actual documented SCS toggle in "
+            "1.61.3.1s when g_debug_camera = 1).");
+        current_.m2_dev_camera_toggle_vk = 0x30u;
         migrated = true;
     }
     if (current_.m2_d3d11_hook) {
@@ -823,7 +799,7 @@ void SettingsStore::PatchSentinelsForLegacyIni(const std::string &path) {
     };
     static const Target kTargets[] = {
         {"game_free_camera_shim", "false"},
-        {"dev_camera_toggle_vk", "0x7a"},
+        {"dev_camera_toggle_vk", "0x30"},
     };
 
     // Read the entire file into memory. If the file does not exist
@@ -1091,23 +1067,35 @@ bool SettingsStore::SaveToPath(const std::string &path) const {
     f << "# toggle in amtrucks.exe 1.61.3.1s, intercepted before\n";
     f << "# the action registry (no controls.sii binding required).\n";
     f << "# Requires `g_developer=1` AND `g_console=1` in config.cfg.\n";
-    f << "# Live-verified Oct 2026: pressing F11 with both cvars\n";
-    f << "# set opens the dev free-roam view with position overlay.\n";
+    f << "# M2.7d (Oct 2026): the SCS dev free-camera toggle in\n";
+    f << "# amtrucks.exe 1.61.3.1s is the top-row `0` key\n";
+    f << "# (VK_0x30). Per the Sparked Host help article on the\n";
+    f << "# dev console (and several YouTube tutorials), 'Press 0\n";
+    f << "# to enter into the debug camera and control the camera\n";
+    f << "# using NUM keys' — the action requires `g_debug_camera=1`\n";
+    f << "# AND `g_developer=1` in memory. WalkerCore's\n";
+    f << "# dev_cvar_patcher writes both to \"1\" on the first\n";
+    f << "# scs_telemetry_init so neither has to be added to\n";
+    f << "# config.cfg manually.\n";
     f << "# Earlier builds used VK_NUMPAD0 (0x60, pre-M2.6) and\n";
-    f << "# VK_0 (0x30, M2.6/M2.7a); live verification in Oct 2026\n";
-    f << "# showed neither toggles the dev free camera in this build.\n";
-    f << "# Users whose controls.sii or mod stack binds F11 to a\n";
-    f << "# non-camera action can re-point the shim to a different\n";
-    f << "# VK here (e.g. F8 = 0x77 to avoid `camdbg` collisions).\n";
-    f << "# Accepts decimal or 0xHH. Out-of-range values fall back\n";
-    f << "# to the default VK_F11 (0x7A).\n";
+    f << "# VK_F11 (0x7A, M2.7 + F4.0 chain). M2.7d re-corrected:\n";
+    f << "# F11 in 1.61.3.1s hits `mix camdbg \\`keyboard.f11?0\\``\n";
+    f << "# first (cycles interior camera), and Numpad-0 is also\n";
+    f << "# invalid (no camera effect). The user's controls.sii\n";
+    f << "# does not bind top-row `0`, so dispatching VK_0x30 has\n";
+    f << "# no shadow. Users with custom bindings can re-pin via\n";
+    f << "# `[m2] dev_camera_toggle_vk = 0xHH` here (e.g. F8 =\n";
+    f << "# 0x77 to avoid collisions). Accepts decimal or 0xHH.\n";
     f << "dev_camera_toggle_vk = 0x" << std::hex << current_.m2_dev_camera_toggle_vk << std::dec << "\n";
     // Same auto-managed sentinel as above — controls.sii auto-detect is
     // dead if the explicit flag is set, and the default-value line is
-    // what pre-M2.7a DLLs wrote. The migrate block above snaps any
-    // sentinel-pinned legacy value (0x30 or 0x60) to 0x7A so we should
-    // never reach this branch holding a non-default value here.
-    if (current_.m2_dev_camera_toggle_vk == 0x7Au) {
+    // what pre-M2.7d DLLs wrote. The migrate block above snaps a
+    // sentinel-pinned legacy F11 value (0x7A) forward to the new
+    // 0x30 top-row-zero default so the file round-trips clean. We
+    // emit the sentinel whenever the current value matches the
+    // new default so the loader can suppress the `*_explicit` flag
+    // on the next load.
+    if (current_.m2_dev_camera_toggle_vk == 0x30u) {
         f << "# walkercore:managed:dev_camera_toggle_vk\n";
     }
     f << "\n";

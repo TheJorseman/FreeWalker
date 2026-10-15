@@ -57,9 +57,9 @@ void TestIniM3PxSceneHookInstallParseAndRoundTrip();
 void TestIniM2CameraHijackInstallAutoMigratesOldTrueValues();
 void TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues();
 void TestIniM2GameFreeCameraShimDefaultIsFalse();
-void TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse();
+void TestIniM2GameFreeCameraShimKeptWhenVkIsLegacy();
 void TestIniM2GameFreeCameraShimExplicitFalseIsPreserved();
-void TestIniM2GameFreeCameraShimPreservedWhenVkIsModern();
+void TestIniM2GameFreeCameraShimForwardMigratesOldF11Vk();
 // M2 dev_camera_toggle_vk — virtual key the shim synthesises on
 // every Walking entry. SCS hard-codes the dev free camera toggle to
 // the F11 key (VK_F11 = 0x7A), gated by `g_developer=1` AND
@@ -67,7 +67,7 @@ void TestIniM2GameFreeCameraShimPreservedWhenVkIsModern();
 // dev-free-camera-shortcut change; earlier defaults VK_NUMPAD0
 // 0x60 and VK_0 0x30 were RE-driven guesses that did not work in
 // amtrucks.exe 1.61.3.1s.)
-void TestIniM2DevCameraToggleVkDefaultIsVKF11();
+void TestIniM2DevCameraToggleVkDefaultIsTopRowZero();
 void TestIniM2DevCameraToggleVkParsesHexAndDecimal();
 void TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault();
 void TestIniM2DevCameraToggleVkUnparseableKeepsDefault();
@@ -480,6 +480,8 @@ void TestDevCameraCvarPatcherPatchOnceIsIdempotent();
 void TestDevCameraCvarPatcherPatchOnceSkipsWhenValueAlreadyOne();
 void TestDevCameraCvarPatcherPatchOnceDetectsSignatureMismatch();
 void TestDevCameraCvarPatcherCountersAfterSuccessfulPatch();
+void TestDevCameraCvarPatcherDualCvarPathPatchesBoth();
+void TestDevCameraCvarPatcherDualCvarPathIsIdempotent();
 void TestDevCameraCvarPatcherProbesValueAtStructOffset24();
 void TestDevCameraCvarPatcherWiderScanWindowFindsFarStruct();
 void TestDevCameraCvarPatcherProbesValueAtStructOffset32();
@@ -760,11 +762,11 @@ int main() {
     RUN_TEST(walkercore::TestIniM2CameraHijackInstallAutoMigratesOldTrueValues);
     RUN_TEST(walkercore::TestIniM3PxSceneHookInstallAutoMigratesOldTrueValues);
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimDefaultIsFalse);
-    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimAutoMigratesOldTrueToFalse);
+    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimKeptWhenVkIsLegacy);
     RUN_TEST(walkercore::TestIniM2GameFreeCameraShimExplicitFalseIsPreserved);
-    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimPreservedWhenVkIsModern);
+    RUN_TEST(walkercore::TestIniM2GameFreeCameraShimForwardMigratesOldF11Vk);
     // M2 dev_camera_toggle_vk.
-    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsVKF11);
+    RUN_TEST(walkercore::TestIniM2DevCameraToggleVkDefaultIsTopRowZero);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkParsesHexAndDecimal);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkOutOfRangeKeepsDefault);
     RUN_TEST(walkercore::TestIniM2DevCameraToggleVkUnparseableKeepsDefault);
@@ -1227,6 +1229,8 @@ RUN_TEST(walkercore::TestGameFreeCameraShimReadControlsSiiKeyFindsCamdbg);
     RUN_TEST(walkercore::TestDevCameraCvarPatcherPatchOnceSkipsWhenValueAlreadyOne);
     RUN_TEST(walkercore::TestDevCameraCvarPatcherPatchOnceDetectsSignatureMismatch);
     RUN_TEST(walkercore::TestDevCameraCvarPatcherCountersAfterSuccessfulPatch);
+    RUN_TEST(walkercore::TestDevCameraCvarPatcherDualCvarPathPatchesBoth);
+    RUN_TEST(walkercore::TestDevCameraCvarPatcherDualCvarPathIsIdempotent);
     RUN_TEST(walkercore::TestDevCameraCvarPatcherProbesValueAtStructOffset24);
     RUN_TEST(walkercore::TestDevCameraCvarPatcherWiderScanWindowFindsFarStruct);
     RUN_TEST(walkercore::TestDevCameraCvarPatcherProbesValueAtStructOffset32);

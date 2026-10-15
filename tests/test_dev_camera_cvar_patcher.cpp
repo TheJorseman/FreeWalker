@@ -56,6 +56,8 @@ void TestDevCameraCvarPatcherPatchOnceIsIdempotent();
 void TestDevCameraCvarPatcherPatchOnceSkipsWhenValueAlreadyOne();
 void TestDevCameraCvarPatcherPatchOnceDetectsSignatureMismatch();
 void TestDevCameraCvarPatcherCountersAfterSuccessfulPatch();
+void TestDevCameraCvarPatcherDualCvarPathPatchesBoth();
+void TestDevCameraCvarPatcherDualCvarPathIsIdempotent();
 }  // namespace walkercore
 
 #ifdef _WIN32
@@ -120,6 +122,14 @@ std::unique_ptr<DevCameraCvarPatcher> MakePatcher() {
     auto p = std::make_unique<DevCameraCvarPatcher>();
     p->SetEnabled(true);
     // Default name_rva_ is 0x223F6C0; tests override per-call.
+    // Tests run inside a synthetic 4 KiB scratch buffer and have no
+    // real amtrucks.exe to find the secondary `g_debug_camera` cvar
+    // in — point its RVA at a deliberately unmapped address so
+    // PatchOnce's second iteration cleanly fails the SafeRead and
+    // reports a single `skips_value_unreadable`. This pins the
+    // test surface for the original PatchOnce path without making
+    // the new dual-cvar refactor look like a regression.
+    p->SetDebugCameraNameRva(0x7FFE7FFFFFFFULL);
     return p;
 }
 
@@ -272,10 +282,22 @@ void TestDevCameraCvarPatcherCountersAfterSuccessfulPatch() {
     EXPECT_EQ(p->skips_disabled(), 0);
     EXPECT_EQ(p->skips_no_module(), 0);
     EXPECT_EQ(p->skips_signature_mismatch(), 0);
-    EXPECT_EQ(p->skips_value_unreadable(), 0);
+    // g_developer patched, g_debug_camera SAFELY-FAILED (MakePatcher
+    // pins its RVA at an unmapped address so the secondary
+    // PatchOneCvar reports skips_value_unreadable once).
+    EXPECT_EQ(p->skips_value_unreadable(), 1);
     EXPECT_EQ(p->skips_protect_failed(), 0);
     EXPECT_EQ(p->last_result().cvar_name_va, img.name_va);
     EXPECT_EQ(p->last_result().cvar_value_va, img.value_va);
+    // Secondary cvar's outcome is in its own result struct —
+    // the patched field is false (we deliberately re-pointed it
+    // off-image) and the cvar_name_va VA matches the unmapped RVA
+    // so the analyst can tell "the secondary cvar failed, here's
+    // the address I tried to read".
+    EXPECT_FALSE(p->last_debug_camera_result().patched);
+    EXPECT_TRUE(p->last_debug_camera_result().skipped);
+    EXPECT_EQ(p->last_debug_camera_result().cvar_name_va,
+              img.name_va + 0x7FFE7FFFFFFFULL);
 }
 
 // ===========================================================================
@@ -435,6 +457,154 @@ void TestDevCameraCvarPatcherProbesValueAtStructOffset32() {
     EXPECT_TRUE(r.patched);
     EXPECT_EQ(r.cvar_value_va, img.value_va);
     EXPECT_EQ(img.bytes[img.struct_offset + 32], '1');
+}
+
+// ===========================================================================
+// Dual-cvar path (G5.4, Oct 2026 cycle).
+//
+// The patcher is responsible for setting both `g_developer` AND
+// `g_debug_camera` to "1" because the SCS dev free-camera path
+// reads both cvars (TMRealWalk only needed g_developer because
+// they used the dev console directly). Lay a single scratch buffer
+// holding two cvar structs — one for each name — and confirm
+// PatchOnce patches both.
+// ===========================================================================
+struct ScratchDualCvarImage {
+    std::vector<char> bytes;
+    uint64_t g_developer_name_offset;
+    uint64_t g_developer_struct_offset;
+    uint64_t g_developer_name_va;
+    uint64_t g_developer_value_va;
+    uint64_t g_debug_camera_name_offset;
+    uint64_t g_debug_camera_struct_offset;
+    uint64_t g_debug_camera_name_va;
+    uint64_t g_debug_camera_value_va;
+
+    static constexpr size_t kBytes = 8192;
+
+    ScratchDualCvarImage() {
+        bytes.assign(kBytes, 0);
+
+        // g_developer @ offset 0
+        g_developer_name_offset = 0;
+        const char *dev = "g_developer";
+        std::memcpy(&bytes[g_developer_name_offset], dev,
+                    std::strlen(dev) + 1);
+        for (size_t i = 0; i < 5; ++i) {
+            bytes[g_developer_name_offset + std::strlen(dev) + 1 + i] = '\0';
+        }
+        g_developer_struct_offset = 32;
+        g_developer_name_va = reinterpret_cast<uint64_t>(
+            &bytes[g_developer_name_offset]);
+        std::memcpy(&bytes[g_developer_struct_offset],
+                    &g_developer_name_va, sizeof(g_developer_name_va));
+        // Layout variant: value at offset 8 from struct (the simple
+        // form the smallest SCS CVar struct uses).
+        bytes[g_developer_struct_offset + 8] = '0';
+        bytes[g_developer_struct_offset + 9] = '\0';
+        g_developer_value_va = reinterpret_cast<uint64_t>(
+            &bytes[g_developer_struct_offset + 8]);
+
+        // g_debug_camera @ a higher offset so the two scans don't
+        // alias. Lay the second cvar struct at offset 256 from the
+        // second name.
+        g_debug_camera_name_offset = 128;
+        const char *dbg = "g_debug_camera";
+        std::memcpy(&bytes[g_debug_camera_name_offset], dbg,
+                    std::strlen(dbg) + 1);
+        for (size_t i = 0; i < 5; ++i) {
+            bytes[g_debug_camera_name_offset + std::strlen(dbg) + 1 + i] =
+                '\0';
+        }
+        g_debug_camera_struct_offset = 256;
+        g_debug_camera_name_va = reinterpret_cast<uint64_t>(
+            &bytes[g_debug_camera_name_offset]);
+        std::memcpy(&bytes[g_debug_camera_struct_offset],
+                    &g_debug_camera_name_va,
+                    sizeof(g_debug_camera_name_va));
+        bytes[g_debug_camera_struct_offset + 8] = '0';
+        bytes[g_debug_camera_struct_offset + 9] = '\0';
+        g_debug_camera_value_va = reinterpret_cast<uint64_t>(
+            &bytes[g_debug_camera_struct_offset + 8]);
+    }
+};
+
+void TestDevCameraCvarPatcherDualCvarPathPatchesBoth() {
+    ScratchDualCvarImage img;
+    auto p = std::make_unique<DevCameraCvarPatcher>();
+    p->SetEnabled(true);
+    // Both cvars live at the buffer's start, so name_rva_=0 maps
+    // `g_developer` onto img.g_developer_name_va. For
+    // g_debug_camera we set debug_camera_name_rva_ to the offset
+    // from the buffer's start to img.g_debug_camera_name_va.
+    p->SetNameRva(0);
+    p->SetDebugCameraNameRva(
+        img.g_debug_camera_name_va - img.g_developer_name_va);
+    p->SetModuleBaseForTesting(img.g_developer_name_va);
+
+    const DevCameraCvarPatchResult r = p->PatchOnce();
+
+    // g_developer patched.
+    EXPECT_TRUE(r.patched);
+    EXPECT_EQ(r.cvar_name_va, img.g_developer_name_va);
+    EXPECT_EQ(r.cvar_value_va, img.g_developer_value_va);
+    EXPECT_STREQ(r.cvar_value_before, "0");
+    EXPECT_STREQ(r.cvar_value_after, "1");
+    EXPECT_EQ(img.bytes[img.g_developer_struct_offset + 8], '1');
+    EXPECT_EQ(img.bytes[img.g_developer_struct_offset + 9], '\0');
+
+    // g_debug_camera ALSO patched.
+    const DevCameraCvarPatchResult &rd = p->last_debug_camera_result();
+    EXPECT_TRUE(rd.patched);
+    EXPECT_EQ(rd.cvar_name_va, img.g_debug_camera_name_va);
+    EXPECT_EQ(rd.cvar_value_va, img.g_debug_camera_value_va);
+    EXPECT_STREQ(rd.cvar_value_before, "0");
+    EXPECT_STREQ(rd.cvar_value_after, "1");
+    EXPECT_EQ(img.bytes[img.g_debug_camera_struct_offset + 8], '1');
+    EXPECT_EQ(img.bytes[img.g_debug_camera_struct_offset + 9], '\0');
+
+    // Counters: 1 patch per cvar, 0 skips on the primary run.
+    EXPECT_EQ(p->runs(), 1);
+    EXPECT_EQ(p->patches(), 2);
+    EXPECT_EQ(p->skips_already_patched(), 0);
+    EXPECT_EQ(p->skips_signature_mismatch(), 0);
+    EXPECT_EQ(p->skips_value_unreadable(), 0);
+    EXPECT_EQ(p->skips_protect_failed(), 0);
+}
+
+// Idempotency: a second PatchOnce() on the dual-cvar layout must
+// short-circuit and NOT re-write either cvar (each result reports
+// skipped + patched=false, no further memory changes).
+void TestDevCameraCvarPatcherDualCvarPathIsIdempotent() {
+    ScratchDualCvarImage img;
+    auto p = std::make_unique<DevCameraCvarPatcher>();
+    p->SetEnabled(true);
+    p->SetNameRva(0);
+    p->SetDebugCameraNameRva(
+        img.g_debug_camera_name_va - img.g_developer_name_va);
+    p->SetModuleBaseForTesting(img.g_developer_name_va);
+
+    (void)p->PatchOnce();
+    const int runs_after_first = p->runs();
+    const int patches_after_first = p->patches();
+
+    // Reset the scratch value bytes back to '0' so we can prove the
+    // second call does NOT re-write.
+    img.bytes[img.g_developer_struct_offset + 8] = '0';
+    img.bytes[img.g_developer_struct_offset + 9] = '\0';
+    img.bytes[img.g_debug_camera_struct_offset + 8] = '0';
+    img.bytes[img.g_debug_camera_struct_offset + 9] = '\0';
+
+    const DevCameraCvarPatchResult r2 = p->PatchOnce();
+    EXPECT_TRUE(r2.skipped);
+    EXPECT_FALSE(r2.patched);
+    EXPECT_EQ(p->runs(), runs_after_first + 1);
+    // Patches counter is NOT incremented on the idempotent path.
+    EXPECT_EQ(p->patches(), patches_after_first);
+
+    // Buffer values stayed '0' — the patcher did not write.
+    EXPECT_EQ(img.bytes[img.g_developer_struct_offset + 8], '0');
+    EXPECT_EQ(img.bytes[img.g_debug_camera_struct_offset + 8], '0');
 }
 
 }  // namespace walkercore

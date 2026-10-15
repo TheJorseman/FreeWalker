@@ -1,13 +1,12 @@
 // WalkerCore — DevCameraCvarPatcher implementation.
 //
-// Reads `g_developer` from amtrucks.exe's mapped memory and patches
-// it from "0" to "1" when needed. The patch is wrapped in a
-// VirtualProtect / VirtualProtect pair so the page is writable for
-// the duration of the one-byte write, then restored to its original
-// protection.
+// Patches two SCS cvars (`g_developer`, `g_debug_camera`) in
+// amtrucks.exe memory from "0" to "1" so the dev free-camera path
+// becomes reachable from the dev console without the user editing
+// `config.cfg` manually.
 //
 // Why a "0" → "1" patch and not a free-form write:
-//   - The patcher's job is to flip the developer gate. The game
+//   - The patcher's job is to flip the dev-camera gates. The game
 //     accepts any non-zero value but the default cvar value of "0"
 //     means a developer who wants the gate on writes "1" or "2". We
 //     follow the same convention.
@@ -122,27 +121,239 @@ DevCameraCvarPatcher::~DevCameraCvarPatcher() = default;
 
 void DevCameraCvarPatcher::SetEnabled(bool enabled) { enabled_ = enabled; }
 void DevCameraCvarPatcher::SetNameRva(std::uint64_t rva) { name_rva_ = rva; }
+void DevCameraCvarPatcher::SetDebugCameraNameRva(std::uint64_t rva) {
+    debug_camera_name_rva_ = rva;
+}
 void DevCameraCvarPatcher::SetModuleBaseForTesting(std::uint64_t base) {
     module_base_for_testing_ = base;
 }
 
+namespace {
+
+// Inner worker: patch one named cvar in amtrucks.exe memory.
+// `needle` is the cvar name ("g_developer" / "g_debug_camera") and
+// `rva` is its rebased address in ATS 1.61.3.1s.
+//
+// Counts and the result struct passed in are updated by side effect
+// so the public PatchOnce can fold both runs into one final Result.
+// Returns true iff the cvar was patched (or already on) — used by
+// PatchOnce to skip the per-process idempotency check on the
+// secondary cvar.
+bool PatchOneCvar(const char *needle, std::uint64_t rva, std::uint64_t base,
+                  DevCameraCvarPatchResult &r, int &patches_total,
+                  int &skips_already, int &skips_sig_mismatch,
+                  int &skips_value_unreadable, int &skips_protect_failed) {
+    const std::uint64_t name_va = base + rva;
+    r.cvar_name_va = name_va;
+
+    // 1. Verify the literal cvar name at the rebased RVA.
+    char expected[32] = {};
+    const size_t needle_len = std::strlen(needle);
+    if (needle_len + 1 > sizeof(expected)) {
+        r.skipped = true;
+        skips_value_unreadable++;
+        return false;
+    }
+    if (!SafeRead(reinterpret_cast<const void *>(name_va), expected,
+                  needle_len + 1)) {
+        r.skipped = true;
+        skips_value_unreadable++;
+        WALKERCORE_LOG_WARN(
+            "DevCameraCvarPatcher: skipped '%s' (could not read cvar "
+            "name at VA 0x%llX — page not readable, or RVA 0x%llX is no "
+            "longer the cvar location for this build).",
+            needle,
+            static_cast<unsigned long long>(name_va),
+            static_cast<unsigned long long>(rva));
+        return false;
+    }
+    if (std::memcmp(expected, needle, needle_len + 1) != 0) {
+        r.skipped = true;
+        skips_sig_mismatch++;
+        WALKERCORE_LOG_WARN(
+            "DevCameraCvarPatcher: skipped '%s' (signature mismatch at "
+            "VA 0x%llX — expected '%s\\0', got '%.16s\\0'). The cvar "
+            "has moved in this build; re-run "
+            "rea/scripts/tmrealwalk-re/find_g_developer.py to find the "
+            "new RVA and update DevCameraCvarPatcher.",
+            needle,
+            static_cast<unsigned long long>(name_va),
+            needle, expected);
+        return false;
+    }
+
+    // 2. Discover the cvar control struct by scanning the data
+    //    region for pointers that reference the name VA, then
+    //    looking for the value field (one of {+8, +16, +24, +32,
+    //    +40}) holding a 1-byte string of '0' / '1' / '2'.
+    //
+    //    The historical RE pass on ATS 1.61.3.1s (Oct 2026) put
+    //    the value field at +24 for `g_developer` and at +8 for
+    //    `g_debug_camera` (smaller struct, fewer flags). We scan
+    //    +/- 32 KiB around the name VA either way — the wider
+    //    window comfortably covers both layouts and the cost is
+    //    negligible (32K iterations × 8 bytes each vs 8K × 8).
+    constexpr std::uint64_t kScanWindow = 32 * 1024;
+    const std::uint64_t scan_lo =
+        (name_va > kScanWindow) ? (name_va - kScanWindow) : 0;
+    const std::uint64_t scan_hi = name_va + kScanWindow;
+    bool found = false;
+    std::uint64_t value_va = 0;
+
+    for (std::uint64_t addr = scan_lo; addr + 8 <= scan_hi;
+         addr += 8) {
+        std::uint64_t candidate = 0;
+        if (!SafeRead(reinterpret_cast<const void *>(addr), &candidate,
+                      sizeof(candidate))) {
+            continue;
+        }
+        if (candidate != name_va) {
+            continue;
+        }
+        constexpr std::uint64_t kValueOffsets[] = {8, 16, 24, 32, 40};
+        bool found_at_this_addr = false;
+        std::uint64_t value_candidate = 0;
+        char value_buffer[32] = {};
+        for (std::uint64_t off : kValueOffsets) {
+            std::memset(value_buffer, 0, sizeof(value_buffer));
+            value_candidate = addr + off;
+            if (!SafeRead(reinterpret_cast<const void *>(value_candidate),
+                          value_buffer, sizeof(value_buffer))) {
+                continue;
+            }
+            const size_t value_len = strnlen(value_buffer, 8);
+            if (value_len != 1 || value_buffer[1] != '\0') {
+                continue;
+            }
+            if (value_buffer[0] != '0' && value_buffer[0] != '1' &&
+                value_buffer[0] != '2') {
+                continue;
+            }
+            found_at_this_addr = true;
+            break;
+        }
+        if (!found_at_this_addr) {
+            continue;
+        }
+        value_va = value_candidate;
+        std::memcpy(r.cvar_value_before, value_buffer,
+                    sizeof(r.cvar_value_before) - 1);
+        r.cvar_value_before[sizeof(r.cvar_value_before) - 1] = '\0';
+        found = true;
+        break;
+    }
+
+    if (!found) {
+        r.skipped = true;
+        skips_value_unreadable++;
+        WALKERCORE_LOG_WARN(
+            "DevCameraCvarPatcher: skipped '%s' (could not discover the "
+            "value field within +/- %u kB of name VA 0x%llX). The user "
+            "must edit config.cfg manually: add `uset %s \"1\"` to "
+            "Documents\\American Truck Simulator\\config.cfg and "
+            "reload the save.",
+            needle,
+            static_cast<unsigned int>(kScanWindow / 1024),
+            static_cast<unsigned long long>(name_va),
+            needle);
+        return false;
+    }
+
+    r.cvar_value_va = value_va;
+    if (r.cvar_value_before[0] == '1') {
+        // Already enabled. Short-circuit and remember so we don't
+        // pay the scan cost on every subsequent call.
+        skips_already++;
+        r.skipped = true;
+        r.patched = false;
+        WALKERCORE_LOG_INFO(
+            "DevCameraCvarPatcher: '%s' already enabled (value at VA "
+            "0x%llX reads '1'). No write needed.",
+            needle,
+            static_cast<unsigned long long>(value_va));
+        std::memcpy(r.cvar_value_after, r.cvar_value_before,
+                    sizeof(r.cvar_value_after) - 1);
+        r.cvar_value_after[sizeof(r.cvar_value_after) - 1] = '\0';
+        return true;
+    }
+
+    if (r.cvar_value_before[0] != '0') {
+        // '2' (max diagnostic reports) or anything else — leave
+        // it alone but log.
+        r.skipped = true;
+        skips_value_unreadable++;
+        WALKERCORE_LOG_INFO(
+            "DevCameraCvarPatcher: skipped '%s' (cvar value at VA "
+            "0x%llX reads '%c', not '0' — leaving as-is).",
+            needle,
+            static_cast<unsigned long long>(value_va),
+            r.cvar_value_before[0]);
+        return false;
+    }
+
+    // 3. Patch the value buffer from '0' to '1'.
+    if (!PatchByte(reinterpret_cast<const void *>(value_va), '1')) {
+        r.skipped = true;
+        skips_protect_failed++;
+        WALKERCORE_LOG_WARN(
+            "DevCameraCvarPatcher: skipped '%s' (VirtualProtect "
+            "failed for the page containing the cvar value buffer "
+            "at VA 0x%llX). The user must edit config.cfg manually.",
+            needle,
+            static_cast<unsigned long long>(value_va));
+        return false;
+    }
+    patches_total++;
+    r.patched = true;
+    // Capture the new value for the log line.
+    char after[32] = {};
+    SafeRead(reinterpret_cast<const void *>(value_va), after,
+             sizeof(after) - 1);
+    after[sizeof(after) - 1] = '\0';
+    std::memcpy(r.cvar_value_after, after, sizeof(r.cvar_value_after) - 1);
+    r.cvar_value_after[sizeof(r.cvar_value_after) - 1] = '\0';
+    WALKERCORE_LOG_INFO(
+        "DevCameraCvarPatcher: patched '%s' '0' -> '1' at VA 0x%llX "
+        "(cvar name VA 0x%llX).",
+        needle,
+        static_cast<unsigned long long>(value_va),
+        static_cast<unsigned long long>(name_va));
+    return true;
+}
+
+}  // namespace
+
 DevCameraCvarPatchResult DevCameraCvarPatcher::PatchOnce() {
     runs_++;
     DevCameraCvarPatchResult r{};
+    DevCameraCvarPatchResult r_debug{};
     last_result_ = r;
+    last_debug_camera_result_ = r_debug;
+
     if (already_patched_) {
-        // The patch is one-shot per process. Subsequent calls
-        // short-circuit; the F12 dump and the per-run log line both
-        // surface "already_patched" so the analyst can tell the
-        // patcher did its job earlier in the session.
+        // The patch is one-shot per process. Both cvars reached
+        // the "already on" or "patched" state on a prior call —
+        // there is nothing to do, and re-scanning the data window
+        // is wasted work. Both per-cvar Result structs report a
+        // pure skip so the F12 dump surfaces the state without
+        // misleading the analyst.
         r.skipped = true;
         r.patched = false;
         r.cvar_name_va = 0;
         r.cvar_value_va = 0;
         skips_already_patched_++;
         last_result_ = r;
+        // Mirror the same skip into the secondary cvar's Result
+        // struct so the dual-cvar F12 dump does not show stale
+        // info from an earlier successful run.
+        r_debug.skipped = true;
+        r_debug.patched = false;
+        r_debug.cvar_name_va = 0;
+        r_debug.cvar_value_va = 0;
+        last_debug_camera_result_ = r_debug;
         return r;
     }
+
     if (!enabled_) {
         r.skipped = true;
         skips_disabled_++;
@@ -161,232 +372,45 @@ DevCameraCvarPatchResult DevCameraCvarPatcher::PatchOnce() {
         r.skipped = true;
         skips_no_module_++;
         WALKERCORE_LOG_INFO(
-            "DevCameraCvarPatcher: skipped (amtrucks.exe not loaded yet — "
-            "the SCS plugin DllMain may have run before the game module was "
-            "registered. Will retry next tick.)");
+            "DevCameraCvarPatcher: skipped (amtrucks.exe not loaded "
+            "yet — the SCS plugin DllMain may have run before the "
+            "game module was registered. Will retry next tick.)");
         last_result_ = r;
         return r;
     }
 
-    const std::uint64_t name_va = base + name_rva_;
-    r.cvar_name_va = name_va;
-
-    // 1. Verify the literal cvar name at the rebased RVA.
-    char expected[16] = {};
-    const char *needle = "g_developer";
-    const size_t needle_len = std::strlen(needle);
-    if (!SafeRead(reinterpret_cast<const void *>(name_va), expected,
-                  needle_len + 1)) {
-        r.skipped = true;
-        skips_value_unreadable_++;
-        WALKERCORE_LOG_WARN(
-            "DevCameraCvarPatcher: skipped (could not read cvar name at "
-            "VA 0x%llX — page not readable, or RVA 0x%llX is no longer "
-            "the cvar location for this build).",
-            static_cast<unsigned long long>(name_va),
-            static_cast<unsigned long long>(name_rva_));
-        last_result_ = r;
-        return r;
-    }
-    if (std::memcmp(expected, needle, needle_len + 1) != 0) {
-        r.skipped = true;
-        skips_signature_mismatch_++;
-        WALKERCORE_LOG_WARN(
-            "DevCameraCvarPatcher: skipped (signature mismatch at VA "
-            "0x%llX — expected 'g_developer\\0', got '%.12s\\0'). The "
-            "cvar has moved in this build; re-run "
-            "rea/scripts/tmrealwalk-re/find_g_developer.py to find the "
-            "new RVA and update DevCameraCvarPatcher::name_rva_.",
-            static_cast<unsigned long long>(name_va), expected);
-        last_result_ = r;
-        return r;
-    }
-
-    // 2. Discover the cvar control struct. The struct holds the
-    //    cvar value as a separate field, typically within ~256
-    //    bytes of the name pointer (the SCS CVar struct fits in
-    //    one or two cache lines). We scan amtrucks.exe's .rdata
-    //    region for pointers that reference the name VA, then look
-    //    for the value buffer (either a small allocation holding
-    //    "0\0" or "1\0" near the pointer, or a direct value field
-    //    in the struct).
-    //
-    //    Without knowing the SCS struct layout we use a robust
-    //    heuristic: walk amtrucks.exe's data region, look for any
-    //    8-byte value that matches name_va; the slot immediately
-    //    after that pointer (struct offset 8) is typically the
-    //    value field. We then read up to 32 bytes from that field
-    //    and check for "0\0" / "1\0" / "2\0".
-    //
-    //    This scan is bounded by a sensible window: we look in the
-    //    +/- 32 KiB window around the cvar name. RE of ATS 1.61.3.1s
-    //    (Oct 2026) put the cvar hash-bucket layout beyond the
-    //    8 KiB window we used historically — the value field for
-    //    `g_developer` lives up to ~24 KiB away from the name VA
-    //    because the SCS CVar struct contains a debug-doc string
-    //    pointer alongside the name pointer, and the value field
-    //    sits two struct offsets further. The 32 KiB window
-    //    comfortably covers the observed drift and adds ~3 KiB
-    //    margin. Cost: 4x more iterations; each reads 8 bytes for
-    //    the candidate pointer and only pays the 32-byte value
-    //    read on the rare address where the pointer matches.
-    constexpr std::uint64_t kScanWindow = 32 * 1024;
-    const std::uint64_t scan_lo =
-        (name_va > kScanWindow) ? (name_va - kScanWindow) : 0;
-    const std::uint64_t scan_hi = name_va + kScanWindow;
-    bool found = false;
-    std::uint64_t value_va = 0;
-
-    // We don't have a robust size for the .data / .rdata regions;
-    // the scan reads pages and probes them via SafeRead. To keep
-    // the search bounded, we walk 8 bytes at a time (a pointer
-    // miss costs 7 reads before we move on).
-    for (std::uint64_t addr = scan_lo; addr + 8 <= scan_hi;
-         addr += 8) {
-        std::uint64_t candidate = 0;
-        if (!SafeRead(reinterpret_cast<const void *>(addr), &candidate,
-                      sizeof(candidate))) {
-            continue;
-        }
-        if (candidate != name_va) {
-            continue;
-        }
-        // The cvar struct has the name pointer at offset 0, but the
-        // value field can sit at any of several struct offsets:
-        // 8, 16, 24, 32, 40. The historical RE pass on ATS
-        // 1.61.3.1s (Oct 2026) found the SCS CVar struct uses:
-        //   offset 0:  pointer to name (the link we just matched)
-        //   offset 8:  pointer to next/prev in the hash chain
-        //   offset 16: cvar type tag (uint32 + 4 padding)
-        //   offset 24: value field (string "0" / "1" / "2" / ...)
-        //   offset 32: min/max bounds (uint32 + padding)
-        //   offset 40: docstring pointer
-        // The previous probe only checked offset 8, missing the
-        // real value field at offset 24. Each offset costs one
-        // 32-byte SafeRead and one strnlen+prefix check — cheap,
-        // and the alternative is wrong-by-omission.
-        constexpr std::uint64_t kValueOffsets[] = {8, 16, 24, 32, 40};
-        bool found_at_this_addr = false;
-        std::uint64_t value_candidate = 0;
-        char value_buffer[32] = {};
-        for (std::uint64_t off : kValueOffsets) {
-            std::memset(value_buffer, 0, sizeof(value_buffer));
-            value_candidate = addr + off;
-            if (!SafeRead(reinterpret_cast<const void *>(value_candidate),
-                          value_buffer, sizeof(value_buffer))) {
-                continue;
-            }
-            // We expect a small string ("0", "1", or "2") followed
-            // by a NUL byte within the first 8 bytes. Anything
-            // else suggests the field is not a value field (maybe
-            // a chained pointer or a different cvar's name pointer
-            // we mis-read).
-            const size_t value_len = strnlen(value_buffer, 8);
-            if (value_len != 1 || value_buffer[1] != '\0') {
-                continue;
-            }
-            if (value_buffer[0] != '0' && value_buffer[0] != '1' &&
-                value_buffer[0] != '2') {
-                continue;
-            }
-            found_at_this_addr = true;
-            break;
-        }
-        if (!found_at_this_addr) {
-            continue;
-        }
-        // Found a cvar struct whose value field reads '0' / '1' / '2'.
-        value_va = value_candidate;
-        std::memcpy(r.cvar_value_before, value_buffer,
-                    sizeof(r.cvar_value_before) - 1);
-        r.cvar_value_before[sizeof(r.cvar_value_before) - 1] = '\0';
-        found = true;
-        break;
-    }
-
-    if (!found) {
-        r.skipped = true;
-        skips_value_unreadable_++;
-        WALKERCORE_LOG_WARN(
-            "DevCameraCvarPatcher: skipped (could not discover the "
-            "value field for the 'g_developer' cvar within +/- %u kB of "
-            "name VA 0x%llX). The cvar struct layout is non-standard "
-            "for this build; the user must edit config.cfg manually: "
-            "add `uset g_developer \"1\"` to Documents\\American Truck "
-            "Simulator\\config.cfg and reload the save.",
-            static_cast<unsigned int>(kScanWindow / 1024),
-            static_cast<unsigned long long>(name_va));
-        last_result_ = r;
-        return r;
-    }
-
-    r.cvar_value_va = value_va;
-    if (r.cvar_value_before[0] == '1') {
-        // Already enabled. Short-circuit and remember so we don't
-        // pay the scan cost on every subsequent call.
-        already_patched_ = true;
-        r.skipped = true;
-        r.patched = false;
-        skips_already_patched_++;
-        WALKERCORE_LOG_INFO(
-            "DevCameraCvarPatcher: already enabled (cvar value at VA "
-            "0x%llX reads '1'). The patcher is a no-op for the rest of "
-            "this process.",
-            static_cast<unsigned long long>(value_va));
-        std::memcpy(r.cvar_value_after, r.cvar_value_before,
-                    sizeof(r.cvar_value_after) - 1);
-        r.cvar_value_after[sizeof(r.cvar_value_after) - 1] = '\0';
-        last_result_ = r;
-        return r;
-    }
-
-    if (r.cvar_value_before[0] != '0') {
-        // '2' (max diagnostic reports) or anything else — leave it
-        // alone but log.
-        r.skipped = true;
-        skips_value_unreadable_++;
-        WALKERCORE_LOG_INFO(
-            "DevCameraCvarPatcher: skipped (cvar value at VA 0x%llX "
-            "reads '%c', not '0' — leaving as-is). If you want the "
-            "patcher to overwrite other values, edit config.cfg "
-            "directly.",
-            static_cast<unsigned long long>(value_va),
-            r.cvar_value_before[0]);
-        last_result_ = r;
-        return r;
-    }
-
-    // 3. Patch the value buffer from '0' to '1'.
-    if (!PatchByte(reinterpret_cast<const void *>(value_va), '1')) {
-        r.skipped = true;
-        skips_protect_failed_++;
-        WALKERCORE_LOG_WARN(
-            "DevCameraCvarPatcher: skipped (VirtualProtect failed for "
-            "the page containing the cvar value buffer at VA 0x%llX). "
-            "The user must edit config.cfg manually.",
-            static_cast<unsigned long long>(value_va));
-        last_result_ = r;
-        return r;
-    }
-    already_patched_ = true;
-    r.patched = true;
-    patches_++;
-    // Capture the new value for the log line.
-    char after[32] = {};
-    SafeRead(reinterpret_cast<const void *>(value_va), after,
-             sizeof(after) - 1);
-    after[sizeof(after) - 1] = '\0';
-    std::memcpy(r.cvar_value_after, after, sizeof(r.cvar_value_after) - 1);
-    r.cvar_value_after[sizeof(r.cvar_value_after) - 1] = '\0';
-    WALKERCORE_LOG_INFO(
-        "DevCameraCvarPatcher: patched g_developer '0' -> '1' at VA "
-        "0x%llX (cvar name VA 0x%llX). Dev-camera paths (Numpad-0 free "
-        "camera toggle via free_camera_u concommand, the dev UI button "
-        "o_im_freecam, future in-process camera manager hookups) are "
-        "now usable without restarting the save.",
-        static_cast<unsigned long long>(value_va),
-        static_cast<unsigned long long>(name_va));
+    // 1. Patch g_developer (master dev console switch).
+    //    Whichever way this resolves (patched, already-on,
+    //    skipped-unreadable, or signature-mismatch) we treat the
+    //    process as having "tried" — the per-run scan cost is the
+    //    expensive part of PatchOnce, and we never need to repeat
+    //    it within the same process even if `g_debug_camera` later
+    //    fails to resolve. The early-return at the top of this
+    //    method guards any subsequent calls.
+    (void)PatchOneCvar(
+        "g_developer", name_rva_, base, r, patches_,
+        skips_already_patched_, skips_signature_mismatch_,
+        skips_value_unreadable_, skips_protect_failed_);
     last_result_ = r;
+    already_patched_ = true;
+
+    // 2. Patch g_debug_camera (the explicit dev free-camera unlock).
+    //    The shim's `~`-toggleable dev free roam view requires this
+    //    cvar too. If the cvar has moved or the page is unmapped, the
+    //    helper logs a clean diagnostic and we continue — `g_developer`
+    //    alone is enough for the dev console's `free_camera` command.
+    //    The already_patched_ flag was set above so subsequent
+    //    PatchOnce calls hit the early-return and never re-scan the
+    //    secondary cvar either.
+    (void)PatchOneCvar(
+        "g_debug_camera", debug_camera_name_rva_, base, r_debug,
+        patches_, skips_already_patched_, skips_signature_mismatch_,
+        skips_value_unreadable_, skips_protect_failed_);
+    last_debug_camera_result_ = r_debug;
+
+    // Return the g_developer result for ABI stability (all existing
+    // tests and the F12 dump read this field). The secondary cvar's
+    // result is exposed through last_debug_camera_result().
     return r;
 }
 

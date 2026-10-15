@@ -89,9 +89,12 @@ public:
     void BindGameHwnd(HWND hwnd);
     HWND game_hwnd() const { return hwnd_; }
 
-    // Keystroke sequence tuning. Defaults: 0x60 = Numpad-0 (SCS free
-    // camera toggle), 0 = no separate "exit cabin" press. The values
-    // are Win32 VK_* codes.
+    // Keystroke sequence tuning. Default toggle VK: 0x30 = top-row
+    // `0` (the SCS dev free-camera shortcut in amtrucks.exe
+    // 1.61.3.1s when `g_debug_camera = 1`, patched by
+    // dev_cvar_patcher). Exit-press default: 0 = no separate
+    // "exit cabin" press. Both are Win32 VK_* codes and can be
+    // re-targeted via INI.
     void SetToggleVk(unsigned int vk);
     void SetExitPressVk(unsigned int vk);
     unsigned int toggle_vk() const { return toggle_vk_; }
@@ -107,15 +110,15 @@ public:
     bool isSupported() const { return supported_; }
     // M2.7 follow-up: numeric value of `g_developer` parsed from
     // config.cfg (-1 = unprobed, 0 = off, 1 = dev shortcuts enabled,
-    // 2 = dev cvar mode). Used by the auto-pin logic to decide whether
-    // the SCS F11 intercept path is active (only at value 1). When
-    // g_developer != 1 the SCS engine does NOT intercept F11 before
-    // the action registry, so a F11 dispatch from the shim would be
-    // shadowed by the controls.sii camdbg binding. In that case the
-    // auto-pin must re-target a non-bound VK to avoid wasting the
-    // press. When g_developer == 1, SCS intercepts F11 first and the
-    // auto-pin MUST stay at F11 (re-pinning to F8 does NOT activate
-    // the dev free cam — only F11 does).
+    // 2 = dev cvar mode). Exposed for the auto-pin / walking-entry
+    // log line so the analyst sees the parsed gate state inline
+    // with the dispatch decision. M2.7d (Oct 2026): the
+    // `g_developer_value_ == 1` gate that used to skip the auto-pin
+    // is GONE — F4.0d live-verified that the SCS engine does NOT
+    // intercept F11 before the action registry, so the previous
+    // 'skip the auto-pin when on' rationale was incorrect for
+    // ATS 1.61.3.1s. The accessor is still useful for diagnostics
+    // but the runtime no longer branches on it.
     int g_developer_value() const { return g_developer_value_; }
 
     // Bind the dev-camera cvar patcher's last result so the shim
@@ -377,29 +380,45 @@ private:
     int walks_entered_ = 0;
     int toggles_dispatched_ = 0;
     int last_dispatch_ms_ = 0;
-    unsigned int toggle_vk_ = 0x7A;     // VK_F11 — SCS dev free camera toggle in
-                                         // amtrucks.exe 1.61.3.1s (verified live
-                                         // Oct 2026: F11 with g_developer=1 AND
-                                         // g_console=1 opens the dev free-roam
-                                         // view with position overlay). The
-                                         // dispatch is intercepted by the game
-                                         // BEFORE the action registry (it does
-                                         // not require a binding in controls.sii)
-                                         // and toggles the dev free camera when
-                                         // `g_developer=1` AND `g_console=1` are
-                                         // both set in config.cfg. Earlier
-                                         // builds used 0x60 (VK_NUMPAD0,
-                                         // pre-M2.6) and 0x30 (VK_0 top-row
-                                         // zero, M2.6) — neither actually
-                                         // toggles the dev free camera in this
-                                         // build (RE-confirmed: zero hits for
-                                         // `dev_camera_toggle` / `camdbg` /
-                                         // `walk_mode` / `free_camera` action
-                                         // names in the binary; the top-row `0`
-                                         // shortcut was a static-analysis guess
-                                         // that turned out wrong on user
-                                         // live-verify). Note: F11 IS the SCS
-                                         // dev free-camera toggle in this build
+    unsigned int toggle_vk_ = 0x30;     // VK_0 (top-row zero) — the SCS dev
+                                         // free-camera toggle in amtrucks.exe
+                                         // 1.61.3.1s when `g_debug_camera = 1`.
+                                         // Per Sparked Host help docs and
+                                         // YouTube tutorials on the SCS dev
+                                         // console: "Press 0 to enter into the
+                                         // debug camera and control the camera
+                                         // using NUM keys." The action requires
+                                         // `g_debug_camera=1` (the cvar that
+                                         // unlocks the debug camera path) AND
+                                         // `g_developer=1` (the master dev
+                                         // switch). WalkerCore's dev_cvar_patcher
+                                         // patches both cvars to "1" in memory
+                                         // on the first scs_telemetry_init call
+                                         // so the user does not have to edit
+                                         // config.cfg manually.
+                                         //
+                                         // History (Oct 2026 cycle):
+                                         //   * F11 (0x7A) — previous default,
+                                         //     removed: in this ATS build the
+                                         //     SCS engine does NOT intercept F11
+                                         //     before the action registry, so
+                                         //     pressing F11 with
+                                         //     `mix camdbg \`keyboard.f11?0\``
+                                         //     bound cycled interior cams
+                                         //     ("cam 0") instead of opening the
+                                         //     dev free camera.
+                                         //   * 0x60 (VK_NUMPAD0) — pre-M2.6
+                                         //     default, removed: SHAREM
+                                         //     did not work either.
+                                         //   * 0x30 (top-row `0`) — the
+                                         //     actual SCS dev free-camera toggle
+                                         //     in 1.61.3.1s (verified via
+                                         //     external docs + RE-corrected from
+                                         //     earlier M2.6 false premise).
+                                         //
+                                         // The user's controls.sii does not bind
+                                         // `keyboard.0` to any action, so
+                                         // dispatching VK_0 has no shadow risk.
                                          // even though the user's controls.sii
                                          // currently binds `keyboard.f11` to
                                          // the `camdbg` action — the SCS dev
@@ -422,7 +441,9 @@ private:
     // literal). When true, AutoDetectToggleVkFromControlsSii skips the
     // controls.sii probe and the INI value wins. When false, the shim
     // auto-detects from controls.sii if a binding is found and falls
-    // back to the hard-coded default 0x7A (VK_F11) otherwise.
+    // back to the hard-coded default 0x30 (top-row `0`, the actual
+    // SCS dev free-camera shortcut in 1.61.3.1s when `g_debug_camera
+    // = 1`) otherwise.
     bool ini_overrides_toggle_vk_ = false;
     // M2.5 follow-up: did the INI explicitly set
     // `game_free_camera_shim = ...`? Set by PluginEntry before

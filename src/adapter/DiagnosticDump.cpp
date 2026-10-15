@@ -1414,6 +1414,7 @@ walker_dump_dev_camera_cvar_patcher(void) {
     }
     const DevCameraCvarPatcher *p = g_dev_cvar_patcher;
     const DevCameraCvarPatchResult &r = p->last_result();
+    const DevCameraCvarPatchResult &rd = p->last_debug_camera_result();
     WALKERCORE_LOG_INFO("enabled             : %s",
                         p->isEnabled() ? "true" : "false");
     WALKERCORE_LOG_INFO("runs                : %d", p->runs());
@@ -1424,19 +1425,34 @@ walker_dump_dev_camera_cvar_patcher(void) {
     WALKERCORE_LOG_INFO("skips_sig_mismatch  : %d", p->skips_signature_mismatch());
     WALKERCORE_LOG_INFO("skips_value_unread  : %d", p->skips_value_unreadable());
     WALKERCORE_LOG_INFO("skips_protect_fail  : %d", p->skips_protect_failed());
+    WALKERCORE_LOG_INFO("[g_developer]");
     WALKERCORE_LOG_INFO(
-        "cvar name VA        : 0x%llX (RVA 0x%llX)",
+        "  cvar name VA       : 0x%llX (RVA 0x%llX)",
         static_cast<unsigned long long>(r.cvar_name_va),
         static_cast<unsigned long long>(p->name_rva()));
     WALKERCORE_LOG_INFO(
-        "cvar value VA       : 0x%llX",
+        "  cvar value VA      : 0x%llX",
         static_cast<unsigned long long>(r.cvar_value_va));
-    WALKERCORE_LOG_INFO("cvar value before   : '%.24s'", r.cvar_value_before);
-    WALKERCORE_LOG_INFO("cvar value after    : '%.24s'", r.cvar_value_after);
+    WALKERCORE_LOG_INFO("  value before       : '%.24s'", r.cvar_value_before);
+    WALKERCORE_LOG_INFO("  value after        : '%.24s'", r.cvar_value_after);
     WALKERCORE_LOG_INFO(
-        "last outcome        : %s%s",
+        "  last outcome       : %s%s",
         r.patched ? "patched" : (r.skipped ? "skipped" : "no-op"),
         r.skipped ? " (see counters above)" : "");
+    WALKERCORE_LOG_INFO("[g_debug_camera]");
+    WALKERCORE_LOG_INFO(
+        "  cvar name VA       : 0x%llX (RVA 0x%llX)",
+        static_cast<unsigned long long>(rd.cvar_name_va),
+        static_cast<unsigned long long>(p->debug_camera_name_rva()));
+    WALKERCORE_LOG_INFO(
+        "  cvar value VA      : 0x%llX",
+        static_cast<unsigned long long>(rd.cvar_value_va));
+    WALKERCORE_LOG_INFO("  value before       : '%.24s'", rd.cvar_value_before);
+    WALKERCORE_LOG_INFO("  value after        : '%.24s'", rd.cvar_value_after);
+    WALKERCORE_LOG_INFO(
+        "  last outcome       : %s%s",
+        rd.patched ? "patched" : (rd.skipped ? "skipped" : "no-op"),
+        rd.skipped ? " (see counters above)" : "");
     WALKERCORE_LOG_INFO("--- end dev-camera cvar patcher ---");
 }
 

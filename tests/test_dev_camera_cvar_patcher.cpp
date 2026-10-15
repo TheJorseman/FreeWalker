@@ -607,4 +607,174 @@ void TestDevCameraCvarPatcherDualCvarPathIsIdempotent() {
     EXPECT_EQ(img.bytes[img.g_debug_camera_struct_offset + 8], '0');
 }
 
+// ===========================================================================
+// SCS CVar struct layout variant B (G5.9, Oct 2026 cycle, live
+// regression): indirect pointer to a heap-allocated 1-byte value
+// buffer.
+//
+// The pre-M7.2 patcher's heuristic assumed the value field lived
+// INLINE at one of offsets {8, 16, 24, 32, 40} from the matched
+// pointer. The live RE pass on ATS 1.61.3.1s's memory image after
+// deploying G5.4 revealed the real SCS cvar_t layout:
+//   offset 0:  pointer to name (matched)
+//   offset 8:  pointer to value buffer (INDIRECT)
+//   offset 16: type tag / flags (no value here)
+//   offset 24: ... (no inline value)
+//
+// The value buffer is heap-allocated at a totally different address
+// (often in the program's .bss/.data far from the cvar registry).
+// The patcher's probe now dereferences the qword at offset 8 (and
+// 16/24/32/40) and reads the 1-byte '0'/'1'/'2' from the pointed-to
+// buffer. The actual value field is then patched there.
+//
+// `g_developer` and `g_debug_camera` both use Layout B in the
+// running game. These tests pin the new code path.
+// ===========================================================================
+struct ScratchCvarImageIndirectPointerValue {
+    std::vector<char> bytes;
+    uint64_t name_offset;
+    uint64_t struct_offset;
+    uint64_t value_buffer_offset;
+    uint64_t name_va;
+    uint64_t value_va;
+
+    static constexpr size_t kBytes = 4096;
+
+    ScratchCvarImageIndirectPointerValue() {
+        bytes.assign(kBytes, 0);
+        name_offset = 16;
+        const char *name = "g_developer";
+        std::memcpy(&bytes[name_offset], name, std::strlen(name) + 1);
+        for (size_t i = 0; i < 5; ++i) {
+            bytes[name_offset + std::strlen(name) + 1 + i] = '\0';
+        }
+        // Struct at offset 48: pointer-to-name at +0, value ptr at +8.
+        struct_offset = 48;
+        name_va = reinterpret_cast<uint64_t>(&bytes[name_offset]);
+        std::memcpy(&bytes[struct_offset], &name_va, sizeof(name_va));
+        // Value buffer sits 256 bytes later (simulating a
+        // heap-allocated buffer far from the struct).
+        value_buffer_offset = 256;
+        bytes[value_buffer_offset] = '0';
+        bytes[value_buffer_offset + 1] = '\0';
+        uint64_t value_ptr =
+            reinterpret_cast<uint64_t>(&bytes[value_buffer_offset]);
+        std::memcpy(&bytes[struct_offset + 8], &value_ptr, sizeof(value_ptr));
+        value_va = reinterpret_cast<uint64_t>(&bytes[value_buffer_offset]);
+    }
+};
+
+void TestDevCameraCvarPatcherIndirectPointerValueLayout() {
+    ScratchCvarImageIndirectPointerValue img;
+    auto p = MakePatcher();
+    p->SetNameRva(0);
+    p->SetModuleBaseForTesting(img.name_va);
+    const DevCameraCvarPatchResult r = p->PatchOnce();
+    EXPECT_TRUE(r.patched);
+    EXPECT_FALSE(r.skipped);
+    EXPECT_EQ(r.cvar_name_va, img.name_va);
+    // Critical: r.cvar_value_va must point at the heap-allocated
+    // value buffer (NOT at struct+8). This is what makes the patch
+    // work in the live game.
+    EXPECT_EQ(r.cvar_value_va, img.value_va);
+    EXPECT_STREQ(r.cvar_value_before, "0");
+    EXPECT_STREQ(r.cvar_value_after, "1");
+    EXPECT_EQ(p->patches(), 1);
+    EXPECT_EQ(img.bytes[img.value_buffer_offset], '1');
+    EXPECT_EQ(img.bytes[img.value_buffer_offset + 1], '\0');
+}
+
+void TestDevCameraCvarPatcherIndirectPointerPicksBufferOverStruct() {
+    // Same Layout B struct but pre-write a pointer-resembling
+    // value into the qword at struct+8 whose low byte looks like
+    // '0'/'1'/'2'. The patcher should NOT be fooled into reading
+    // the *bytes* of the pointer as an inline value char — those
+    // 8 bytes are a 64-bit pointer, not a 1-byte string. The
+    // pointer dereference path (Layout B) is what finds the real
+    // value buffer.
+    ScratchCvarImageIndirectPointerValue img;
+    // Verify: before patching, the value buffer at offset 256 is '0'.
+    EXPECT_EQ(img.bytes[img.value_buffer_offset], '0');
+    auto p = MakePatcher();
+    p->SetNameRva(0);
+    p->SetModuleBaseForTesting(img.name_va);
+    const DevCameraCvarPatchResult r = p->PatchOnce();
+    EXPECT_TRUE(r.patched);
+    EXPECT_FALSE(r.skipped);
+    // Patched at the heap-allocated buffer (Layout B), confirmed
+    // by r.cvar_value_va matching img.value_va — NOT struct+8.
+    EXPECT_EQ(r.cvar_value_va, img.value_va);
+    EXPECT_NE(r.cvar_value_va,
+              static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
+                  &img.bytes[img.struct_offset + 8])));
+    EXPECT_EQ(img.bytes[img.value_buffer_offset], '1');
+}
+
+// Dual-cvar with both cvars using Layout B (the actual SCS cvar_t
+// layout for ATS 1.61.3.1s).
+void TestDevCameraCvarPatcherDualCvarIndirectPointerLayout() {
+    std::vector<char> bytes(8192, 0);
+    uint64_t dev_name_off = 0;
+    uint64_t dev_struct_off = 32;
+    uint64_t dev_val_off = 256;  // heap-like far buffer
+    uint64_t dbg_name_off = 128;
+    uint64_t dbg_struct_off = 384;
+    uint64_t dbg_val_off = 512;
+
+    const char *dev = "g_developer";
+    std::memcpy(&bytes[dev_name_off], dev, std::strlen(dev) + 1);
+    for (size_t i = 0; i < 5; ++i) {
+        bytes[dev_name_off + std::strlen(dev) + 1 + i] = '\0';
+    }
+    uint64_t dev_name_va =
+        reinterpret_cast<uint64_t>(&bytes[dev_name_off]);
+    std::memcpy(&bytes[dev_struct_off], &dev_name_va, sizeof(dev_name_va));
+    bytes[dev_val_off] = '0';
+    bytes[dev_val_off + 1] = '\0';
+    uint64_t dev_val_ptr =
+        reinterpret_cast<uint64_t>(&bytes[dev_val_off]);
+    std::memcpy(&bytes[dev_struct_off + 8], &dev_val_ptr,
+                sizeof(dev_val_ptr));
+    uint64_t dev_val_va =
+        reinterpret_cast<uint64_t>(&bytes[dev_val_off]);
+
+    const char *dbg = "g_debug_camera";
+    std::memcpy(&bytes[dbg_name_off], dbg, std::strlen(dbg) + 1);
+    for (size_t i = 0; i < 5; ++i) {
+        bytes[dbg_name_off + std::strlen(dbg) + 1 + i] = '\0';
+    }
+    uint64_t dbg_name_va =
+        reinterpret_cast<uint64_t>(&bytes[dbg_name_off]);
+    std::memcpy(&bytes[dbg_struct_off], &dbg_name_va, sizeof(dbg_name_va));
+    bytes[dbg_val_off] = '0';
+    bytes[dbg_val_off + 1] = '\0';
+    uint64_t dbg_val_ptr =
+        reinterpret_cast<uint64_t>(&bytes[dbg_val_off]);
+    std::memcpy(&bytes[dbg_struct_off + 8], &dbg_val_ptr,
+                sizeof(dbg_val_ptr));
+    uint64_t dbg_val_va =
+        reinterpret_cast<uint64_t>(&bytes[dbg_val_off]);
+
+    auto p = std::make_unique<DevCameraCvarPatcher>();
+    p->SetEnabled(true);
+    p->SetNameRva(0);
+    p->SetDebugCameraNameRva(dbg_name_va - dev_name_va);
+    p->SetModuleBaseForTesting(dev_name_va);
+
+    const DevCameraCvarPatchResult r = p->PatchOnce();
+    EXPECT_TRUE(r.patched);
+    EXPECT_EQ(r.cvar_name_va, dev_name_va);
+    EXPECT_EQ(r.cvar_value_va, dev_val_va);
+    EXPECT_EQ(bytes[dev_val_off], '1');
+
+    const DevCameraCvarPatchResult &rd = p->last_debug_camera_result();
+    EXPECT_TRUE(rd.patched);
+    EXPECT_EQ(rd.cvar_name_va, dbg_name_va);
+    EXPECT_EQ(rd.cvar_value_va, dbg_val_va);
+    EXPECT_EQ(bytes[dbg_val_off], '1');
+
+    EXPECT_EQ(p->patches(), 2);
+    EXPECT_EQ(p->skips_value_unreadable(), 0);
+}
+
 }  // namespace walkercore

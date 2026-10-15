@@ -184,15 +184,29 @@ bool PatchOneCvar(const char *needle, std::uint64_t rva, std::uint64_t base,
 
     // 2. Discover the cvar control struct by scanning the data
     //    region for pointers that reference the name VA, then
-    //    looking for the value field (one of {+8, +16, +24, +32,
-    //    +40}) holding a 1-byte string of '0' / '1' / '2'.
+    //    looking for the value field at one of {+8, +16, +24, +32,
+    //    +40}. Two layouts are accepted at each offset:
     //
-    //    The historical RE pass on ATS 1.61.3.1s (Oct 2026) put
-    //    the value field at +24 for `g_developer` and at +8 for
-    //    `g_debug_camera` (smaller struct, fewer flags). We scan
-    //    +/- 32 KiB around the name VA either way — the wider
+    //    Layout A: an INLINE 1-byte buffer holding '0' / '1' / '2'
+    //    followed by '\0'. The original RE pass on ATS 1.61.3.1s
+    //    (Oct 2026) matched this for `g_developer` at +24 and
+    //    `g_debug_camera` at +8 — the so-called "small cvar"
+    //    struct.
+    //
+    //    Layout B: an INDIRECT pointer to a 1-byte buffer elsewhere
+    //    on the heap, holding '0' / '1' / '2' '\0'. The live
+    //    patch (Oct 2026) revealed the actual SCS cvar_t struct on
+    //    1.61.3.1s uses this layout — `+8` holds a `char* value_`
+    //    pointing at a separately heap-allocated buffer. Without
+    //    handling this case, the old heuristic reports "could not
+    //    discover the value field" and the cvar stays at its
+    //    config-driven default ('0'), leaving the dev free-camera
+    //    toggle a no-op.
+    //
+    //    We scan +/- 32 KiB around the name VA and try both
+    //    layouts at each offset before moving on. The wider
     //    window comfortably covers both layouts and the cost is
-    //    negligible (32K iterations × 8 bytes each vs 8K × 8).
+    //    negligible (32K iterations × 8 bytes each).
     constexpr std::uint64_t kScanWindow = 32 * 1024;
     const std::uint64_t scan_lo =
         (name_va > kScanWindow) ? (name_va - kScanWindow) : 0;
@@ -217,20 +231,50 @@ bool PatchOneCvar(const char *needle, std::uint64_t rva, std::uint64_t base,
         for (std::uint64_t off : kValueOffsets) {
             std::memset(value_buffer, 0, sizeof(value_buffer));
             value_candidate = addr + off;
+            // Layout A: inline 1-byte value buffer.
+            if (SafeRead(reinterpret_cast<const void *>(value_candidate),
+                         value_buffer, sizeof(value_buffer))) {
+                const size_t value_len = strnlen(value_buffer, 8);
+                if (value_len == 1 && value_buffer[1] == '\0' &&
+                    (value_buffer[0] == '0' || value_buffer[0] == '1' ||
+                     value_buffer[0] == '2')) {
+                    found_at_this_addr = true;
+                    break;
+                }
+            }
+            // Layout B: indirect pointer to a heap-allocated
+            // 1-byte value buffer.
+            std::uint64_t value_ptr = 0;
             if (!SafeRead(reinterpret_cast<const void *>(value_candidate),
+                          &value_ptr, sizeof(value_ptr))) {
+                continue;
+            }
+            // Reject obviously-bad pointer values before deref:
+            //   - must be non-zero
+            //   - must look like a user-mode VA (high 16 bits
+            //     unused on x64 in user space)
+            //   - must not be a small integer (< 64 KiB is
+            //     reserved / guard / null-page territory)
+            if (value_ptr < 0x10000ULL ||
+                (value_ptr & 0xFFFF000000000000ULL) != 0) {
+                continue;
+            }
+            std::memset(value_buffer, 0, sizeof(value_buffer));
+            if (!SafeRead(reinterpret_cast<const void *>(value_ptr),
                           value_buffer, sizeof(value_buffer))) {
                 continue;
             }
             const size_t value_len = strnlen(value_buffer, 8);
-            if (value_len != 1 || value_buffer[1] != '\0') {
-                continue;
+            if (value_len == 1 && value_buffer[1] == '\0' &&
+                (value_buffer[0] == '0' || value_buffer[0] == '1' ||
+                 value_buffer[0] == '2')) {
+                // Found indirect value. Update value_candidate
+                // to the actual buffer address; PatchByte at the
+                // bottom of this function then writes there.
+                value_candidate = value_ptr;
+                found_at_this_addr = true;
+                break;
             }
-            if (value_buffer[0] != '0' && value_buffer[0] != '1' &&
-                value_buffer[0] != '2') {
-                continue;
-            }
-            found_at_this_addr = true;
-            break;
         }
         if (!found_at_this_addr) {
             continue;

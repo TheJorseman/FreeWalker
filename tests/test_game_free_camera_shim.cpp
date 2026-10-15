@@ -267,13 +267,16 @@ void TestGameFreeCameraShimRebindOnEntryCatchesLateWindow() {
     EXPECT_EQ(s->last_postmessage_target_diag(), 0x12345678u);
 }
 
-// G5.19: when the via-console dispatch path is enabled,
+// G5.20: when the via-console dispatch path is enabled,
 // TriggerToggle() routes through SynthConsoleCommand ("free_camera")
 // instead of SynthKey(VK). The shim records `last_dispatch_path() ==
-// 2` (text-stream) and the helper counts every Walking entry as one
-// console-command injection via console_cmds_dispatched(). The HWND
-// recipient diagnostic stays 0 because there is no single HWND for a
-// typed text stream — each char lands wherever the keyboard focus is.
+// 2` (PostMessage WM_CHAR to dev console Edit, the G5.20 PRIMARY
+// path) and the helper counts every Walking entry as one
+// console-command injection via console_cmds_dispatched(). The test
+// build's WALKERCORE_GAME_FREE_CAMERA_SHIM_DISABLED stub always
+// emits path=2 (it cannot probe the real Windows desktop); the
+// production DLL falls back to path=3 (SendInput VK codes per char)
+// when the Edit HWND is not found within 1.5 s.
 void TestGameFreeCameraShimDispatchViaConsoleRecordsTextStreamPath() {
     auto s = MakeShim();
     s->SetEnabled(true);
@@ -283,21 +286,22 @@ void TestGameFreeCameraShimDispatchViaConsoleRecordsTextStreamPath() {
     // confirm the path counter still flips regardless.
     s->BindGameHwnd(reinterpret_cast<HWND>(0xCAFEBABEu));
     s->OnEnterWalking();
-    EXPECT_EQ(s->last_dispatch_path(), 2);  // 2 = SendInput text-stream
+    EXPECT_EQ(s->last_dispatch_path(), 2);  // 2 = PostMessage WM_CHAR
     EXPECT_EQ(s->console_cmds_dispatched(), 1);
-    // HWND recipient is 0 because the text stream has no single
-    // recipient — we keep the historic field name for ABI compat
-    // but the diagnostic is no longer populated by this path.
+    // HWND recipient is 0 in the test stub because the test
+    // environment has no real Windows desktop to probe for an Edit
+    // HWND; in the production DLL this field records the lower 32
+    // bits of the resolved Edit HWND when the primary path succeeds.
     EXPECT_EQ(s->last_postmessage_target_diag(), 0u);
 }
 
 void TestGameFreeCameraShimDispatchViaConsoleEchoSuppression() {
     // The via-console path pushes 3 VKs to echo suppression: ~, Enter,
-    // ~ (the unicode char events go through KEYEVENTF_UNICODE with
-    // wVk=0 which the hook cannot match by VK, so they are not
-    // suppressed, only the explicit-VK events are). The echo list
-    // has kMaxEcho=8 slots so 3 entries fits; the next SynthKey would
-    // have to land within 250 ms to be eaten by ConsumeEchoKey.
+    // ~ (the WM_CHAR events bypass the keyboard hook entirely so
+    // they do not need echo suppression; only the explicit-VK events
+    // do). The echo list has kMaxEcho=8 slots so 3 entries fits;
+    // the next SynthKey would have to land within 250 ms to be eaten
+    // by ConsumeEchoKey.
     auto s = MakeShim();
     s->SetEnabled(true);
     s->SetSupportedForTesting(true);
@@ -312,17 +316,19 @@ void TestGameFreeCameraShimDispatchViaConsoleEchoSuppression() {
 }
 
 void TestGameFreeCameraShimDispatchViaConsoleSkipsWithoutHwnd() {
-    // The via-console path does not require an HWND bound — the
-    // text stream goes through SendInput which targets the foreground
-    // window of the calling thread regardless. We verify the
-    // trigger fires even with `game_hwnd() == nullptr`.
+    // The via-console path does not require an HWND bound for the
+    // SendInput VK sub-step (~, Enter, ~). Without a real Windows
+    // desktop the test stub always reports path=2 (the G5.20 PRIMARY
+    // PostMessage-WM_CHAR counter) because the stub cannot probe
+    // EnumThreadWindows. We still verify the trigger fires when
+    // `game_hwnd() == nullptr`.
     auto s = MakeShim();
     s->SetEnabled(true);
     s->SetSupportedForTesting(true);
     s->SetDevCameraViaConsole(true);
     EXPECT_TRUE(s->game_hwnd() == nullptr);
     s->OnEnterWalking();
-    EXPECT_EQ(s->last_dispatch_path(), 2);  // 2 = SendInput text-stream
+    EXPECT_EQ(s->last_dispatch_path(), 2);  // 2 = PostMessage WM_CHAR
     EXPECT_EQ(s->toggles_dispatched(), 1);
     EXPECT_EQ(s->console_cmds_dispatched(), 1);
 }

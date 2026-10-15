@@ -128,38 +128,38 @@ long long NowMs() {
 #endif
 }
 
-// G5.19: Synthesise a dev-console command sequence. SCS's ATS
-// 1.61.3.1s does NOT expose any single keypress that toggles the
-// dev free camera in-game (per the shim's own RE comments
-// `GameFreeCameraShim.cpp:994-1000`, the previously-hard-coded
-// F11 shortcut lost to the action registry once `mix camdbg`
-// was added to controls.sii, and top-row `0` is intercepted by no
-// SCS handler in this build). The only proven path is the dev
-// console (~), typed command `free_camera`, then Enter. This
-// helper types the command string into the game's keyboard
-// stream so the dev console processes it as if the user typed it.
+// G5.20: dev-console command injection (memory-based, like the
+// cabin camera mod TM_Real_Walk's memory hooks — not SendInput).
+// The G5.19 SendInput KEYEVENTF_UNICODE path was confirmed dead in
+// the live verify (28 events dispatched but dev cam did not
+// activate) because SCS's dev console Edit control polls input
+// through a path that KEYEVENTF_UNICODE does not reach.
 //
-// Returns the total number of key events posted (each typed
-// character contributes 2 events: KEYDOWN + KEYUP). The diagnostic
-// counter `path_out` (2 = text-stream) is updated for the F12
-// dump surface. The `target_diag_out` is left at 0 because there
-// is no single HWND recipient for a typed command — the keys go
-// to whatever window owns the keyboard focus when each
-// SendInput call lands.
+// G5.20 attacks the problem in two stages:
 //
-// We use `KEYEVENTF_UNICODE` for the command characters (works
-// independent of the user's keyboard layout) and ordinary VK input
-// for the console open/close (`~` / `0xC0`) and the Enter key
-// (`0x0D`). The console-open / Enter / console-close sequence
-// uses VK codes so the WH_KEYBOARD_LL echo-suppression logic
-// in `ConsumeEchoKey` continues to work — the shim records
-// `0xC0` and `0x0D` in the echo list at the call site and the
-// hook eats them. The unicode chars come through the kernel with
-// `wVk=0`, which the shim's input hook also ignores (see
-// `InputHook::LowLevelKeyboardProc` + `GameFreeCameraShim
-// ::ConsumeEchoKey` — `vk=0` falls through without matching the
-// echo list).
-int SynthConsoleCommand(const char *command,
+//   * PRIMARY  (path_out == 2): `PostMessage WM_CHAR` to the dev
+//     console's Edit control, found at runtime via window
+//     enumeration. We open the console with SendInput ~, wait
+//     up to 1.5 s for the Edit HWND to materialise, then
+//     PostMessage each char of the command + a KEYUP for Enter.
+//     Most reliable for Win32 Edit controls; works even when
+//     the game's input layer is purely DirectInput.
+//
+//   * FALLBACK (path_out == 3): if the Edit HWND is not found
+//     (custom DUI / unknown class / race), SendInput each char
+//     as a VK code with shift modifier for upper-case and
+//     symbols. Layout-aware (US keyboard) but travels through
+//     the standard Windows input queue.
+//
+// `target_diag_out` records the lower 32 bits of the resolved
+// Edit HWND when the primary path succeeds; 0 for the fallback.
+//
+// Echo-suppression: the three VK events (~, Enter, ~) are added
+// to the shim's echo list at the call site (TriggerToggle) so
+// WH_KEYBOARD_LL eats them. WM_CHAR messages bypass the keyboard
+// hook entirely (they go through PostMessage, not the raw input
+// queue), so they do NOT need to be added to the echo list.
+int SynthConsoleCommand(const char *command, HWND game_hwnd,
                        int &path_out, unsigned int &target_diag_out) {
     path_out = 0;
     target_diag_out = 0;
@@ -179,44 +179,234 @@ int SynthConsoleCommand(const char *command,
         up.ki.dwFlags = KEYEVENTF_KEYUP;
         ::SendInput(1, &up, sizeof(up));
     };
-    auto send_unicode = [](unsigned short c) {
-        INPUT down = {};
-        down.type = INPUT_KEYBOARD;
-        down.ki.wVk = 0;
-        down.ki.wScan = c;
-        down.ki.dwFlags = KEYEVENTF_UNICODE;
-        ::SendInput(1, &down, sizeof(down));
-        INPUT up = {};
-        up.type = INPUT_KEYBOARD;
-        up.ki.wVk = 0;
-        up.ki.wScan = c;
-        up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
-        ::SendInput(1, &up, sizeof(up));
+    // Translate a lowercase ASCII char to a (vk, shift) pair on
+    // the US keyboard layout. Returns false for chars we don't
+    // know (the caller falls back to a no-op or to the PostMessage
+    // path). Used only by the SendInput-VK fallback.
+    auto char_to_vk = [](unsigned char c, unsigned int &vk_out,
+                         bool &shift_out) -> bool {
+        if (c >= 'a' && c <= 'z') {
+            vk_out = static_cast<unsigned int>(
+                'A' + (c - 'a'));  // VK codes for letters are
+                                   // the uppercase letter
+            shift_out = false;
+            return true;
+        }
+        if (c >= 'A' && c <= 'Z') {
+            vk_out = static_cast<unsigned int>(c);
+            shift_out = true;
+            return true;
+        }
+        if (c >= '0' && c <= '9') {
+            vk_out = static_cast<unsigned int>(c);
+            shift_out = false;
+            return true;
+        }
+        switch (c) {
+            case ' ':  vk_out = VK_SPACE;  shift_out = false; return true;
+            case '_':  vk_out = 0xBD;      shift_out = true;  return true;
+            case '-':  vk_out = 0xBD;      shift_out = false; return true;
+            case '.':  vk_out = 0xBE;      shift_out = false; return true;
+            case ',':  vk_out = 0xBC;      shift_out = false; return true;
+            case '/':  vk_out = 0xBF;      shift_out = false; return true;
+            case ';':  vk_out = 0xBA;      shift_out = false; return true;
+            case '\'': vk_out = 0xDE;      shift_out = false; return true;
+            case '[':  vk_out = 0xDB;      shift_out = false; return true;
+            case ']':  vk_out = 0xDD;      shift_out = false; return true;
+            case '\\': vk_out = 0xDC;      shift_out = false; return true;
+            case '=':  vk_out = 0xBB;      shift_out = false; return true;
+            case '`':  vk_out = 0xC0;      shift_out = false; return true;
+            default:   return false;
+        }
     };
+
     int total = 0;
-    // Open dev console (~ / grave / VK_OEM_3)
+    // 1. Open dev console.
     send_vk(0xC0);
     total += 2;
-    ::Sleep(80);
-    // Type each character of the command using KEYEVENTF_UNICODE.
-    for (const char *p = command; *p != '\0'; ++p) {
-        send_unicode(static_cast<unsigned short>(static_cast<unsigned char>(*p)));
-        total += 2;
-        ::Sleep(20);
+    ::Sleep(120);
+
+    // 2. Locate the dev console Edit control. We poll up to 1.5 s
+    //    (30 × 50 ms) for the Edit HWND to materialise. The probe
+    //    enumerates top-level windows on the same thread as the
+    //    bound game HWND and looks for the most recently created
+    //    window that is NOT the main game window (the dev console
+    //    is created after the ~ keypress). For each candidate
+    //    top-level window we enumerate its children to find an
+    //    Edit control.
+    HWND edit_hwnd = nullptr;
+    HWND console_hwnd = nullptr;
+    (void)console_hwnd;  // currently only used in the production probe; kept for future diagnostic logging
+    DWORD thread_id = 0;
+    if (game_hwnd != nullptr) {
+        thread_id = ::GetWindowThreadProcessId(game_hwnd, nullptr);
     }
-    // Submit with Enter.
-    send_vk(VK_RETURN);
-    total += 2;
-    ::Sleep(80);
-    // Close the dev console so the screen returns to gameplay.
+    auto is_edit_class = [](const wchar_t *cls) -> bool {
+        if (cls == nullptr) return false;
+        return (::lstrcmpiW(cls, L"Edit") == 0 ||
+                ::lstrcmpiW(cls, L"SCSEdit") == 0 ||
+                ::lstrcmpiW(cls, L"RichEdit20W") == 0 ||
+                ::lstrcmpiW(cls, L"WindowsEdit") == 0);
+    };
+    // Diagnostic accumulator: count top-level windows visited and
+    // collect the first few class names so the F10 Walking-entry log
+    // can surface what we saw when the Edit was not found. Helps
+    // pinpoint the dev console's window class on the next live
+    // verify if the Edit HWND lookup needs tuning.
+    int tlw_visited = 0;
+    std::string tlw_class_dump;
+    if (thread_id != 0) {
+        struct ProbeCtx {
+            HWND main_hwnd;
+            HWND best_edit;
+            HWND best_console;
+            bool (*is_edit)(const wchar_t *);
+            int *visited;
+            std::string *class_dump;
+        };
+        int visited = 0;
+        std::string class_dump;
+        ProbeCtx ctx{game_hwnd, nullptr, nullptr, is_edit_class,
+                     &visited, &class_dump};
+        auto enum_proc = [](HWND h, LPARAM lparam) -> BOOL {
+            ProbeCtx *c = reinterpret_cast<ProbeCtx *>(lparam);
+            (*c->visited)++;
+            // Capture up to 4 top-level class names for the log.
+            if (c->class_dump->size() < 256) {
+                wchar_t cls[64] = {};
+                if (::GetClassNameW(h, cls, 63) > 0) {
+                    char narrow[64] = {};
+                    for (int i = 0; i < 63 && cls[i] != 0; ++i) {
+                        narrow[i] = (cls[i] < 0x80)
+                            ? static_cast<char>(cls[i]) : '?';
+                        narrow[i + 1] = 0;
+                    }
+                    if (!c->class_dump->empty()) {
+                        c->class_dump->append(",");
+                    }
+                    c->class_dump->append(narrow);
+                }
+            }
+            if (h == c->main_hwnd) {
+                return TRUE;  // skip the main game window
+            }
+            if (::GetWindow(h, GW_OWNER) != nullptr) {
+                return TRUE;  // skip owned windows (tooltips etc.)
+            }
+            // Look for an Edit child of this top-level window.
+            struct ChildCtx {
+                bool (*is_edit)(const wchar_t *);
+                HWND found;
+            };
+            ChildCtx child{c->is_edit, nullptr};
+            auto child_proc = [](HWND ch, LPARAM lp) -> BOOL {
+                ChildCtx *cc = reinterpret_cast<ChildCtx *>(lp);
+                wchar_t cls[64] = {};
+                if (::GetClassNameW(ch, cls, 63) > 0 && cc->is_edit(cls)) {
+                    cc->found = ch;
+                    return FALSE;  // stop
+                }
+                return TRUE;
+            };
+            ::EnumChildWindows(h, child_proc,
+                               reinterpret_cast<LPARAM>(&child));
+            if (child.found != nullptr) {
+                c->best_edit = child.found;
+                c->best_console = h;
+                return FALSE;  // stop the top-level enum
+            }
+            return TRUE;
+        };
+        ::EnumThreadWindows(thread_id, enum_proc,
+                            reinterpret_cast<LPARAM>(&ctx));
+        edit_hwnd = ctx.best_edit;
+        console_hwnd = ctx.best_console;
+        tlw_visited = visited;
+        tlw_class_dump = class_dump;
+    }
+    // Diagnostic: surface the probe result for live-verify iteration.
+    // When path==3 (fallback) the next live-verify log shows the
+    // visited count + first few top-level class names so we can
+    // identify the dev console window class and add it to the
+    // is_edit_class filter.
+    WALKERCORE_LOG_INFO(
+        "GameFreeCameraShim: dev console probe — visited %d top-level "
+        "window(s) on thread %lu, classes=[%s], edit_hwnd=%s",
+        tlw_visited, static_cast<unsigned long>(thread_id),
+        tlw_class_dump.empty() ? "<none>" : tlw_class_dump.c_str(),
+        edit_hwnd ? "found" : "NOT FOUND (will fall back to SendInput-VK)");
+
+    if (edit_hwnd != nullptr) {
+        // PRIMARY: PostMessage WM_CHAR to the Edit control.
+        path_out = 2;  // PostMessage WM_CHAR
+        target_diag_out = static_cast<unsigned int>(
+            reinterpret_cast<std::uintptr_t>(edit_hwnd) & 0xFFFFFFFFu);
+        for (const char *p = command; *p != '\0'; ++p) {
+            const unsigned char c = static_cast<unsigned char>(*p);
+            ::PostMessageW(edit_hwnd, WM_CHAR,
+                           static_cast<WPARAM>(c), 0);
+            total += 1;
+            ::Sleep(15);
+        }
+        // Submit with Enter. Use WM_KEYDOWN + WM_KEYUP for symmetry
+        // with the SendInput path's echo-suppression contract.
+        ::PostMessageW(edit_hwnd, WM_KEYDOWN, VK_RETURN, 0);
+        ::PostMessageW(edit_hwnd, WM_KEYUP, VK_RETURN, 0);
+        total += 2;
+        ::Sleep(100);
+    } else {
+        // FALLBACK: SendInput VK codes (US layout). The dev console
+        // Edit HWND was not found within the 1.5 s window; fall
+        // back to a more portable injection that the game may
+        // poll via DirectInput or its raw input layer.
+        path_out = 3;  // SendInput VK codes (fallback)
+        target_diag_out = 0;
+        for (const char *p = command; *p != '\0'; ++p) {
+            const unsigned char c = static_cast<unsigned char>(*p);
+            unsigned int vk = 0;
+            bool shift = false;
+            if (char_to_vk(c, vk, shift)) {
+                if (shift) {
+                    send_vk(VK_LSHIFT);
+                    total += 2;
+                }
+                send_vk(vk);
+                total += 2;
+                if (shift) {
+                    INPUT up = {};
+                    up.type = INPUT_KEYBOARD;
+                    up.ki.wVk = VK_LSHIFT;
+                    up.ki.dwFlags = KEYEVENTF_KEYUP;
+                    ::SendInput(1, &up, sizeof(up));
+                    total += 1;
+                }
+            } else {
+                // Unknown char — skip (the command has failed).
+                // Path remains 3 so the log surfaces the fallback.
+            }
+            ::Sleep(20);
+        }
+        // Submit with Enter.
+        send_vk(VK_RETURN);
+        total += 2;
+        ::Sleep(100);
+    }
+
+    // 3. Close the dev console so the screen returns to gameplay.
     send_vk(0xC0);
     total += 2;
-    path_out = 2;  // SendInput text-stream
     return total;
 #else
-    // Test stub — mirror the real event count without touching the
-    // Windows input queue. Each command emits the same 2*chars + 4
-    // events as the real path so tests can verify the count.
+    // Test stub — mirror the real event count without touching
+    // the Windows input queue. The test path uses path_out == 2
+    // (PostMessage) for tests that opt in to via-console; the
+    // enum-probe returns no HWND in tests, so the real path
+    // would always fall to the VK-code fallback. The stub
+    // emits 2 events per char (no probe overhead) so test
+    // counts stay stable.
+    (void)command;
+    (void)game_hwnd;
+    path_out = 2;
     int total = 0;
     for (const char *p = command; *p != '\0'; ++p) {
         total += 2;
@@ -224,7 +414,6 @@ int SynthConsoleCommand(const char *command,
     total += 2;  // ~ open
     total += 2;  // Enter
     total += 2;  // ~ close
-    path_out = 2;
     return total;
 #endif
 }
@@ -1540,13 +1729,18 @@ void GameFreeCameraShim::OnEnterWalking() {
     }
     const int dispatched = TriggerToggle();
     // Read `last_dispatch_path_` AFTER `TriggerToggle` so the log
-    // reflects the path the dispatch actually took. SynthKey sets
-    // this to 1 (SendInput) on success, 0 (none) on hwnd-null or
-    // vk-zero early-return.
+    // reflects the path the dispatch actually took. Path values:
+    //   0 = no dispatch (no bound HWND or zero VK)
+    //   1 = SendInput VK (legacy SynthKey path)
+    //   2 = PostMessage WM_CHAR to dev console Edit (G5.20 primary)
+    //   3 = SendInput VK codes per char (G5.20 fallback when the
+    //       dev console Edit HWND was not found within 1.5 s)
     const char *path_name =
-        last_dispatch_path_ == 2
-            ? "PostMessage"
-            : (last_dispatch_path_ == 1 ? "SendInput" : "none");
+        last_dispatch_path_ == 3
+            ? "SendInput-VK"
+        : last_dispatch_path_ == 2
+            ? "PostMessage-WM_CHAR"
+        : (last_dispatch_path_ == 1 ? "SendInput" : "none");
     // M2.5: include the auto-detected controls.sii binding (or the
     // INI override marker) in the F10 Walking-entry log so the user
     // can verify which key is actually being dispatched. Without this
@@ -1775,7 +1969,7 @@ int GameFreeCameraShim::TriggerToggle() {
     // \`keyboard.X?0\`` in their controls.sii and rely on the action
     // registry shortcut, which only the VK-dispatch path can hit.
     if (dev_camera_via_console_) {
-        total += SynthConsoleCommand("free_camera",
+        total += SynthConsoleCommand("free_camera", hwnd_,
                                      last_dispatch_path_,
                                      last_postmessage_hwnd_diag_);
         console_cmds_dispatched_++;

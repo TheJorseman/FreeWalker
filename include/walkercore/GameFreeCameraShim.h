@@ -184,6 +184,41 @@ public:
     // Always returns the number of keys actually synthesised.
     int TriggerToggle();
 
+    // G5.22: pre-dispatch from the WH_KEYBOARD_LL callback when F10
+    // (toggle walk) is detected as a rising edge. The hook calls this
+    // SYNCHRONOUSLY before returning CallNextHookEx, so the synthesised
+    // toggle key lands in the OS input queue BEFORE the original F10
+    // is delivered to the game. The next DirectInput poll therefore
+    // reads the toggle first (dev cam activates while state is still
+    // Driving) and F10 second (Walking transition starts). This avoids
+    // the G5.21 timing problem where OnEnterWalking fired the toggle
+    // AFTER the FSM had already transitioned to Walking, which the
+    // user reported "F10 only does screenshot, dev cam does not
+    // activate". `trigger_reason` is a short tag for the log line
+    // (e.g. "ToggleWalk rising edge"). Returns the number of keys
+    // actually synthesised.
+    int PreDispatchDevCamToggleFromF10(const char *trigger_reason);
+
+    // G5.22: timestamp (ms since boot) of the last
+    // PreDispatchDevCamToggleFromF10 call that actually dispatched at
+    // least one key. 0 when no pre-dispatch has happened yet. The
+    // OnEnterWalking / OnExitWalking fallback paths consult this to
+    // skip a duplicate dispatch when the WH_KEYBOARD_LL pre-dispatch
+    // already covered the toggle.
+    int last_pre_dispatch_ms() const { return last_pre_dispatch_ms_; }
+
+    // G5.22 test seam. Disables the foreground-process guard inside
+    // PreDispatchDevCamToggleFromF10 so the unit tests can drive the
+    // dispatch path without standing up a real ATS foreground
+    // window. The production path leaves this false; only the test
+    // suite flips it on. The seam is gated on a process-wide flag
+    // read by the runtime, not a permanent API surface, so a user
+    // who accidentally turns it on via INI would not weaken the
+    // real-world safety — production builds have no INI knob.
+    void SetForegroundGuardDisabledForTesting(bool disabled) {
+        foreground_guard_disabled_for_testing_ = disabled;
+    }
+
     // Walker's own keyboard-hook call. If a key has been synthesised
     // via SendInput, the OS will deliver it back to our WH_KEYBOARD_LL
     // hook. We mark it as "echo" so the walker does not loop on it.
@@ -495,6 +530,20 @@ private:
     HWND hwnd_ = nullptr;              // bound game window — gates dispatch
     const DevCameraCvarPatchResult *dev_cvar_patch_result_ = nullptr;
     int last_dispatch_path_ = 0;       // 0 = none, 1 = SendInput
+    // G5.22: timestamp of the most recent PreDispatchDevCamToggleFromF10
+    // call that actually synthesised at least one key. The OnEnterWalking
+    // / OnExitWalking fallback paths consult this counter (via
+    // `last_pre_dispatch_ms()`) to skip a duplicate dispatch when the
+    // WH_KEYBOARD_LL pre-dispatch already covered the toggle. 0 means
+    // no pre-dispatch has happened this session — the OnEnterWalking /
+    // OnExitWalking paths fall back to their legacy dispatch behaviour.
+    int last_pre_dispatch_ms_ = 0;
+    // G5.22 test seam for the foreground-process guard. Set true by
+    // the unit tests (which have no real ATS foreground window)
+    // before exercising PreDispatchDevCamToggleFromF10; production
+    // builds never flip this. Defaults to false so a missing call
+    // does not weaken the production safety.
+    bool foreground_guard_disabled_for_testing_ = false;
     // M2 diagnostic: last controls.sii path we scanned for binding
     // conflicts. Empty when never scanned. Used by
     // `LogControlsSiiVkConflictIfAny` to short-circuit duplicate

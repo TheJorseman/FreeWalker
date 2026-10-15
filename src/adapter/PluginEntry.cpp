@@ -1167,6 +1167,16 @@ extern "C" __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init(
   }
   walkercore::diagnostic_internal::SetGameFreeCameraShim(
       g_game_free_camera_shim);
+  // G5.22: bind the dev-cam shim to the WH_KEYBOARD_LL callback so
+  // F10 rising edges pre-dispatch the toggle VK before the original
+  // F10 reaches the OS input queue. Done here (after the shim is
+  // constructed and its gates are loaded from the INI) rather than
+  // next to the InputHook install because the shim pointer is null
+  // until line ~1086. The hook checks g_dev_cam_shim != nullptr on
+  // every F10 down, so a transient null between Install and this
+  // call is harmless — only F10s after this line trigger the
+  // pre-dispatch.
+  walkercore::SetInputHookDevCamShim(g_game_free_camera_shim);
 
   // M2 lander: dev-camera cvar patcher. Honours the INI gate
   // `[m2] dev_cvar_patcher` (default true). Runs the one-shot
@@ -1567,6 +1577,10 @@ extern "C" __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown(void) {
   // in-flight walker_dump_game_free_camera_shim() reads null
   // instead of freed memory.
   walkercore::diagnostic_internal::SetGameFreeCameraShim(nullptr);
+  // G5.22: unbind the WH_KEYBOARD_LL shim reference BEFORE deleting
+  // the shim object so a late F10 rising edge between these two
+  // calls does not dereference freed memory.
+  walkercore::SetInputHookDevCamShim(nullptr);
   if (g_game_free_camera_shim != nullptr) {
     delete g_game_free_camera_shim;
     g_game_free_camera_shim = nullptr;

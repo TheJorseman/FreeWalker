@@ -33,6 +33,7 @@
 
 #include <windows.h>
 
+#include "walkercore/GameFreeCameraShim.h"
 #include "walkercore/Log.h"
 #include "walkercore/WindowSubclass.h"
 
@@ -43,6 +44,14 @@ namespace walkercore {
 // "WalkerCore runs on the game thread, no thread sync needed" rule.
 namespace {
 InputHook *g_instance = nullptr;
+// G5.22: shim instance the WH_KEYBOARD_LL callback calls on F10 rising
+// edge to pre-dispatch the dev-cam toggle VK before the original F10
+// is returned to the OS input queue. Set via SetInputHookDevCamShim;
+// read on every F10 down by the static LowLevelKeyboardProc. The shim
+// is owned by PluginEntry (it outlives the hook callback because the
+// per-frame tick stops before the shim destructor runs in
+// scs_telemetry_shutdown).
+GameFreeCameraShim *g_dev_cam_shim = nullptr;
 
 // M11.4 — trampoline that the WndProc subclass calls on every
 // WM_INPUT message. WindowSubclass_SetRawInputSink takes a (fn, ctx)
@@ -57,6 +66,13 @@ void OnRawInputMessageTrampoline(void *ctx, LPARAM l_param) {
     static_cast<InputHook *>(ctx)->OnRawInputMessage(l_param);
 }
 }  // namespace
+
+// G5.22: bind the dev-cam shim instance the WH_KEYBOARD_LL callback
+// references on every F10 rising edge. Lives in walkercore namespace
+// (not anonymous) because PluginEntry needs to call it from outside.
+void SetInputHookDevCamShim(GameFreeCameraShim *shim) {
+    g_dev_cam_shim = shim;
+}
 
 // Low-level keyboard hook callback. Translates VK -> WalkercoreKey bits
 // in our last_ snapshot. Returning 0 (no CallNextHookEx bypass) keeps the
@@ -115,16 +131,39 @@ LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM w_param, LPARAM l_param) 
     // accumulator starts fresh.
     uint8_t &bits = g_instance->mutable_last().keys[KeyIndex(k)];
     const bool was_held = (bits & 0x01) != 0;
+    bool rising_edge = false;
     if (is_down) {
         bits = static_cast<uint8_t>(bits | 0x01);
         if (!was_held) {
             bits = static_cast<uint8_t>(bits | 0x02);  // rising edge → mark pressed
+            rising_edge = true;
         }
     } else {
         if (was_held) {
             bits = static_cast<uint8_t>(bits | 0x04);  // falling edge → mark released
         }
         bits = static_cast<uint8_t>(bits & ~0x01);
+    }
+
+    // G5.22: pre-dispatch the dev-cam toggle VK on F10 ToggleWalk
+    // rising edge BEFORE returning CallNextHookEx. The synthesised
+    // toggle key is queued in the OS input queue ahead of the
+    // original F10 (because SendInput inserts at the current tail
+    // and our call happens before WH_KEYBOARD_LL returns), so the
+    // next DirectInput poll reads the toggle first (dev cam
+    // activates in Driving state) and F10 second (Walking
+    // transition). This replaces the G5.21 OnEnterWalking dispatch
+    // which fired too late — see GameFreeCameraShim::
+    // PreDispatchDevCamToggleFromF10 for the full rationale.
+    //
+    // We only fire on ToggleWalk (F10 alone, no Ctrl), not on
+    // ToggleMenu (Ctrl+F10): opening the settings menu should not
+    // toggle the dev cam. The Ctrl+F10 binding is handled above at
+    // the `k = ClassifyToggleWalkKey(...)` site.
+    if (rising_edge && k == WalkercoreKey::ToggleWalk &&
+        g_dev_cam_shim != nullptr) {
+        g_dev_cam_shim->PreDispatchDevCamToggleFromF10(
+            "ToggleWalk rising edge (F10 down, no Ctrl)");
     }
 
     return CallNextHookEx(nullptr, code, w_param, l_param);

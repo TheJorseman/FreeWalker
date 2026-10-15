@@ -163,6 +163,116 @@ void TestGameFreeCameraShimTriggerToggleRespectsDisabled() {
     EXPECT_EQ(s->toggles_dispatched(), 0);
 }
 
+// G5.22 pre-dispatch. Pins the contract that the WH_KEYBOARD_LL
+// callback calls into the shim on rising edge of F10 to queue the
+// toggle VK ahead of the original F10. On the test build
+// (WALKERCORE_GAME_FREE_CAMERA_SHIM_DISABLED) the dispatch is a
+// counter increment, so we assert on:
+//   - returned key count (2 for one down + one up)
+//   - toggle_vk_ usage (recorded via last_dispatch_path_=1)
+//   - last_pre_dispatch_ms_ increments so OnEnterWalking can dedup
+//   - foreground guard prevents dispatch when the bound HWND is
+//     not owned by the current process
+//   - disabled shim returns 0
+//   - unsupported shim returns 0
+void TestGameFreeCameraShimPreDispatchDisabledIsNoOp() {
+    auto s = MakeShim();
+    s->SetEnabled(false);
+    s->SetSupportedForTesting(true);
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xCAFEBABE));
+    const int produced =
+        s->PreDispatchDevCamToggleFromF10("ToggleWalk rising edge");
+    EXPECT_EQ(produced, 0);
+    EXPECT_EQ(s->toggles_dispatched(), 0);
+    EXPECT_EQ(s->last_pre_dispatch_ms(), 0);
+}
+
+void TestGameFreeCameraShimPreDispatchUnsupportedIsNoOp() {
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    // supported_ stays false.
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xCAFEBABE));
+    const int produced =
+        s->PreDispatchDevCamToggleFromF10("ToggleWalk rising edge");
+    EXPECT_EQ(produced, 0);
+    EXPECT_EQ(s->toggles_dispatched(), 0);
+    EXPECT_EQ(s->last_pre_dispatch_ms(), 0);
+}
+
+void TestGameFreeCameraShimPreDispatchGatesPassDispatchesTwoKeys() {
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xCAFEBABE));
+    // Test build has no real ATS foreground window — disable the
+    // foreground-process guard so the dispatch path is exercisable.
+    s->SetForegroundGuardDisabledForTesting(true);
+    // In the test build (disabled-flag), SendInput is replaced with a
+    // counter increment + path=1. Pre-dispatch should produce 2
+    // (one down + one up) and bump toggles_dispatched_ + the
+    // last_pre_dispatch_ms_ tracking.
+    const int produced =
+        s->PreDispatchDevCamToggleFromF10("ToggleWalk rising edge");
+    EXPECT_EQ(produced, 2);
+    EXPECT_EQ(s->toggles_dispatched(), 1);
+    EXPECT_TRUE(s->last_pre_dispatch_ms() > 0);
+    EXPECT_EQ(s->last_dispatch_path(), 1);
+}
+
+void TestGameFreeCameraShimOnEnterWalkingDedupsAfterPreDispatch() {
+    // G5.22 dedup contract: after a successful pre-dispatch, the
+    // OnEnterWalking fallback dispatch within 500 ms should be
+    // suppressed to avoid double-toggling the dev cam.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xCAFEBABE));
+    s->SetForegroundGuardDisabledForTesting(true);
+    const int pre = s->PreDispatchDevCamToggleFromF10("ToggleWalk rising edge");
+    EXPECT_EQ(pre, 2);
+    // OnEnterWalking runs ~immediately after the WH_KEYBOARD_LL
+    // callback (next frame's per-frame tick), well within the 500 ms
+    // dedup window. Expected: no second dispatch.
+    s->OnEnterWalking();
+    EXPECT_EQ(s->walks_entered(), 1);
+    // One toggle from pre-dispatch, NOT two (the dedup worked).
+    EXPECT_EQ(s->toggles_dispatched(), 1);
+}
+
+void TestGameFreeCameraShimOnExitWalkingDedupsAfterPreDispatch() {
+    // Symmetric to the OnEnterWalking dedup: when F10 is pressed in
+    // Walking (exit), the WH_KEYBOARD_LL pre-dispatch covers the
+    // toggle, and OnExitWalking should NOT re-dispatch.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xCAFEBABE));
+    s->SetForegroundGuardDisabledForTesting(true);
+    // Simulate: was in Walking, F10 pressed → pre-dispatch fired.
+    const int pre = s->PreDispatchDevCamToggleFromF10("ToggleWalk rising edge");
+    EXPECT_EQ(pre, 2);
+    // Now the FSM transitions Walking → Driving (OnExitWalking).
+    s->OnExitWalking();
+    // Only one toggle total — OnExitWalking skipped the dedup.
+    EXPECT_EQ(s->toggles_dispatched(), 1);
+}
+
+void TestGameFreeCameraShimOnEnterWalkingFallsBackWithoutRecentPreDispatch() {
+    // G5.22 fallback: when the FSM enters Walking WITHOUT a
+    // preceding pre-dispatch (e.g. KnockoutProvider forced the
+    // transition), OnEnterWalking still dispatches as a fallback.
+    auto s = MakeShim();
+    s->SetEnabled(true);
+    s->SetSupportedForTesting(true);
+    s->BindGameHwnd(reinterpret_cast<HWND>(0xCAFEBABE));
+    s->SetForegroundGuardDisabledForTesting(true);
+    // No pre-dispatch fired. OnEnterWalking is the primary path.
+    s->OnEnterWalking();
+    EXPECT_EQ(s->walks_entered(), 1);
+    EXPECT_EQ(s->toggles_dispatched(), 1);
+    EXPECT_EQ(s->last_pre_dispatch_ms(), 0);  // unchanged
+}
+
 void TestGameFreeCameraShimEchoSuppressionAfterTrigger() {
     auto s = MakeShim();
     s->SetEnabled(true);    s->SetToggleVk(0x79);    // pretend F10

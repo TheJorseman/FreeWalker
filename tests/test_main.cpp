@@ -384,6 +384,12 @@ void TestGameFreeCameraShimVkCustomisation();
 void TestGameFreeCameraShimOnEnterWalkingDisabledIsAdvisory();
 void TestGameFreeCameraShimOnEnterWalkingSupportedFalseIsAdvisory();
 void TestGameFreeCameraShimTriggerToggleRespectsDisabled();
+void TestGameFreeCameraShimPreDispatchDisabledIsNoOp();
+void TestGameFreeCameraShimPreDispatchUnsupportedIsNoOp();
+void TestGameFreeCameraShimPreDispatchGatesPassDispatchesTwoKeys();
+void TestGameFreeCameraShimOnEnterWalkingDedupsAfterPreDispatch();
+void TestGameFreeCameraShimOnExitWalkingDedupsAfterPreDispatch();
+void TestGameFreeCameraShimOnEnterWalkingFallsBackWithoutRecentPreDispatch();
 void TestGameFreeCameraShimEchoSuppressionAfterTrigger();
 // BindGameHwnd + PostMessage dispatch path — fixes the ATS 1.61.3.1s
 // dev-free-camera regression where SendInput did not reach the game
@@ -1157,6 +1163,12 @@ int main() {
     RUN_TEST(walkercore::TestGameFreeCameraShimOnEnterWalkingDisabledIsAdvisory);
     RUN_TEST(walkercore::TestGameFreeCameraShimOnEnterWalkingSupportedFalseIsAdvisory);
     RUN_TEST(walkercore::TestGameFreeCameraShimTriggerToggleRespectsDisabled);
+    RUN_TEST(walkercore::TestGameFreeCameraShimPreDispatchDisabledIsNoOp);
+    RUN_TEST(walkercore::TestGameFreeCameraShimPreDispatchUnsupportedIsNoOp);
+    RUN_TEST(walkercore::TestGameFreeCameraShimPreDispatchGatesPassDispatchesTwoKeys);
+    RUN_TEST(walkercore::TestGameFreeCameraShimOnEnterWalkingDedupsAfterPreDispatch);
+    RUN_TEST(walkercore::TestGameFreeCameraShimOnExitWalkingDedupsAfterPreDispatch);
+    RUN_TEST(walkercore::TestGameFreeCameraShimOnEnterWalkingFallsBackWithoutRecentPreDispatch);
     RUN_TEST(walkercore::TestGameFreeCameraShimEchoSuppressionAfterTrigger);
     // BindGameHwnd + PostMessage path — see test_game_free_camera_shim.cpp.
     RUN_TEST(walkercore::TestGameFreeCameraShimDefaultHwndIsNull);

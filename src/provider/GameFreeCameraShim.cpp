@@ -1644,6 +1644,23 @@ void GameFreeCameraShim::ProbeGDeveloperFromConfig() {
 }
 
 void GameFreeCameraShim::OnEnterWalking() {
+    // G5.22: skip the legacy dispatch when the WH_KEYBOARD_LL
+    // pre-dispatch already covered the same toggle. The
+    // pre-dispatch fires SYNCHRONOUSLY before F10 reaches the game,
+    // so the toggle VK lands in the input queue ahead of the F10
+    // that started the Walking transition. Re-dispatching here would
+    // double-toggle the dev cam (activate on entry, deactivate on
+    // the very next frame, leaving the user with the dev cam OFF
+    // even though they're in Walking). The fallback dispatch below
+    // only fires when the FSM enters Walking WITHOUT a preceding
+    // F10 rising edge — e.g. the KnockoutProvider forcing a
+    // transition, or a non-input state change. The 500 ms window
+    // covers the WH_KEYBOARD_LL → FSM transition latency on the
+    // user's host (~16-20 ms typical frame, plus scheduler jitter)
+    // and is conservative — doubling the toggle within 500 ms of a
+    // legitimate F10 press would be a clear regression the user
+    // would notice as a flashing dev-cam overlay.
+    constexpr int kPreDispatchDedupMs = 500;
     walks_entered_++;
     // Compose a single, comprehensive traceback line for the F10
     // Walking-entry event. The previous version split the log into
@@ -1725,6 +1742,32 @@ void GameFreeCameraShim::OnEnterWalking() {
             static_cast<unsigned long long>(patch_value_va), patch_cvar_buf,
             static_cast<unsigned long long>(
                 reinterpret_cast<std::uintptr_t>(hwnd_)));
+        return;
+    }
+    // G5.22 dedup: the WH_KEYBOARD_LL pre-dispatch already synthesised
+    // the toggle VK for this F10 press. Skip the OnEnterWalking
+    // dispatch — the dev cam is already in the right state.
+    // Re-dispatching here would double-toggle the dev cam (activate
+    // on entry, deactivate on the very next frame, leaving the user
+    // with the dev cam OFF even though they're in Walking). The
+    // fallback dispatch below only fires when the FSM enters Walking
+    // WITHOUT a preceding F10 rising edge — e.g. the KnockoutProvider
+    // forcing a transition, or a non-input state change. The 500 ms
+    // window covers the WH_KEYBOARD_LL → FSM transition latency on
+    // the user's host (~16-20 ms typical frame, plus scheduler
+    // jitter) and is conservative — doubling the toggle within 500 ms
+    // of a legitimate F10 press would be a clear regression the user
+    // would notice as a flashing dev-cam overlay.
+    if (last_pre_dispatch_ms_ != 0 &&
+        (static_cast<int>(NowMs() & 0x7FFFFFFFLL) -
+         last_pre_dispatch_ms_) < kPreDispatchDedupMs) {
+        WALKERCORE_LOG_INFO(
+            "GameFreeCameraShim: Walking entry #%d -> pre-dispatch "
+            "covered the toggle (%d ms ago); OnEnterWalking skip "
+            "to avoid double-toggle.",
+            walks_entered_,
+            static_cast<int>(NowMs() & 0x7FFFFFFFLL) -
+                last_pre_dispatch_ms_);
         return;
     }
     const int dispatched = TriggerToggle();
@@ -1909,6 +1952,21 @@ void GameFreeCameraShim::OnExitWalking() {
     // game.log for "Walking exit -> dispatched" and see the toggle
     // parity.
     if (enabled_ && supported_) {
+        // G5.22 dedup: skip when WH_KEYBOARD_LL pre-dispatch
+        // already toggled for the same F10 press that drove this
+        // Walking exit.
+        constexpr int kPreDispatchDedupMs = 500;
+        if (last_pre_dispatch_ms_ != 0 &&
+            (static_cast<int>(NowMs() & 0x7FFFFFFFLL) -
+             last_pre_dispatch_ms_) < kPreDispatchDedupMs) {
+            WALKERCORE_LOG_INFO(
+                "GameFreeCameraShim: Walking exit -> pre-dispatch "
+                "covered the toggle (%d ms ago); OnExitWalking skip "
+                "to avoid double-toggle.",
+                static_cast<int>(NowMs() & 0x7FFFFFFFLL) -
+                    last_pre_dispatch_ms_);
+            return;
+        }
         const int dispatched = TriggerToggle();
         WALKERCORE_LOG_INFO(
             "GameFreeCameraShim: Walking exit -> dispatched %d key "
@@ -2030,6 +2088,162 @@ int GameFreeCameraShim::TriggerToggle() {
     // echo list above; the legacy branch already added toggle_vk_.
     // Nothing to do here for either path.
     return total;
+}
+
+int GameFreeCameraShim::PreDispatchDevCamToggleFromF10(
+    const char *trigger_reason) {
+    // G5.22 timing fix. The legacy OnEnterWalking dispatch fired AFTER
+    // the WalkerFsm had already transitioned Driving → Walking, so the
+    // synthesised F11 (dev cam toggle) landed in the input queue AFTER
+    // the F10 that started the transition. DirectInput polled them in
+    // FIFO order, F11 was processed in Walking / TransitionIn state,
+    // and the dev cam either didn't toggle or was suppressed by the
+    // walker's camera manager. The user reported "F10 only does
+    // screenshot, dev cam does not activate" (G5.21).
+    //
+    // The new path: WH_KEYBOARD_LL fires for F10 BEFORE the event is
+    // added to the OS input queue. We synthesise F11 here, so F11 is
+    // queued FIRST. When WH_KEYBOARD_LL returns CallNextHookEx, the
+    // original F10 is queued SECOND. DirectInput's next poll reads
+    // F11 first (dev cam activates while the game is still in
+    // Driving), then F10 (Walking transition starts). This is the
+    // same ordering the user gets when they manually press F11 in
+    // Driving — which they confirmed produces the position-report
+    // overlay.
+    //
+    // We always toggle, regardless of current FSM state, because the
+    // dev cam toggle is symmetric with the walker toggle: every F10
+    // press that enters Walking also activates the dev cam, and every
+    // F10 press that exits Walking deactivates it. The state machine
+    // stays in lockstep as long as we toggle on every F10 rising edge.
+    //
+    // The synthesised F11 fires our own WH_KEYBOARD_LL hook on the
+    // way back, which classifies it as "LastKey" (not a walker key)
+    // and lets it pass through to the game — so we don't need to
+    // echo-suppress it.
+    //
+    // The legacy OnEnterWalking / OnExitWalking dispatch still fires
+    // when the FSM transitions for reasons OTHER than F10 (e.g. the
+    // KnockoutProvider force-transitioning into Walking, or a recovery
+    // F). To avoid double-toggling when the WH_KEYBOARD_LL pre-dispatch
+    // covered the same toggle, the OnEnterWalking / OnExitWalking
+    // paths consult `last_pre_dispatch_ms_` and skip their own
+    // dispatch when one happened recently. We set
+    // `last_pre_dispatch_ms_` here whenever we actually synthesised
+    // at least one key, so the fallback can detect "the toggle was
+    // already done in the hook".
+
+    if (!enabled_) {
+        WALKERCORE_LOG_INFO(
+            "GameFreeCameraShim: pre-dispatch skipped (gate=off, "
+            "trigger=%s) — shim disabled; user-facing F10 stays a pure "
+            "walk toggle without dev cam side-effect.",
+            trigger_reason != nullptr ? trigger_reason : "<unset>");
+        return 0;
+    }
+    if (!supported_) {
+        WALKERCORE_LOG_INFO(
+            "GameFreeCameraShim: pre-dispatch skipped (gate=on, "
+            "supported=0/missing, trigger=%s) — g_developer not "
+            "detected; dev free camera not available, dispatching "
+            "F11 would have no visual effect.",
+            trigger_reason != nullptr ? trigger_reason : "<unset>");
+        return 0;
+    }
+    // Foreground guard: WH_KEYBOARD_LL fires system-wide, not just
+    // for the game. If the user is typing in Chrome and presses F10,
+    // our hook fires; without this check, SendInput F11 would land
+    // in Chrome's input queue (because SendInput targets the
+    // foreground thread) and the user would see a stray F11
+    // character appear in their active app. We require the
+    // foreground window to be owned by the current process — the
+    // user's ATS instance is the only process that loads our DLL,
+    // so GetWindowThreadProcessId(fg) == GetCurrentThreadId() is a
+    // robust game-in-foreground check. We don't compare fg == hwnd_
+    // because the G5.21 live log showed fg-mismatch in normal play
+    // (the splash screen was the bound window but the main render
+    // window was foreground after FindGameHwnd raced the
+    // splash-main swap) — an exact HWND match would suppress
+    // pre-dispatch on every F10 the user presses in-game.
+    const HWND fg = ::GetForegroundWindow();
+    if (!foreground_guard_disabled_for_testing_ &&
+        fg != nullptr && hwnd_ != nullptr) {
+        DWORD fg_pid = 0;
+        ::GetWindowThreadProcessId(fg, &fg_pid);
+        if (fg_pid != ::GetCurrentProcessId()) {
+            WALKERCORE_LOG_INFO(
+                "GameFreeCameraShim: pre-dispatch skipped (trigger=%s, "
+                "fg=0x%llX, fg_pid=%lu, our_pid=%lu) — F10 was not "
+                "for our process (foreground window belongs to "
+                "another app). SendInput would route F11 to that "
+                "app's queue. Let F10 reach its real target "
+                "untouched.",
+                trigger_reason != nullptr ? trigger_reason : "<unset>",
+                static_cast<unsigned long long>(
+                    reinterpret_cast<std::uintptr_t>(fg)),
+                static_cast<unsigned long long>(fg_pid),
+                static_cast<unsigned long long>(
+                    ::GetCurrentProcessId()));
+            return 0;
+        }
+    }
+
+    // Direct VK dispatch — bypass dev_camera_via_console because the
+    // console path (SendInput ~ + chars + Enter + ~) is multi-event
+    // and would interleave badly with the F10 the WH_KEYBOARD_LL is
+    // about to return. The whole point of this hook is "queue F11
+    // before F10"; opening a console window and typing a command
+    // takes hundreds of milliseconds and the game would have started
+    // its Walking transition by the time the console opened. The
+    // OnEnterWalking / OnExitWalking fallback paths still honour the
+    // INI knob — the slow via-console path is acceptable when the
+    // fallback fires (no queue-order pressure).
+    const int dispatched = SynthKey(
+        toggle_vk_, hwnd_, last_dispatch_path_,
+        last_postmessage_hwnd_diag_);
+    if (dispatched > 0) {
+        toggles_dispatched_++;
+        last_dispatch_ms_ = static_cast<int>(NowMs() & 0x7FFFFFFFLL);
+        last_pre_dispatch_ms_ = last_dispatch_ms_;
+        // Echo-suppress the VK the hook will see on the way back so
+        // any future code that reads ConsumeEchoKey can avoid looping
+        // on the synthesised key. The hook's LowLevelKeyboardProc
+        // currently does not call ConsumeEchoKey for the toggle VK
+        // (F11 isn't in the walker bindings table), so this is
+        // diagnostic-only — the F11 falls through as LastKey.
+        const long long until = NowMs() + 250;
+        if (echo_count_ < kMaxEcho) {
+            echo_vks_[echo_count_] = toggle_vk_;
+            echo_until_ms_[echo_count_] = until;
+            echo_count_++;
+        }
+        const char *path_name =
+            last_dispatch_path_ == 3 ? "SendInput-VK"
+            : last_dispatch_path_ == 2 ? "PostMessage-WM_CHAR"
+            : (last_dispatch_path_ == 1 ? "SendInput" : "none");
+        WALKERCORE_LOG_INFO(
+            "GameFreeCameraShim: pre-dispatch from WH_KEYBOARD_LL "
+            "(trigger=%s, VK=0x%X, dispatched=%d, path=%s, "
+            "hwnd=0x%llX) — toggle VK queued BEFORE the original F10 "
+            "so DirectInput's next poll reads F11 first (dev cam "
+            "toggles in Driving state) and F10 second (Walking "
+            "transition starts). This replaces the G5.21 OnEnterWalking "
+            "dispatch which fired too late.",
+            trigger_reason != nullptr ? trigger_reason : "<unset>",
+            toggle_vk_, dispatched, path_name,
+            static_cast<unsigned long long>(
+                reinterpret_cast<std::uintptr_t>(hwnd_)));
+        return dispatched;
+    }
+    WALKERCORE_LOG_INFO(
+        "GameFreeCameraShim: pre-dispatch no-op (trigger=%s, "
+        "VK=0x%X, hwnd=0x%llX) — SynthKey returned 0; the toggle "
+        "will fall through to OnEnterWalking / OnExitWalking.",
+        trigger_reason != nullptr ? trigger_reason : "<unset>",
+        toggle_vk_,
+        static_cast<unsigned long long>(
+            reinterpret_cast<std::uintptr_t>(hwnd_)));
+    return 0;
 }
 
 bool GameFreeCameraShim::ConsumeEchoKey(unsigned int vk) {

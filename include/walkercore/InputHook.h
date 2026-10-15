@@ -29,6 +29,8 @@
 
 namespace walkercore {
 
+class GameFreeCameraShim;
+
 // Default key bindings (Win32 VK_*). Used until M6 INI overrides them.
 struct KeyBindings {
     int forward_vk = 'W';
@@ -140,6 +142,13 @@ private:
     // its message loop, and Sample() returns a copy.
     InputState last_;
 };
+
+// G5.22: bind the GameFreeCameraShim instance to the WH_KEYBOARD_LL
+// callback so the rising-edge of F10 (toggle walk) can pre-dispatch the
+// dev-cam toggle VK BEFORE the original F10 is returned to the OS
+// input queue. PluginEntry calls this once after constructing both
+// objects; passing nullptr detaches (used during shutdown).
+void SetInputHookDevCamShim(GameFreeCameraShim *shim);
 
 }  // namespace walkercore
 
